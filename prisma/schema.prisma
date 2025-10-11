@@ -1,0 +1,252 @@
+// Prisma Schema for AlternateFutures Platform
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id            String   @id @default(cuid())
+  email         String?  @unique
+  username      String?  @unique
+  walletAddress String?  @unique
+
+  projects              Project[]
+  personalAccessTokens  PersonalAccessToken[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([username])
+  @@index([walletAddress])
+}
+
+model PersonalAccessToken {
+  id         String    @id @default(cuid())
+  name       String
+  token      String    @unique
+
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================
+// PROJECTS
+// ============================================
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sites     Site[]
+  functions FleekFunction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([slug])
+}
+
+// ============================================
+// SITES & DEPLOYMENTS
+// ============================================
+
+model Site {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  deployments Deployment[]
+  domains     Domain[]
+  ipnsRecords IPNSRecord[]
+  zones       Zone[]
+
+  primaryDomainId String?
+  primaryDomain   Domain? @relation("PrimaryDomain", fields: [primaryDomainId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([slug])
+}
+
+model Deployment {
+  id          String           @id @default(cuid())
+  cid         String
+  status      DeploymentStatus @default(PENDING)
+  storageType StorageType      @default(IPFS)
+
+  siteId      String
+  site        Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  pin         Pin?
+
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([siteId])
+  @@index([cid])
+  @@index([status])
+}
+
+enum DeploymentStatus {
+  PENDING
+  BUILDING
+  UPLOADING
+  SUCCESS
+  FAILED
+}
+
+enum StorageType {
+  IPFS
+  ARWEAVE
+}
+
+// ============================================
+// FUNCTIONS
+// ============================================
+
+model FleekFunction {
+  id                  String               @id @default(cuid())
+  name                String
+  slug                String               @unique
+  invokeUrl           String?
+  status              FunctionStatus       @default(ACTIVE)
+
+  projectId           String
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  siteId              String?
+
+  currentDeploymentId String?              @unique
+  currentDeployment   FleekFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
+
+  deployments         FleekFunctionDeployment[] @relation("FunctionDeployments")
+
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@index([projectId])
+  @@index([slug])
+  @@index([status])
+}
+
+model FleekFunctionDeployment {
+  id              String         @id @default(cuid())
+  cid             String
+  blake3Hash      String?
+  assetsCid       String?
+  sgx             Boolean        @default(false)
+
+  fleekFunctionId String
+  fleekFunction   FleekFunction  @relation("FunctionDeployments", fields: [fleekFunctionId], references: [id], onDelete: Cascade)
+
+  currentFunction FleekFunction? @relation("CurrentDeployment")
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([fleekFunctionId])
+  @@index([cid])
+}
+
+enum FunctionStatus {
+  ACTIVE
+  INACTIVE
+  DEPLOYING
+  FAILED
+}
+
+// ============================================
+// DOMAINS
+// ============================================
+
+model Domain {
+  id          String   @id @default(cuid())
+  hostname    String   @unique
+  verified    Boolean  @default(false)
+
+  siteId      String
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  primarySite Site[]   @relation("PrimaryDomain")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([siteId])
+  @@index([hostname])
+}
+
+model Zone {
+  id        String   @id @default(cuid())
+  name      String
+
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([siteId])
+}
+
+// ============================================
+// IPFS/STORAGE
+// ============================================
+
+model Pin {
+  id           String     @id @default(cuid())
+  cid          String     @unique
+  name         String?
+  size         Int?
+
+  deploymentId String     @unique
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([cid])
+}
+
+model IPNSRecord {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  hash      String
+
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([siteId])
+  @@index([name])
+}
