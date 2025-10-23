@@ -8,11 +8,15 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "deploy:railway": "./deploy-railway.sh"
   },
   "dependencies": {
     "@graphql-tools/schema": "^10.0.25",
@@ -27,9 +31,11 @@
     "@types/bcrypt": "^5.0.2",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.8.6",
+    "@vitest/coverage-v8": "^4.0.1",
     "prisma": "^5.22.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.1"
   },
   "engines": {
     "node": ">=18"
