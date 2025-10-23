@@ -157,6 +157,40 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # STORAGE ANALYTICS
+  # ============================================
+
+  type StorageAnalytics {
+    totalSize: Float!
+    ipfsSize: Float!
+    arweaveSize: Float!
+    deploymentCount: Int!
+    siteCount: Int!
+    breakdown: [StorageBreakdown!]!
+  }
+
+  type StorageBreakdown {
+    id: ID!
+    name: String!
+    type: StorageBreakdownType!
+    size: Float!
+    deploymentCount: Int!
+    storageType: StorageType!
+    lastDeployment: Date
+  }
+
+  enum StorageBreakdownType {
+    SITE
+    FUNCTION
+  }
+
+  type StorageUsageTrend {
+    date: Date!
+    totalSize: Float!
+    deploymentCount: Int!
+  }
+
+  # ============================================
   # VERSION
   # ============================================
 
@@ -198,6 +232,10 @@ export const typeDefs = /* GraphQL */ `
     domain(id: ID!): Domain
     domains(siteId: ID): [Domain!]!
     domainByHostname(hostname: String!): Domain
+
+    # Storage Analytics
+    storageAnalytics(projectId: ID): StorageAnalytics!
+    storageUsageTrend(projectId: ID, days: Int): [StorageUsageTrend!]!
   }
 
   # ============================================
