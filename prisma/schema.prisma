@@ -126,6 +126,7 @@ enum DeploymentStatus {
 enum StorageType {
   IPFS
   ARWEAVE
+  FILECOIN
 }
 
 // ============================================

@@ -4,6 +4,9 @@ import type { PrismaClient } from '@prisma/client';
 import { generateSlug } from '../utils/slug.js';
 import { generateInvokeUrl } from '../utils/invokeUrl.js';
 import { validateRoutes } from '../utils/routeValidation.js';
+import { DeploymentService } from '../services/deployment/index.js';
+import type { StorageType } from '../services/storage/factory.js';
+import { deploymentEvents } from '../services/events/index.js';
 
 export interface Context extends YogaInitialContext {
   prisma: PrismaClient;
@@ -150,6 +153,58 @@ export const resolvers = {
           projectId: targetProjectId,
         },
       });
+    },
+
+    // Deployments
+    createDeployment: async (
+      _: unknown,
+      {
+        siteId,
+        sourceDirectory,
+        storageType = 'IPFS',
+        buildOptions,
+      }: {
+        siteId: string;
+        sourceDirectory: string;
+        storageType?: StorageType;
+        buildOptions?: {
+          buildCommand: string;
+          installCommand?: string;
+          workingDirectory?: string;
+          outputDirectory?: string;
+        };
+      },
+      context: Context
+    ) => {
+      // Verify site exists
+      const site = await context.prisma.site.findUnique({
+        where: { id: siteId },
+      });
+
+      if (!site) {
+        throw new GraphQLError('Site not found');
+      }
+
+      const deploymentService = new DeploymentService(context.prisma);
+
+      const result = await deploymentService.deploy({
+        siteId,
+        sourceDirectory,
+        storageType,
+        buildOptions,
+        outputDirectory: buildOptions?.outputDirectory,
+      });
+
+      // Return the created deployment
+      const deployment = await context.prisma.deployment.findUnique({
+        where: { id: result.deploymentId },
+      });
+
+      if (!deployment) {
+        throw new GraphQLError('Deployment not found after creation');
+      }
+
+      return deployment;
     },
 
     // Functions
@@ -336,6 +391,111 @@ export const resolvers = {
       return context.prisma.aFFunction.findUnique({
         where: { id: parent.afFunctionId },
       });
+    },
+  },
+
+  // Subscriptions for real-time updates
+  Subscription: {
+    deploymentLogs: {
+      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+        // Verify deployment exists
+        const deployment = await context.prisma.deployment.findUnique({
+          where: { id: deploymentId },
+        });
+
+        if (!deployment) {
+          throw new GraphQLError('Deployment not found');
+        }
+
+        // Create an async generator that yields log events
+        const queue: any[] = [];
+        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+
+        const handler = (event: any) => {
+          if (resolve) {
+            resolve({ value: event, done: false });
+            resolve = null;
+          } else {
+            queue.push(event);
+          }
+        };
+
+        deploymentEvents.onLog(deploymentId, handler);
+
+        try {
+          while (true) {
+            if (queue.length > 0) {
+              yield queue.shift();
+            } else {
+              await new Promise<void>((res) => {
+                resolve = (result) => {
+                  if (!result.done) {
+                    res();
+                  }
+                };
+              });
+
+              if (queue.length > 0) {
+                yield queue.shift();
+              }
+            }
+          }
+        } finally {
+          deploymentEvents.removeLogListener(deploymentId, handler);
+        }
+      },
+      resolve: (payload: any) => payload,
+    },
+
+    deploymentStatus: {
+      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+        // Verify deployment exists
+        const deployment = await context.prisma.deployment.findUnique({
+          where: { id: deploymentId },
+        });
+
+        if (!deployment) {
+          throw new GraphQLError('Deployment not found');
+        }
+
+        // Create an async generator that yields status events
+        const queue: any[] = [];
+        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+
+        const handler = (event: any) => {
+          if (resolve) {
+            resolve({ value: event, done: false });
+            resolve = null;
+          } else {
+            queue.push(event);
+          }
+        };
+
+        deploymentEvents.onStatus(deploymentId, handler);
+
+        try {
+          while (true) {
+            if (queue.length > 0) {
+              yield queue.shift();
+            } else {
+              await new Promise<void>((res) => {
+                resolve = (result) => {
+                  if (!result.done) {
+                    res();
+                  }
+                };
+              });
+
+              if (queue.length > 0) {
+                yield queue.shift();
+              }
+            }
+          }
+        } finally {
+          deploymentEvents.removeStatusListener(deploymentId, handler);
+        }
+      },
+      resolve: (payload: any) => payload,
     },
   },
 };

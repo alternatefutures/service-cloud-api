@@ -19,7 +19,10 @@
     "deploy:railway": "./deploy-railway.sh"
   },
   "dependencies": {
+    "@ardrive/turbo-sdk": "^1.33.0",
     "@graphql-tools/schema": "^10.0.25",
+    "@lighthouse-web3/sdk": "^0.4.3",
+    "@pinata/sdk": "^2.1.0",
     "@prisma/client": "^5.22.0",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",

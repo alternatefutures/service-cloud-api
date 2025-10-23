@@ -83,6 +83,7 @@ export const typeDefs = /* GraphQL */ `
   enum StorageType {
     IPFS
     ARWEAVE
+    FILECOIN
   }
 
   # ============================================
@@ -159,11 +160,24 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
-  # VERSION
+  # VERSION & EVENTS
   # ============================================
 
   type Version {
     commitHash: String!
+  }
+
+  type DeploymentLog {
+    deploymentId: ID!
+    timestamp: Date!
+    message: String!
+    level: String!
+  }
+
+  type DeploymentStatusUpdate {
+    deploymentId: ID!
+    status: DeploymentStatus!
+    timestamp: Date!
   }
 
   # ============================================
@@ -206,6 +220,13 @@ export const typeDefs = /* GraphQL */ `
   # MUTATIONS
   # ============================================
 
+  input BuildOptionsInput {
+    buildCommand: String!
+    installCommand: String
+    workingDirectory: String
+    outputDirectory: String
+  }
+
   type Mutation {
     # Auth
     createPersonalAccessToken(name: String!): PersonalAccessToken!
@@ -220,7 +241,12 @@ export const typeDefs = /* GraphQL */ `
     deleteSite(id: ID!): Boolean!
 
     # Deployments
-    createDeployment(siteId: ID!, cid: String!): Deployment!
+    createDeployment(
+      siteId: ID!
+      sourceDirectory: String!
+      storageType: StorageType
+      buildOptions: BuildOptionsInput
+    ): Deployment!
 
     # Functions
     createAFFunction(name: String!, siteId: ID, routes: JSON): AFFunction!
@@ -243,5 +269,14 @@ export const typeDefs = /* GraphQL */ `
     # Domains
     createDomain(hostname: String!, siteId: ID!): Domain!
     deleteDomain(id: ID!): Boolean!
+  }
+
+  # ============================================
+  # SUBSCRIPTIONS
+  # ============================================
+
+  type Subscription {
+    deploymentLogs(deploymentId: ID!): DeploymentLog!
+    deploymentStatus(deploymentId: ID!): DeploymentStatusUpdate!
   }
 `;
