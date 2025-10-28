@@ -1,6 +1,6 @@
 ---
 # Akash SDL (Stack Definition Language) for Alternate Futures Backend
-# This deploys the GraphQL API + PostgreSQL to Akash Network
+# This deploys the GraphQL API + PostgreSQL + Self-Hosted IPFS to Akash Network
 
 version: "2.0"
 
@@ -22,6 +22,37 @@ services:
           mount: /var/lib/postgresql/data
           readOnly: false
 
+  # IPFS Node (Kubo) - Self-hosted decentralized storage
+  ipfs:
+    image: ipfs/kubo:latest
+    env:
+      - IPFS_PROFILE=server
+      - IPFS_PATH=/data/ipfs
+    expose:
+      # API port (for API service to connect)
+      - port: 5001
+        as: 5001
+        to:
+          - service: api
+      # Gateway port (public access to IPFS content)
+      - port: 8080
+        as: 8080
+        to:
+          - global: true
+        accept:
+          - ipfs.alternatefutures.ai
+      # Swarm port (P2P connections to IPFS network)
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    params:
+      storage:
+        data:
+          mount: /data/ipfs
+          readOnly: false
+
   api:
     image: alternatefutures/backend:latest
     env:
@@ -38,10 +69,19 @@ services:
       # Email (Resend)
       - RESEND_API_KEY=your_resend_api_key
 
-      # Storage (IPFS/Arweave)
-      - PINATA_JWT=your_pinata_jwt
-      - PINATA_GATEWAY=your-gateway.mypinata.cloud
+      # Storage - Self-Hosted IPFS (Primary)
+      - IPFS_API_URL=http://ipfs:5001
+      - IPFS_GATEWAY_URL=https://ipfs.alternatefutures.ai
+
+      # Storage - Pinata IPFS (Fallback - optional, only used if IPFS_API_URL not set)
+      - PINATA_API_KEY=your_pinata_api_key_optional
+      - PINATA_API_SECRET=your_pinata_api_secret_optional
+
+      # Storage - Arweave
       - TURBO_WALLET_KEY=your_turbo_wallet_key
+
+      # Storage - Filecoin
+      - LIGHTHOUSE_API_KEY=your_lighthouse_api_key
 
       # Optional: Analytics
       - SENTRY_DSN=your_sentry_dsn
@@ -55,6 +95,7 @@ services:
           - api.alternatefutures.ai
     depends_on:
       - postgres
+      - ipfs
 
 profiles:
   compute:
@@ -76,6 +117,16 @@ profiles:
         storage:
           size: 10Gi
 
+    ipfs:
+      resources:
+        cpu:
+          units: 2.0
+        memory:
+          size: 4Gi
+        storage:
+          # Large storage for IPFS blocks and pinned content
+          size: 100Gi
+
   placement:
     dcloud:
       pricing:
@@ -85,6 +136,9 @@ profiles:
         postgres:
           denom: uakt
           amount: 1000
+        ipfs:
+          denom: uakt
+          amount: 2000
 
 deployment:
   api:
@@ -95,4 +149,9 @@ deployment:
   postgres:
     dcloud:
       profile: postgres
+      count: 1
+
+  ipfs:
+    dcloud:
+      profile: ipfs
       count: 1

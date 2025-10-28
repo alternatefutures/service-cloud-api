@@ -60,7 +60,7 @@ model Project {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   sites     Site[]
-  functions FleekFunction[]
+  functions AFFunction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -126,17 +126,19 @@ enum DeploymentStatus {
 enum StorageType {
   IPFS
   ARWEAVE
+  FILECOIN
 }
 
 // ============================================
 // FUNCTIONS
 // ============================================
 
-model FleekFunction {
+model AFFunction {
   id                  String               @id @default(cuid())
   name                String
   slug                String               @unique
   invokeUrl           String?
+  routes              Json?
   status              FunctionStatus       @default(ACTIVE)
 
   projectId           String
@@ -145,9 +147,9 @@ model FleekFunction {
   siteId              String?
 
   currentDeploymentId String?              @unique
-  currentDeployment   FleekFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
+  currentDeployment   AFFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
 
-  deployments         FleekFunctionDeployment[] @relation("FunctionDeployments")
+  deployments         AFFunctionDeployment[] @relation("FunctionDeployments")
 
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -157,22 +159,22 @@ model FleekFunction {
   @@index([status])
 }
 
-model FleekFunctionDeployment {
+model AFFunctionDeployment {
   id              String         @id @default(cuid())
   cid             String
   blake3Hash      String?
   assetsCid       String?
   sgx             Boolean        @default(false)
 
-  fleekFunctionId String
-  fleekFunction   FleekFunction  @relation("FunctionDeployments", fields: [fleekFunctionId], references: [id], onDelete: Cascade)
+  afFunctionId String
+  afFunction   AFFunction  @relation("FunctionDeployments", fields: [afFunctionId], references: [id], onDelete: Cascade)
 
-  currentFunction FleekFunction? @relation("CurrentDeployment")
+  currentFunction AFFunction? @relation("CurrentDeployment")
 
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  @@index([fleekFunctionId])
+  @@index([afFunctionId])
   @@index([cid])
 }
 

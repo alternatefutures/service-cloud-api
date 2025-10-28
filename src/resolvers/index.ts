@@ -3,6 +3,10 @@ import type { YogaInitialContext } from 'graphql-yoga';
 import type { PrismaClient } from '@prisma/client';
 import { generateSlug } from '../utils/slug.js';
 import { generateInvokeUrl } from '../utils/invokeUrl.js';
+import { validateRoutes } from '../utils/routeValidation.js';
+import { DeploymentService } from '../services/deployment/index.js';
+import type { StorageType } from '../services/storage/factory.js';
+import { deploymentEvents } from '../services/events/index.js';
 
 export interface Context extends YogaInitialContext {
   prisma: PrismaClient;
@@ -64,12 +68,12 @@ export const resolvers = {
     },
 
     // Functions
-    fleekFunctionByName: async (_: unknown, { name }: { name: string }, context: Context) => {
+    afFunctionByName: async (_: unknown, { name }: { name: string }, context: Context) => {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required');
       }
 
-      const func = await context.prisma.fleekFunction.findFirst({
+      const func = await context.prisma.aFFunction.findFirst({
         where: {
           name,
           projectId: context.projectId,
@@ -83,22 +87,22 @@ export const resolvers = {
       return func;
     },
 
-    fleekFunctions: async (_: unknown, __: unknown, context: Context) => {
+    afFunctions: async (_: unknown, __: unknown, context: Context) => {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required');
       }
-      return context.prisma.fleekFunction.findMany({
+      return context.prisma.aFFunction.findMany({
         where: { projectId: context.projectId },
       });
     },
 
-    fleekFunctionDeployments: async (
+    afFunctionDeployments: async (
       _: unknown,
       { functionId }: { functionId: string },
       context: Context
     ) => {
-      return context.prisma.fleekFunctionDeployment.findMany({
-        where: { fleekFunctionId: functionId },
+      return context.prisma.aFFunctionDeployment.findMany({
+        where: { afFunctionId: functionId },
         orderBy: { createdAt: 'desc' },
       });
     },
@@ -293,32 +297,90 @@ export const resolvers = {
       });
     },
 
-    // Functions
-    createFleekFunction: async (
+    // Deployments
+    createDeployment: async (
       _: unknown,
-      { name, siteId }: { name: string; siteId?: string },
+      {
+        siteId,
+        sourceDirectory,
+        storageType = 'IPFS',
+        buildOptions,
+      }: {
+        siteId: string;
+        sourceDirectory: string;
+        storageType?: StorageType;
+        buildOptions?: {
+          buildCommand: string;
+          installCommand?: string;
+          workingDirectory?: string;
+          outputDirectory?: string;
+        };
+      },
+      context: Context
+    ) => {
+      // Verify site exists
+      const site = await context.prisma.site.findUnique({
+        where: { id: siteId },
+      });
+
+      if (!site) {
+        throw new GraphQLError('Site not found');
+      }
+
+      const deploymentService = new DeploymentService(context.prisma);
+
+      const result = await deploymentService.deploy({
+        siteId,
+        sourceDirectory,
+        storageType,
+        buildOptions,
+        outputDirectory: buildOptions?.outputDirectory,
+      });
+
+      // Return the created deployment
+      const deployment = await context.prisma.deployment.findUnique({
+        where: { id: result.deploymentId },
+      });
+
+      if (!deployment) {
+        throw new GraphQLError('Deployment not found after creation');
+      }
+
+      return deployment;
+    },
+
+    // Functions
+    createAFFunction: async (
+      _: unknown,
+      { name, siteId, routes }: { name: string; siteId?: string; routes?: any },
       context: Context
     ) => {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required');
       }
 
+      // Validate routes if provided
+      if (routes) {
+        validateRoutes(routes);
+      }
+
       const slug = generateSlug(name);
       const invokeUrl = generateInvokeUrl(slug);
 
-      return context.prisma.fleekFunction.create({
+      return context.prisma.aFFunction.create({
         data: {
           name,
           slug,
           invokeUrl,
           projectId: context.projectId,
           siteId,
+          routes: routes || undefined,
           status: 'ACTIVE',
         },
       });
     },
 
-    deployFleekFunction: async (
+    deployAFFunction: async (
       _: unknown,
       {
         functionId,
@@ -335,18 +397,18 @@ export const resolvers = {
       },
       context: Context
     ) => {
-      const deployment = await context.prisma.fleekFunctionDeployment.create({
+      const deployment = await context.prisma.aFFunctionDeployment.create({
         data: {
           cid,
           sgx,
           blake3Hash,
           assetsCid,
-          fleekFunctionId: functionId,
+          afFunctionId: functionId,
         },
       });
 
       // Update function's current deployment
-      await context.prisma.fleekFunction.update({
+      await context.prisma.aFFunction.update({
         where: { id: functionId },
         data: {
           currentDeploymentId: deployment.id,
@@ -357,23 +419,29 @@ export const resolvers = {
       return deployment;
     },
 
-    updateFleekFunction: async (
+    updateAFFunction: async (
       _: unknown,
-      { id, name, slug, status }: { id: string; name?: string; slug?: string; status?: string },
+      { id, name, slug, routes, status }: { id: string; name?: string; slug?: string; routes?: any; status?: string },
       context: Context
     ) => {
-      return context.prisma.fleekFunction.update({
+      // Validate routes if provided
+      if (routes !== undefined && routes !== null) {
+        validateRoutes(routes);
+      }
+
+      return context.prisma.aFFunction.update({
         where: { id },
         data: {
           ...(name && { name }),
           ...(slug && { slug }),
+          ...(routes !== undefined && { routes }),
           ...(status && { status: status as any }),
         },
       });
     },
 
-    deleteFleekFunction: async (_: unknown, { id }: { id: string }, context: Context) => {
-      await context.prisma.fleekFunction.delete({
+    deleteAFFunction: async (_: unknown, { id }: { id: string }, context: Context) => {
+      await context.prisma.aFFunction.delete({
         where: { id },
       });
       return true;
@@ -416,7 +484,7 @@ export const resolvers = {
       });
     },
     functions: (parent: any, _: unknown, context: Context) => {
-      return context.prisma.fleekFunction.findMany({
+      return context.prisma.aFFunction.findMany({
         where: { projectId: parent.id },
       });
     },
@@ -440,7 +508,7 @@ export const resolvers = {
     },
   },
 
-  FleekFunction: {
+  AFFunction: {
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
@@ -448,23 +516,128 @@ export const resolvers = {
     },
     currentDeployment: (parent: any, _: unknown, context: Context) => {
       if (!parent.currentDeploymentId) return null;
-      return context.prisma.fleekFunctionDeployment.findUnique({
+      return context.prisma.aFFunctionDeployment.findUnique({
         where: { id: parent.currentDeploymentId },
       });
     },
     deployments: (parent: any, _: unknown, context: Context) => {
-      return context.prisma.fleekFunctionDeployment.findMany({
-        where: { fleekFunctionId: parent.id },
+      return context.prisma.aFFunctionDeployment.findMany({
+        where: { afFunctionId: parent.id },
         orderBy: { createdAt: 'desc' },
       });
     },
   },
 
-  FleekFunctionDeployment: {
-    fleekFunction: (parent: any, _: unknown, context: Context) => {
-      return context.prisma.fleekFunction.findUnique({
-        where: { id: parent.fleekFunctionId },
+  AFFunctionDeployment: {
+    afFunction: (parent: any, _: unknown, context: Context) => {
+      return context.prisma.aFFunction.findUnique({
+        where: { id: parent.afFunctionId },
       });
+    },
+  },
+
+  // Subscriptions for real-time updates
+  Subscription: {
+    deploymentLogs: {
+      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+        // Verify deployment exists
+        const deployment = await context.prisma.deployment.findUnique({
+          where: { id: deploymentId },
+        });
+
+        if (!deployment) {
+          throw new GraphQLError('Deployment not found');
+        }
+
+        // Create an async generator that yields log events
+        const queue: any[] = [];
+        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+
+        const handler = (event: any) => {
+          if (resolve) {
+            resolve({ value: event, done: false });
+            resolve = null;
+          } else {
+            queue.push(event);
+          }
+        };
+
+        deploymentEvents.onLog(deploymentId, handler);
+
+        try {
+          while (true) {
+            if (queue.length > 0) {
+              yield queue.shift();
+            } else {
+              await new Promise<void>((res) => {
+                resolve = (result) => {
+                  if (!result.done) {
+                    res();
+                  }
+                };
+              });
+
+              if (queue.length > 0) {
+                yield queue.shift();
+              }
+            }
+          }
+        } finally {
+          deploymentEvents.removeLogListener(deploymentId, handler);
+        }
+      },
+      resolve: (payload: any) => payload,
+    },
+
+    deploymentStatus: {
+      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+        // Verify deployment exists
+        const deployment = await context.prisma.deployment.findUnique({
+          where: { id: deploymentId },
+        });
+
+        if (!deployment) {
+          throw new GraphQLError('Deployment not found');
+        }
+
+        // Create an async generator that yields status events
+        const queue: any[] = [];
+        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+
+        const handler = (event: any) => {
+          if (resolve) {
+            resolve({ value: event, done: false });
+            resolve = null;
+          } else {
+            queue.push(event);
+          }
+        };
+
+        deploymentEvents.onStatus(deploymentId, handler);
+
+        try {
+          while (true) {
+            if (queue.length > 0) {
+              yield queue.shift();
+            } else {
+              await new Promise<void>((res) => {
+                resolve = (result) => {
+                  if (!result.done) {
+                    res();
+                  }
+                };
+              });
+
+              if (queue.length > 0) {
+                yield queue.shift();
+              }
+            }
+          }
+        } finally {
+          deploymentEvents.removeStatusListener(deploymentId, handler);
+        }
+      },
+      resolve: (payload: any) => payload,
     },
   },
 };

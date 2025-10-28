@@ -4,6 +4,7 @@ export const typeDefs = /* GraphQL */ `
   # ============================================
 
   scalar Date
+  scalar JSON
 
   # ============================================
   # USER & AUTHENTICATION
@@ -39,7 +40,7 @@ export const typeDefs = /* GraphQL */ `
     slug: String!
     user: User!
     sites: [Site!]!
-    functions: [FleekFunction!]!
+    functions: [AFFunction!]!
     createdAt: Date!
     updatedAt: Date!
   }
@@ -82,33 +83,35 @@ export const typeDefs = /* GraphQL */ `
   enum StorageType {
     IPFS
     ARWEAVE
+    FILECOIN
   }
 
   # ============================================
   # FUNCTIONS
   # ============================================
 
-  type FleekFunction {
+  type AFFunction {
     id: ID!
     name: String!
     slug: String!
     invokeUrl: String
+    routes: JSON
     status: FunctionStatus!
     project: Project!
     siteId: String
-    currentDeployment: FleekFunctionDeployment
-    deployments: [FleekFunctionDeployment!]!
+    currentDeployment: AFFunctionDeployment
+    deployments: [AFFunctionDeployment!]!
     createdAt: Date!
     updatedAt: Date!
   }
 
-  type FleekFunctionDeployment {
+  type AFFunctionDeployment {
     id: ID!
     cid: String!
     blake3Hash: String
     assetsCid: String
     sgx: Boolean!
-    fleekFunction: FleekFunction!
+    afFunction: AFFunction!
     createdAt: Date!
     updatedAt: Date!
   }
@@ -191,11 +194,24 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
-  # VERSION
+  # VERSION & EVENTS
   # ============================================
 
   type Version {
     commitHash: String!
+  }
+
+  type DeploymentLog {
+    deploymentId: ID!
+    timestamp: Date!
+    message: String!
+    level: String!
+  }
+
+  type DeploymentStatusUpdate {
+    deploymentId: ID!
+    status: DeploymentStatus!
+    timestamp: Date!
   }
 
   # ============================================
@@ -223,10 +239,10 @@ export const typeDefs = /* GraphQL */ `
     deployments(siteId: ID): [Deployment!]!
 
     # Functions
-    fleekFunctionByName(name: String!): FleekFunction
-    fleekFunctions: [FleekFunction!]!
-    fleekFunctionDeployment(id: ID!): FleekFunctionDeployment
-    fleekFunctionDeployments(functionId: ID!): [FleekFunctionDeployment!]!
+    afFunctionByName(name: String!): AFFunction
+    afFunctions: [AFFunction!]!
+    afFunctionDeployment(id: ID!): AFFunctionDeployment
+    afFunctionDeployments(functionId: ID!): [AFFunctionDeployment!]!
 
     # Domains
     domain(id: ID!): Domain
@@ -242,6 +258,13 @@ export const typeDefs = /* GraphQL */ `
   # MUTATIONS
   # ============================================
 
+  input BuildOptionsInput {
+    buildCommand: String!
+    installCommand: String
+    workingDirectory: String
+    outputDirectory: String
+  }
+
   type Mutation {
     # Auth
     createPersonalAccessToken(name: String!): PersonalAccessToken!
@@ -256,27 +279,42 @@ export const typeDefs = /* GraphQL */ `
     deleteSite(id: ID!): Boolean!
 
     # Deployments
-    createDeployment(siteId: ID!, cid: String!): Deployment!
+    createDeployment(
+      siteId: ID!
+      sourceDirectory: String!
+      storageType: StorageType
+      buildOptions: BuildOptionsInput
+    ): Deployment!
 
     # Functions
-    createFleekFunction(name: String!, siteId: ID): FleekFunction!
-    deployFleekFunction(
+    createAFFunction(name: String!, siteId: ID, routes: JSON): AFFunction!
+    deployAFFunction(
       functionId: ID!
       cid: String!
       sgx: Boolean
       blake3Hash: String
       assetsCid: String
-    ): FleekFunctionDeployment!
-    updateFleekFunction(
+    ): AFFunctionDeployment!
+    updateAFFunction(
       id: ID!
       name: String
       slug: String
+      routes: JSON
       status: FunctionStatus
-    ): FleekFunction!
-    deleteFleekFunction(id: ID!): Boolean!
+    ): AFFunction!
+    deleteAFFunction(id: ID!): Boolean!
 
     # Domains
     createDomain(hostname: String!, siteId: ID!): Domain!
     deleteDomain(id: ID!): Boolean!
+  }
+
+  # ============================================
+  # SUBSCRIPTIONS
+  # ============================================
+
+  type Subscription {
+    deploymentLogs(deploymentId: ID!): DeploymentLog!
+    deploymentStatus(deploymentId: ID!): DeploymentStatusUpdate!
   }
 `;
