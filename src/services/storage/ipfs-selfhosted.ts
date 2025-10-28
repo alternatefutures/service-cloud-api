@@ -57,7 +57,7 @@ export class SelfHostedIPFSStorageService implements StorageService {
       let lastResult: { cid: any; size: number } | undefined;
 
       for await (const file of this.client.addAll(
-        globSource(dirPath, { recursive: true }),
+        globSource(dirPath, '**/*') as any,
         {
           wrapWithDirectory: true,
           pin: true,
