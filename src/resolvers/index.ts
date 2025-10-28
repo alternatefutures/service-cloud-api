@@ -7,6 +7,7 @@ import { validateRoutes } from '../utils/routeValidation.js';
 import { DeploymentService } from '../services/deployment/index.js';
 import type { StorageType } from '../services/storage/factory.js';
 import { deploymentEvents } from '../services/events/index.js';
+import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
 
 export interface Context extends YogaInitialContext {
   prisma: PrismaClient;
@@ -254,6 +255,11 @@ export const resolvers = {
       }
 
       return trend;
+    },
+
+    // System Health
+    subscriptionHealth: () => {
+      return subscriptionHealthMonitor.performHealthCheck();
     },
   },
 
@@ -546,14 +552,19 @@ export const resolvers = {
         });
 
         if (!deployment) {
+          subscriptionHealthMonitor.trackError('Deployment not found', deploymentId);
           throw new GraphQLError('Deployment not found');
         }
+
+        // Track subscription creation
+        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId);
 
         // Create an async generator that yields log events
         const queue: any[] = [];
         let resolve: ((value: IteratorResult<any>) => void) | null = null;
 
         const handler = (event: any) => {
+          subscriptionHealthMonitor.trackEventEmitted();
           if (resolve) {
             resolve({ value: event, done: false });
             resolve = null;
@@ -582,8 +593,15 @@ export const resolvers = {
               }
             }
           }
+        } catch (error) {
+          subscriptionHealthMonitor.trackError(
+            error instanceof Error ? error.message : 'Unknown error',
+            deploymentId
+          );
+          throw error;
         } finally {
           deploymentEvents.removeLogListener(deploymentId, handler);
+          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId);
         }
       },
       resolve: (payload: any) => payload,
@@ -597,14 +615,19 @@ export const resolvers = {
         });
 
         if (!deployment) {
+          subscriptionHealthMonitor.trackError('Deployment not found', deploymentId);
           throw new GraphQLError('Deployment not found');
         }
+
+        // Track subscription creation
+        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId);
 
         // Create an async generator that yields status events
         const queue: any[] = [];
         let resolve: ((value: IteratorResult<any>) => void) | null = null;
 
         const handler = (event: any) => {
+          subscriptionHealthMonitor.trackEventEmitted();
           if (resolve) {
             resolve({ value: event, done: false });
             resolve = null;
@@ -633,8 +656,15 @@ export const resolvers = {
               }
             }
           }
+        } catch (error) {
+          subscriptionHealthMonitor.trackError(
+            error instanceof Error ? error.message : 'Unknown error',
+            deploymentId
+          );
+          throw error;
         } finally {
           deploymentEvents.removeStatusListener(deploymentId, handler);
+          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId);
         }
       },
       resolve: (payload: any) => payload,

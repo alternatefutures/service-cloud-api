@@ -215,6 +215,37 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # SUBSCRIPTION HEALTH MONITORING
+  # ============================================
+
+  type SubscriptionHealth {
+    status: HealthStatus!
+    metrics: SubscriptionMetrics!
+    alerts: [String!]!
+  }
+
+  enum HealthStatus {
+    healthy
+    degraded
+    unhealthy
+  }
+
+  type SubscriptionMetrics {
+    activeSubscriptions: Int!
+    totalSubscriptionsCreated: Int!
+    totalSubscriptionsClosed: Int!
+    totalEventsEmitted: Int!
+    lastEventTimestamp: Date
+    errors: [SubscriptionError!]!
+  }
+
+  type SubscriptionError {
+    timestamp: Date!
+    error: String!
+    deploymentId: String
+  }
+
+  # ============================================
   # QUERIES
   # ============================================
 
@@ -252,6 +283,9 @@ export const typeDefs = /* GraphQL */ `
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
     storageUsageTrend(projectId: ID, days: Int): [StorageUsageTrend!]!
+
+    # System Health
+    subscriptionHealth: SubscriptionHealth!
   }
 
   # ============================================
