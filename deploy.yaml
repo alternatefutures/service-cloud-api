@@ -69,15 +69,11 @@ services:
       # Email (Resend)
       - RESEND_API_KEY=your_resend_api_key
 
-      # Storage - Self-Hosted IPFS (Primary)
+      # Storage - Self-Hosted IPFS (Required)
       - IPFS_API_URL=http://ipfs:5001
       - IPFS_GATEWAY_URL=https://ipfs.alternatefutures.ai
 
-      # Storage - Pinata IPFS (Fallback - optional, only used if IPFS_API_URL not set)
-      - PINATA_API_KEY=your_pinata_api_key_optional
-      - PINATA_API_SECRET=your_pinata_api_secret_optional
-
-      # Storage - Arweave
+      # Storage - Arweave (Optional)
       - TURBO_WALLET_KEY=your_turbo_wallet_key
 
       # Storage - Filecoin

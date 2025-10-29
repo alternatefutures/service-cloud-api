@@ -37,11 +37,12 @@ describe('StorageServiceFactory', () => {
     process.env.LIGHTHOUSE_API_KEY = originalEnv.LIGHTHOUSE_API_KEY;
   });
 
-  describe('IPFS dual-mode selection', () => {
-    it('should create Pinata IPFS service when IPFS_API_URL is not set', () => {
+  describe('IPFS self-hosted only (no Pinata fallback)', () => {
+    it('should throw error when IPFS_API_URL is not set', () => {
       // IPFS_API_URL is already deleted in beforeEach
-      const service = StorageServiceFactory.create('IPFS');
-      expect(service).toBeInstanceOf(IPFSStorageService);
+      expect(() => {
+        StorageServiceFactory.create('IPFS');
+      }).toThrow('IPFS_API_URL environment variable is required for self-hosted IPFS');
     });
 
     it('should create self-hosted IPFS service when IPFS_API_URL is set', () => {
