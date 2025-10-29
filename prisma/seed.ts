@@ -57,6 +57,27 @@ async function main() {
   });
   console.log('✅ Created site:', site.name);
 
+  // Create test function with routes
+  const testFunction = await prisma.aFFunction.upsert({
+    where: { slug: 'test-gateway' },
+    update: {},
+    create: {
+      id: 'func-1',
+      name: 'test-gateway',
+      slug: 'test-gateway',
+      invokeUrl: 'http://test-gateway.localhost:3000',
+      routes: {
+        '/api/users/*': 'https://jsonplaceholder.typicode.com/users',
+        '/api/posts/*': 'https://jsonplaceholder.typicode.com/posts',
+        '/*': 'https://httpbin.org/anything',
+      },
+      status: 'ACTIVE',
+      projectId: project.id,
+    },
+  });
+  console.log('✅ Created function:', testFunction.name);
+  console.log('   Routes configured:', Object.keys(testFunction.routes as any).length);
+
   console.log('\n🎉 Seeding complete!');
   console.log('\n📋 Test credentials:');
   console.log('   Authorization: af_local_test_token_12345');
