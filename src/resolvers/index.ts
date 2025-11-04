@@ -8,6 +8,7 @@ import { DeploymentService } from '../services/deployment/index.js';
 import type { StorageType } from '../services/storage/factory.js';
 import { deploymentEvents } from '../services/events/index.js';
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
+import { chatResolvers } from './chat.js';
 
 export interface Context extends YogaInitialContext {
   prisma: PrismaClient;
@@ -261,6 +262,9 @@ export const resolvers = {
     subscriptionHealth: () => {
       return subscriptionHealthMonitor.performHealthCheck();
     },
+
+    // Chat queries (from chat resolvers)
+    ...chatResolvers.Query,
   },
 
   Mutation: {
@@ -467,6 +471,9 @@ export const resolvers = {
         },
       });
     },
+
+    // Chat mutations (from chat resolvers)
+    ...chatResolvers.Mutation,
   },
 
   // Field resolvers
@@ -541,6 +548,11 @@ export const resolvers = {
       });
     },
   },
+
+  // Chat field resolvers
+  Agent: chatResolvers.Agent,
+  Chat: chatResolvers.Chat,
+  Message: chatResolvers.Message,
 
   // Subscriptions for real-time updates
   Subscription: {
