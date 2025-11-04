@@ -6,11 +6,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { MessageService } from '../services/chat/messageService.js';
-
-interface Context {
-  prisma: PrismaClient;
-  userId?: string;
-}
+import type { Context } from './types.js';
 
 const messageService = (prisma: PrismaClient) => new MessageService(prisma);
 

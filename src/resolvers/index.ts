@@ -1,5 +1,4 @@
 import { GraphQLError } from 'graphql';
-import type { YogaInitialContext } from 'graphql-yoga';
 import type { PrismaClient } from '@prisma/client';
 import { generateSlug } from '../utils/slug.js';
 import { generateInvokeUrl } from '../utils/invokeUrl.js';
@@ -9,12 +8,9 @@ import type { StorageType } from '../services/storage/factory.js';
 import { deploymentEvents } from '../services/events/index.js';
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
 import { chatResolvers } from './chat.js';
+import type { Context } from './types.js';
 
-export interface Context extends YogaInitialContext {
-  prisma: PrismaClient;
-  userId?: string;
-  projectId?: string;
-}
+export type { Context };
 
 export const resolvers = {
   Query: {
