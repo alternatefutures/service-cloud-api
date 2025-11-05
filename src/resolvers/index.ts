@@ -1,5 +1,4 @@
 import { GraphQLError } from 'graphql';
-import type { YogaInitialContext } from 'graphql-yoga';
 import type { PrismaClient } from '@prisma/client';
 import { generateSlug } from '../utils/slug.js';
 import { generateInvokeUrl } from '../utils/invokeUrl.js';
@@ -8,12 +7,10 @@ import { DeploymentService } from '../services/deployment/index.js';
 import type { StorageType } from '../services/storage/factory.js';
 import { deploymentEvents } from '../services/events/index.js';
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
+import { chatResolvers } from './chat.js';
+import type { Context } from './types.js';
 
-export interface Context extends YogaInitialContext {
-  prisma: PrismaClient;
-  userId?: string;
-  projectId?: string;
-}
+export type { Context };
 
 export const resolvers = {
   Query: {
@@ -261,6 +258,9 @@ export const resolvers = {
     subscriptionHealth: () => {
       return subscriptionHealthMonitor.performHealthCheck();
     },
+
+    // Chat queries (from chat resolvers)
+    ...chatResolvers.Query,
   },
 
   Mutation: {
@@ -467,6 +467,9 @@ export const resolvers = {
         },
       });
     },
+
+    // Chat mutations (from chat resolvers)
+    ...chatResolvers.Mutation,
   },
 
   // Field resolvers
@@ -541,6 +544,11 @@ export const resolvers = {
       });
     },
   },
+
+  // Chat field resolvers
+  Agent: chatResolvers.Agent,
+  Chat: chatResolvers.Chat,
+  Message: chatResolvers.Message,
 
   // Subscriptions for real-time updates
   Subscription: {

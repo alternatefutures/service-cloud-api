@@ -246,6 +246,101 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # AGENT CHAT SYSTEM
+  # ============================================
+
+  type Agent {
+    id: ID!
+    name: String!
+    slug: String!
+    description: String
+    avatar: String
+    systemPrompt: String
+    model: String!
+    status: AgentStatus!
+    userId: ID!
+    user: User!
+    afFunction: AFFunction
+    chats: [Chat!]!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  enum AgentStatus {
+    ACTIVE
+    INACTIVE
+    TRAINING
+    ERROR
+  }
+
+  type Chat {
+    id: ID!
+    title: String
+    userId: ID!
+    user: User!
+    agentId: ID!
+    agent: Agent!
+    messages: [Message!]!
+    lastMessageAt: Date
+    metadata: JSON
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  type Message {
+    id: ID!
+    content: String!
+    role: MessageRole!
+    chatId: ID!
+    chat: Chat!
+    userId: ID
+    user: User
+    agentId: ID
+    agent: Agent
+    attachments: [Attachment!]!
+    metadata: JSON
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  enum MessageRole {
+    USER
+    AGENT
+    SYSTEM
+  }
+
+  type Attachment {
+    id: ID!
+    filename: String!
+    contentType: String!
+    size: Int!
+    url: String!
+    cid: String
+    storageType: StorageType
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  input CreateAgentInput {
+    name: String!
+    slug: String!
+    description: String
+    systemPrompt: String
+    model: String
+    functionId: ID
+  }
+
+  input CreateChatInput {
+    agentId: ID!
+    title: String
+  }
+
+  input SendMessageInput {
+    chatId: ID!
+    content: String!
+  }
+
+  # ============================================
   # QUERIES
   # ============================================
 
@@ -286,6 +381,14 @@ export const typeDefs = /* GraphQL */ `
 
     # System Health
     subscriptionHealth: SubscriptionHealth!
+
+    # Agent Chat
+    agent(id: ID!): Agent
+    agentBySlug(slug: String!): Agent
+    agents: [Agent!]!
+    chat(id: ID!): Chat
+    chats: [Chat!]!
+    messages(chatId: ID!, limit: Int, before: String): [Message!]!
   }
 
   # ============================================
@@ -341,6 +444,12 @@ export const typeDefs = /* GraphQL */ `
     # Domains
     createDomain(hostname: String!, siteId: ID!): Domain!
     deleteDomain(id: ID!): Boolean!
+
+    # Agent Chat
+    createAgent(input: CreateAgentInput!): Agent!
+    createChat(input: CreateChatInput!): Chat!
+    sendMessage(input: SendMessageInput!): Message!
+    deleteChat(id: ID!): Boolean!
   }
 
   # ============================================

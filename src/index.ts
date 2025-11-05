@@ -6,8 +6,10 @@ import { makeExecutableSchema } from '@graphql-tools/schema';
 import { typeDefs } from './schema/typeDefs.js';
 import { resolvers } from './resolvers/index.js';
 import { getAuthContext } from './auth/middleware.js';
+import { ChatServer } from './services/chat/chatServer.js';
 
 const prisma = new PrismaClient();
+const jwtSecret = process.env.JWT_SECRET || 'development-secret-change-in-production';
 
 const schema = makeExecutableSchema({
   typeDefs,
@@ -31,18 +33,44 @@ const yoga = createYoga({
   landingPage: true,
 });
 
+// Create HTTP server
 const server = createServer(yoga);
+
+// Initialize Chat WebSocket Server
+const chatServer = new ChatServer(prisma, jwtSecret);
+
+// Handle WebSocket upgrade for /ws path
+server.on('upgrade', (request, socket, head) => {
+  const { pathname } = new URL(request.url || '/', `http://${request.headers.host}`);
+
+  if (pathname === '/ws') {
+    chatServer.handleUpgrade(request, socket, head);
+  } else {
+    socket.destroy();
+  }
+});
 
 const port = process.env.PORT || 4000;
 
 server.listen(port, () => {
   console.log(`🚀 GraphQL server running at http://localhost:${port}/graphql`);
+  console.log(`💬 WebSocket chat server running at ws://localhost:${port}/ws`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server');
   server.close(async () => {
+    await chatServer.shutdown();
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', async () => {
+  console.log('\nSIGINT signal received: closing HTTP server');
+  server.close(async () => {
+    await chatServer.shutdown();
     await prisma.$disconnect();
     process.exit(0);
   });

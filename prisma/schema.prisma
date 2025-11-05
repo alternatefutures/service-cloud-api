@@ -20,6 +20,9 @@ model User {
 
   projects              Project[]
   personalAccessTokens  PersonalAccessToken[]
+  agents                Agent[]
+  chats                 Chat[]
+  messages              Message[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -150,6 +153,7 @@ model AFFunction {
   currentDeployment   AFFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
 
   deployments         AFFunctionDeployment[] @relation("FunctionDeployments")
+  agents              Agent[]
 
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -251,4 +255,132 @@ model IPNSRecord {
 
   @@index([siteId])
   @@index([name])
+}
+
+// ============================================
+// AGENT CHAT SYSTEM
+// ============================================
+
+model Agent {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  description String?
+  avatar      String?
+  systemPrompt String?
+  model       String       @default("gpt-4")
+  status      AgentStatus  @default(ACTIVE)
+
+  // Agent can be tied to a deployed function or external service
+  functionId  String?
+  afFunction  AFFunction?  @relation(fields: [functionId], references: [id], onDelete: SetNull)
+
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chats       Chat[]
+  messages    Message[]
+
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId])
+  @@index([slug])
+  @@index([status])
+  @@index([functionId])
+}
+
+enum AgentStatus {
+  ACTIVE
+  INACTIVE
+  TRAINING
+  ERROR
+}
+
+model Chat {
+  id          String      @id @default(cuid())
+  title       String?
+
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  agentId     String
+  agent       Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  messages    Message[]
+  attachments Attachment[]
+
+  // Chat metadata
+  metadata    Json?
+
+  lastMessageAt DateTime?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id          String        @id @default(cuid())
+  content     String
+  role        MessageRole
+
+  chatId      String
+  chat        Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  // Agent that sent the message (if role is AGENT)
+  agentId     String?
+  agent       Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  // User that sent the message (if role is USER)
+  userId      String?
+  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  attachments Attachment[]
+
+  // Message metadata (tokens used, model, etc.)
+  metadata    Json?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([chatId])
+  @@index([agentId])
+  @@index([userId])
+  @@index([role])
+  @@index([createdAt])
+}
+
+enum MessageRole {
+  USER
+  AGENT
+  SYSTEM
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  filename    String
+  contentType String
+  size        Int
+  url         String
+
+  // Could be stored on IPFS/Arweave
+  cid         String?
+  storageType StorageType?
+
+  chatId      String?
+  chat        Chat?    @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  messageId   String?
+  message     Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([chatId])
+  @@index([messageId])
+  @@index([cid])
 }
