@@ -1,12 +1,14 @@
 import 'dotenv/config';
 import { createYoga } from 'graphql-yoga';
 import { createServer } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { PrismaClient } from '@prisma/client';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { typeDefs } from './schema/typeDefs.js';
 import { resolvers } from './resolvers/index.js';
 import { getAuthContext } from './auth/middleware.js';
 import { ChatServer } from './services/chat/chatServer.js';
+import { handleStripeWebhook } from './services/billing/webhookHandler.js';
 
 const prisma = new PrismaClient();
 const jwtSecret = process.env.JWT_SECRET || 'development-secret-change-in-production';
@@ -33,8 +35,22 @@ const yoga = createYoga({
   landingPage: true,
 });
 
-// Create HTTP server
-const server = createServer(yoga);
+// Custom request handler to intercept webhook requests
+async function requestHandler(req: IncomingMessage, res: ServerResponse) {
+  const url = new URL(req.url || '/', `http://${req.headers.host}`);
+
+  // Handle Stripe webhooks
+  if (url.pathname === '/webhooks/stripe') {
+    await handleStripeWebhook(req, res, prisma);
+    return;
+  }
+
+  // Pass all other requests to Yoga
+  return yoga(req, res);
+}
+
+// Create HTTP server with custom request handler
+const server = createServer(requestHandler);
 
 // Initialize Chat WebSocket Server
 const chatServer = new ChatServer(prisma, jwtSecret);
