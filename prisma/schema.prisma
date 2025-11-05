@@ -23,6 +23,7 @@ model User {
   agents                Agent[]
   chats                 Chat[]
   messages              Message[]
+  customer              Customer?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -383,4 +384,332 @@ model Attachment {
   @@index([chatId])
   @@index([messageId])
   @@index([cid])
+}
+
+// ============================================
+// BILLING SYSTEM
+// ============================================
+
+model Customer {
+  id                String   @id @default(cuid())
+
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Stripe customer ID
+  stripeCustomerId  String?  @unique
+
+  // Billing details
+  email             String?
+  name              String?
+  address           Json?    // { line1, line2, city, state, postal_code, country }
+
+  // Default payment method
+  defaultPaymentMethodId String?
+  defaultPaymentMethod   PaymentMethod? @relation("DefaultPaymentMethod", fields: [defaultPaymentMethodId], references: [id])
+
+  paymentMethods    PaymentMethod[] @relation("CustomerPaymentMethods")
+  subscriptions     Subscription[]
+  invoices          Invoice[]
+  payments          Payment[]
+  usageRecords      UsageRecord[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([stripeCustomerId])
+}
+
+model PaymentMethod {
+  id                String              @id @default(cuid())
+
+  customerId        String
+  customer          Customer            @relation("CustomerPaymentMethods", fields: [customerId], references: [id], onDelete: Cascade)
+
+  type              PaymentMethodType
+
+  // For Stripe credit cards
+  stripePaymentMethodId String?         @unique
+  cardBrand         String?             // visa, mastercard, amex, etc.
+  cardLast4         String?
+  cardExpMonth      Int?
+  cardExpYear       Int?
+
+  // For crypto wallets
+  walletAddress     String?
+  blockchain        String?             // ethereum, solana, arweave, filecoin
+
+  isDefault         Boolean             @default(false)
+
+  defaultForCustomers Customer[]        @relation("DefaultPaymentMethod")
+  payments          Payment[]
+
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([customerId])
+  @@index([stripePaymentMethodId])
+  @@index([walletAddress])
+}
+
+enum PaymentMethodType {
+  CARD
+  CRYPTO_WALLET
+}
+
+model Subscription {
+  id                String             @id @default(cuid())
+
+  customerId        String
+  customer          Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // Stripe subscription ID
+  stripeSubscriptionId String?         @unique
+
+  status            SubscriptionStatus @default(ACTIVE)
+  plan              SubscriptionPlan
+
+  // Pricing
+  basePricePerSeat  Decimal            // Admin-configurable per seat price
+  usageMarkup       Decimal            // Admin-configurable percentage markup on usage (0.0-1.0)
+
+  // Seats
+  seats             Int                @default(1)
+
+  // Billing period
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+
+  // Cancellation
+  cancelAt          DateTime?
+  canceledAt        DateTime?
+
+  invoices          Invoice[]
+
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@index([stripeSubscriptionId])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+  PAUSED
+}
+
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+model Invoice {
+  id                String           @id @default(cuid())
+
+  customerId        String
+  customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  subscriptionId    String?
+  subscription      Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  // Stripe invoice ID
+  stripeInvoiceId   String?          @unique
+
+  // Invoice details
+  invoiceNumber     String           @unique
+  status            InvoiceStatus    @default(DRAFT)
+
+  // Amounts (in cents/smallest currency unit)
+  subtotal          Int              // Base subscription + usage charges
+  tax               Int              @default(0)
+  total             Int
+  amountPaid        Int              @default(0)
+  amountDue         Int
+
+  currency          String           @default("usd")
+
+  // Billing period
+  periodStart       DateTime
+  periodEnd         DateTime
+
+  // Due date and payment
+  dueDate           DateTime?
+  paidAt            DateTime?
+
+  // PDF generation
+  pdfUrl            String?
+
+  lineItems         InvoiceLineItem[]
+  payments          Payment[]
+
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([customerId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([invoiceNumber])
+  @@index([stripeInvoiceId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+  UNCOLLECTIBLE
+}
+
+model InvoiceLineItem {
+  id          String   @id @default(cuid())
+
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+  quantity    Decimal
+  unitPrice   Int      // in cents
+  amount      Int      // in cents
+
+  // Metadata for usage-based items
+  metadata    Json?    // { usageType, resourceId, etc. }
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+
+  customerId        String
+  customer          Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  invoiceId         String?
+  invoice           Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  paymentMethodId   String?
+  paymentMethod     PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+
+  // Stripe payment intent ID
+  stripePaymentIntentId String?   @unique
+
+  // Crypto transaction hash
+  txHash            String?       @unique
+  blockchain        String?
+
+  amount            Int           // in cents or smallest currency unit
+  currency          String        @default("usd")
+
+  status            PaymentStatus @default(PENDING)
+
+  // Failure information
+  failureCode       String?
+  failureMessage    String?
+
+  // Metadata
+  metadata          Json?
+
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([customerId])
+  @@index([invoiceId])
+  @@index([status])
+  @@index([stripePaymentIntentId])
+  @@index([txHash])
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELED
+  REFUNDED
+}
+
+model UsageRecord {
+  id          String      @id @default(cuid())
+
+  customerId  String
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // Usage type
+  type        UsageType
+
+  // Resource being metered
+  resourceType String     // deployment, function, bandwidth, etc.
+  resourceId   String?    // ID of deployment, function, etc.
+
+  // Usage amount
+  quantity    Decimal
+  unit        String      // bytes, requests, hours, etc.
+
+  // Timestamp
+  timestamp   DateTime    @default(now())
+
+  // Billing period
+  periodStart DateTime
+  periodEnd   DateTime
+
+  // Cost calculation
+  unitPrice   Int?        // in cents
+  amount      Int?        // in cents
+
+  // Metadata
+  metadata    Json?
+
+  createdAt   DateTime    @default(now())
+
+  @@index([customerId])
+  @@index([type])
+  @@index([resourceType])
+  @@index([resourceId])
+  @@index([timestamp])
+  @@index([periodStart, periodEnd])
+}
+
+enum UsageType {
+  STORAGE
+  BANDWIDTH
+  COMPUTE
+  REQUESTS
+  SEATS
+}
+
+model BillingSettings {
+  id                    String   @id @default(cuid())
+
+  // Per-seat pricing
+  pricePerSeatCents     Int      @default(0)
+
+  // Usage markup percentage (0.0 to 1.0)
+  usageMarkupPercent    Decimal  @default(0.0)
+
+  // Usage pricing (in cents per unit)
+  storagePerGBCents     Int      @default(0)
+  bandwidthPerGBCents   Int      @default(0)
+  computePerHourCents   Int      @default(0)
+  requestsPer1000Cents  Int      @default(0)
+
+  // Tax settings
+  taxRatePercent        Decimal  @default(0.0)
+
+  // Invoice settings
+  invoiceDueDays        Int      @default(30)
+
+  // Trial period (in days)
+  trialPeriodDays       Int      @default(0)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
