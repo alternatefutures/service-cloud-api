@@ -11,12 +11,30 @@
 import Stripe from 'stripe';
 import type { PrismaClient } from '@prisma/client';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2024-12-18.acacia',
-});
+// Lazy-load Stripe client only if API key is available
+let stripe: Stripe | null = null;
+
+function getStripeClient(): Stripe {
+  if (!stripe) {
+    const apiKey = process.env.STRIPE_SECRET_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'STRIPE_SECRET_KEY environment variable is required for billing operations'
+      );
+    }
+    stripe = new Stripe(apiKey, {
+      apiVersion: '2024-12-18.acacia',
+    });
+  }
+  return stripe;
+}
 
 export class StripeService {
   constructor(private prisma: PrismaClient) {}
+
+  private get stripe(): Stripe {
+    return getStripeClient();
+  }
 
   /**
    * Create or get Stripe customer for a user
@@ -41,7 +59,7 @@ export class StripeService {
     }
 
     // Create Stripe customer
-    const stripeCustomer = await stripe.customers.create({
+    const stripeCustomer = await this.stripe.customers.create({
       email: user.email || undefined,
       name: user.username || undefined,
       metadata: {
@@ -80,7 +98,7 @@ export class StripeService {
     const { customerId, stripeCustomerId } = await this.getOrCreateCustomer(userId);
 
     // Attach payment method to Stripe customer
-    const paymentMethod = await stripe.paymentMethods.attach(paymentMethodId, {
+    const paymentMethod = await this.stripe.paymentMethods.attach(paymentMethodId, {
       customer: stripeCustomerId,
     });
 
@@ -100,7 +118,7 @@ export class StripeService {
 
     // Update default payment method if requested
     if (setAsDefault) {
-      await stripe.customers.update(stripeCustomerId, {
+      await this.stripe.customers.update(stripeCustomerId, {
         invoice_settings: {
           default_payment_method: paymentMethod.id,
         },
@@ -150,7 +168,7 @@ export class StripeService {
 
     // Detach from Stripe
     if (pm.stripePaymentMethodId) {
-      await stripe.paymentMethods.detach(pm.stripePaymentMethodId);
+      await this.stripe.paymentMethods.detach(pm.stripePaymentMethodId);
     }
 
     // Delete from database
@@ -188,7 +206,7 @@ export class StripeService {
     }
 
     // Update in Stripe
-    await stripe.customers.update(customer.stripeCustomerId, {
+    await this.stripe.customers.update(customer.stripeCustomerId, {
       invoice_settings: {
         default_payment_method: pm.stripePaymentMethodId || undefined,
       },
@@ -242,7 +260,7 @@ export class StripeService {
     if (plan !== 'FREE' && basePricePerSeat > 0) {
       // Create or get price in Stripe
       // In production, you'd have pre-created prices in Stripe dashboard
-      const subscription = await stripe.subscriptions.create({
+      const subscription = await this.stripe.subscriptions.create({
         customer: stripeCustomerId,
         items: [
           {
@@ -310,9 +328,9 @@ export class StripeService {
     // Cancel in Stripe
     if (subscription.stripeSubscriptionId) {
       if (immediately) {
-        await stripe.subscriptions.cancel(subscription.stripeSubscriptionId);
+        await this.stripe.subscriptions.cancel(subscription.stripeSubscriptionId);
       } else {
-        await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
+        await this.stripe.subscriptions.update(subscription.stripeSubscriptionId, {
           cancel_at_period_end: true,
         });
       }
@@ -352,7 +370,7 @@ export class StripeService {
     }
 
     // Create payment intent
-    const paymentIntent = await stripe.paymentIntents.create({
+    const paymentIntent = await this.stripe.paymentIntents.create({
       amount,
       currency,
       customer: stripeCustomerId,
@@ -390,7 +408,7 @@ export class StripeService {
   async createPortalSession(userId: string): Promise<string> {
     const { stripeCustomerId } = await this.getOrCreateCustomer(userId);
 
-    const session = await stripe.billingPortal.sessions.create({
+    const session = await this.stripe.billingPortal.sessions.create({
       customer: stripeCustomerId,
       return_url: `${process.env.APP_URL}/billing`,
     });
