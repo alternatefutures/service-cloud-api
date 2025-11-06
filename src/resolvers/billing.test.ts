@@ -25,6 +25,19 @@ vi.mock('../services/billing/index.js', () => ({
   invoiceService: vi.fn(() => ({
     generateInvoice: vi.fn(),
   })),
+  StorageTracker: vi.fn(() => ({
+    getActivePins: vi.fn(),
+    getSnapshots: vi.fn(),
+    getCurrentStorage: vi.fn(),
+    getPinCount: vi.fn(),
+    createDailySnapshot: vi.fn(),
+  })),
+  StorageSnapshotScheduler: vi.fn(() => ({
+    runNow: vi.fn(),
+  })),
+  InvoiceScheduler: vi.fn(() => ({
+    runNow: vi.fn(),
+  })),
 }));
 
 describe('Billing Resolvers', () => {
@@ -209,6 +222,119 @@ describe('Billing Resolvers', () => {
         const result = await billingResolvers.Query.currentUsage({}, {}, mockContext);
 
         expect(result).toEqual(usage);
+      });
+    });
+
+    describe('Storage Tracking Queries', () => {
+      describe('pinnedContent', () => {
+        it('should return list of pinned content', async () => {
+          const pins = [
+            {
+              id: 'pin-1',
+              userId: 'user-123',
+              cid: 'QmTest1',
+              sizeBytes: BigInt(1024 * 1024 * 50),
+              pinnedAt: new Date(),
+              filename: 'file1.jpg',
+            },
+            {
+              id: 'pin-2',
+              userId: 'user-123',
+              cid: 'QmTest2',
+              sizeBytes: BigInt(1024 * 1024 * 75),
+              pinnedAt: new Date(),
+              filename: 'file2.png',
+            },
+          ];
+
+          const { StorageTracker } = await import('../services/billing/index.js');
+          vi.mocked(StorageTracker).mockReturnValue({
+            getActivePins: vi.fn().mockResolvedValue(pins),
+          } as any);
+
+          const result = await billingResolvers.Query.pinnedContent({}, { limit: 100 }, mockContext);
+
+          expect(result).toHaveLength(2);
+          expect(result[0].sizeBytes).toBe((BigInt(1024 * 1024 * 50)).toString());
+          expect(result[1].sizeBytes).toBe((BigInt(1024 * 1024 * 75)).toString());
+        });
+
+        it('should throw error if not authenticated', async () => {
+          mockContext.userId = undefined;
+
+          await expect(billingResolvers.Query.pinnedContent({}, {}, mockContext)).rejects.toThrow(
+            'Authentication required'
+          );
+        });
+      });
+
+      describe('storageSnapshots', () => {
+        it('should return storage snapshots within date range', async () => {
+          const snapshots = [
+            {
+              id: 'snap-1',
+              userId: 'user-123',
+              date: new Date('2024-01-01'),
+              totalBytes: BigInt(1024 * 1024 * 1024 * 50),
+              pinCount: 25,
+            },
+            {
+              id: 'snap-2',
+              userId: 'user-123',
+              date: new Date('2024-01-15'),
+              totalBytes: BigInt(1024 * 1024 * 1024 * 55),
+              pinCount: 27,
+            },
+          ];
+
+          const { StorageTracker } = await import('../services/billing/index.js');
+          vi.mocked(StorageTracker).mockReturnValue({
+            getSnapshots: vi.fn().mockResolvedValue(snapshots),
+          } as any);
+
+          const result = await billingResolvers.Query.storageSnapshots(
+            {},
+            {
+              startDate: new Date('2024-01-01'),
+              endDate: new Date('2024-01-31'),
+              limit: 30,
+            },
+            mockContext
+          );
+
+          expect(result).toHaveLength(2);
+          expect(result[0].totalBytes).toBe((BigInt(1024 * 1024 * 1024 * 50)).toString());
+        });
+      });
+
+      describe('storageStats', () => {
+        it('should return current storage statistics', async () => {
+          const { StorageTracker } = await import('../services/billing/index.js');
+          vi.mocked(StorageTracker).mockReturnValue({
+            getCurrentStorage: vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 1024 * 10)),
+            getPinCount: vi.fn().mockResolvedValue(15),
+            getSnapshots: vi.fn().mockResolvedValue([]),
+          } as any);
+
+          const result = await billingResolvers.Query.storageStats({}, {}, mockContext);
+
+          expect(result.currentBytes).toBe((BigInt(1024 * 1024 * 1024 * 10)).toString());
+          expect(result.currentBytesFormatted).toBe('10.00 GB');
+          expect(result.pinCount).toBe(15);
+        });
+
+        it('should format MB for small storage', async () => {
+          const { StorageTracker } = await import('../services/billing/index.js');
+          vi.mocked(StorageTracker).mockReturnValue({
+            getCurrentStorage: vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 5)),
+            getPinCount: vi.fn().mockResolvedValue(2),
+            getSnapshots: vi.fn().mockResolvedValue([]),
+          } as any);
+
+          const result = await billingResolvers.Query.storageStats({}, {}, mockContext);
+
+          expect(result.currentBytesFormatted).toContain('MB');
+        });
       });
     });
   });
@@ -499,6 +625,101 @@ describe('Billing Resolvers', () => {
             mockContext
           )
         ).rejects.toThrow('Admin access required');
+      });
+    });
+
+    describe('Storage Tracking Mutations', () => {
+      beforeEach(() => {
+        mockContext.prisma.storageSnapshot = {
+          findUnique: vi.fn(),
+          upsert: vi.fn(),
+        } as any;
+        mockContext.prisma.invoice = {
+          ...mockContext.prisma.invoice,
+          findMany: vi.fn(),
+        } as any;
+      });
+
+      describe('triggerStorageSnapshot', () => {
+        it('should create storage snapshot for user', async () => {
+          const snapshot = {
+            id: 'snapshot-123',
+            userId: 'user-123',
+            date: new Date(),
+            totalBytes: BigInt(1024 * 1024 * 1024 * 50),
+            pinCount: 25,
+            createdAt: new Date(),
+          };
+
+          const { StorageTracker } = await import('../services/billing/index.js');
+          vi.mocked(StorageTracker).mockReturnValue({
+            createDailySnapshot: vi.fn().mockResolvedValue('snapshot-123'),
+          } as any);
+
+          vi.mocked(mockContext.prisma.storageSnapshot.findUnique).mockResolvedValue(snapshot);
+
+          const result = await billingResolvers.Mutation.triggerStorageSnapshot(
+            {},
+            {},
+            mockContext
+          );
+
+          expect(result.id).toBe('snapshot-123');
+          expect(result.totalBytes).toBe((BigInt(1024 * 1024 * 1024 * 50)).toString());
+        });
+
+        it('should throw error if not authenticated', async () => {
+          mockContext.userId = undefined;
+
+          await expect(
+            billingResolvers.Mutation.triggerStorageSnapshot({}, {}, mockContext)
+          ).rejects.toThrow('Authentication required');
+        });
+      });
+
+      describe('triggerInvoiceGeneration', () => {
+        it('should trigger invoice generation and return recent invoices', async () => {
+          const recentInvoices = [
+            {
+              id: 'inv-1',
+              invoiceNumber: 'INV-001',
+              status: 'OPEN',
+              total: 5000,
+              lineItems: [],
+            },
+            {
+              id: 'inv-2',
+              invoiceNumber: 'INV-002',
+              status: 'OPEN',
+              total: 3000,
+              lineItems: [],
+            },
+          ];
+
+          const { InvoiceScheduler } = await import('../services/billing/index.js');
+          vi.mocked(InvoiceScheduler).mockReturnValue({
+            runNow: vi.fn().mockResolvedValue(undefined),
+          } as any);
+
+          vi.mocked(mockContext.prisma.invoice.findMany).mockResolvedValue(recentInvoices);
+
+          const result = await billingResolvers.Mutation.triggerInvoiceGeneration(
+            {},
+            {},
+            mockContext
+          );
+
+          expect(result).toEqual(recentInvoices);
+          expect(result).toHaveLength(2);
+        });
+
+        it('should throw error if not authenticated', async () => {
+          mockContext.userId = undefined;
+
+          await expect(
+            billingResolvers.Mutation.triggerInvoiceGeneration({}, {}, mockContext)
+          ).rejects.toThrow('Authentication required');
+        });
       });
     });
   });
