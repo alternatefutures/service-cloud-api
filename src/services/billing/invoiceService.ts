@@ -6,7 +6,8 @@
 
 import type { PrismaClient } from '@prisma/client';
 import PDFDocument from 'pdfkit';
-import { writeFileSync } from 'fs';
+import SVGtoPDF from 'svg-to-pdfkit';
+import { writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 export class InvoiceService {
@@ -143,62 +144,121 @@ export class InvoiceService {
     // Create PDF
     const doc = new PDFDocument({ margin: 50 });
 
-    // Header
+    // Load and add logo
+    const logoPath = join(process.cwd(), 'assets', 'logo.svg');
+    const logoSVG = readFileSync(logoPath, 'utf-8');
+
+    // Add logo (AF logo from home page)
+    SVGtoPDF(doc, logoSVG, 50, 40, { width: 50, height: 45 });
+
+    // Company name and info
     doc
-      .fontSize(20)
-      .text('INVOICE', 50, 50)
+      .fontSize(16)
+      .fillColor('#0026ff')
+      .text('Alternate Futures', 110, 50)
+      .fontSize(9)
+      .fillColor('#666666')
+      .text('alternatefutures.ai', 110, 70);
+
+    // Invoice title and info (right side)
+    doc
+      .fontSize(24)
+      .fillColor('#000000')
+      .text('INVOICE', 400, 50, { align: 'right' })
       .fontSize(10)
-      .text(`Invoice #: ${invoice.invoiceNumber}`, 50, 80)
-      .text(`Date: ${invoice.createdAt.toLocaleDateString()}`, 50, 95)
-      .text(`Due Date: ${invoice.dueDate?.toLocaleDateString() || 'N/A'}`, 50, 110);
+      .fillColor('#666666')
+      .text(`Invoice #: ${invoice.invoiceNumber}`, 350, 80, { align: 'right' })
+      .text(`Date: ${invoice.createdAt.toLocaleDateString()}`, 350, 95, { align: 'right' })
+      .text(`Due Date: ${invoice.dueDate?.toLocaleDateString() || 'N/A'}`, 350, 110, { align: 'right' });
+
+    // Horizontal line after header
+    doc
+      .moveTo(50, 130)
+      .lineTo(550, 130)
+      .strokeColor('#e0e0e0')
+      .stroke();
 
     // Customer info
     doc
-      .fontSize(12)
-      .text('Bill To:', 50, 140)
       .fontSize(10)
-      .text(invoice.customer.name || 'N/A', 50, 155)
-      .text(invoice.customer.email || 'N/A', 50, 170);
+      .fillColor('#666666')
+      .text('BILL TO:', 50, 150)
+      .fontSize(12)
+      .fillColor('#000000')
+      .text(invoice.customer.name || 'N/A', 50, 165)
+      .fontSize(10)
+      .fillColor('#666666')
+      .text(invoice.customer.email || 'N/A', 50, 180);
 
     // Line items table
     let y = 220;
+
+    // Table header with background
+    doc
+      .rect(50, y - 5, 500, 20)
+      .fillAndStroke('#f5f5f5', '#e0e0e0');
+
     doc
       .fontSize(10)
-      .text('Description', 50, y)
+      .fillColor('#000000')
+      .text('Description', 55, y)
       .text('Quantity', 280, y)
       .text('Unit Price', 350, y)
       .text('Amount', 450, y);
 
-    doc.moveTo(50, y + 15).lineTo(550, y + 15).stroke();
-
     y += 25;
     for (const item of invoice.lineItems) {
       doc
-        .text(item.description, 50, y)
+        .fillColor('#000000')
+        .text(item.description, 55, y)
         .text(item.quantity.toString(), 280, y)
         .text(`$${(item.unitPrice / 100).toFixed(2)}`, 350, y)
         .text(`$${(item.amount / 100).toFixed(2)}`, 450, y);
       y += 20;
+
+      // Add subtle line between items
+      doc
+        .moveTo(50, y - 2)
+        .lineTo(550, y - 2)
+        .strokeColor('#f0f0f0')
+        .stroke();
     }
 
-    // Totals
+    // Totals section
+    y += 10;
+    doc
+      .moveTo(50, y)
+      .lineTo(550, y)
+      .strokeColor('#e0e0e0')
+      .stroke();
     y += 20;
-    doc.moveTo(50, y).lineTo(550, y).stroke();
-    y += 15;
 
     doc
+      .fontSize(10)
+      .fillColor('#666666')
       .text('Subtotal:', 350, y)
+      .fillColor('#000000')
       .text(`$${(invoice.subtotal / 100).toFixed(2)}`, 450, y);
     y += 20;
 
     doc
+      .fillColor('#666666')
       .text('Tax:', 350, y)
+      .fillColor('#000000')
       .text(`$${(invoice.tax / 100).toFixed(2)}`, 450, y);
-    y += 20;
+    y += 25;
+
+    // Total with highlight
+    doc
+      .rect(340, y - 5, 210, 25)
+      .fillAndStroke('#f8f9fa', '#e0e0e0');
 
     doc
-      .fontSize(12)
+      .fontSize(13)
+      .fillColor('#000000')
       .text('Total:', 350, y)
+      .fontSize(14)
+      .fillColor('#0026ff')
       .text(`$${(invoice.total / 100).toFixed(2)}`, 450, y);
 
     // Generate PDF file

@@ -145,6 +145,35 @@ Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 - Automatic invoice generation
 - Stripe integration
 - Customer portal access
+- Branded invoice PDFs with company logo
+
+**Payment Retries:**
+
+Failed payments are handled automatically via Stripe's Smart Retries feature. Configure in your Stripe Dashboard:
+
+1. Go to **Settings** → **Billing** → **Automatic collection**
+2. Enable **Smart Retries** (recommended settings):
+   - First retry: 3 days after failure
+   - Second retry: 5 days after first retry
+   - Third retry: 7 days after second retry
+   - Final retry: 9 days after third retry
+
+Smart Retries automatically:
+- Retries payments at optimal times based on historical success patterns
+- Sends email notifications to customers before each retry
+- Updates your webhook with payment status changes
+- Marks subscriptions as `past_due` until payment succeeds
+
+**Manual Retry:**
+
+For custom retry logic or manual intervention, use the Stripe API:
+
+```typescript
+// Retry a specific invoice
+await stripe.invoices.pay('inv_xxx');
+```
+
+All payment webhooks are automatically handled via `/billing/webhook` endpoint.
 
 #### 📦 Multi-Storage Support
 - IPFS (self-hosted & Pinata)
