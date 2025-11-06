@@ -19,6 +19,9 @@ export class TokenService {
   private static readonly RATE_LIMIT = 50;
   private static readonly RATE_LIMIT_WINDOW = 24 * 60 * 60; // 24 hours in seconds
 
+  // Max active tokens: 500 per user
+  private static readonly MAX_ACTIVE_TOKENS = 500;
+
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
   }
@@ -41,7 +44,7 @@ export class TokenService {
 
   /**
    * Create a new personal access token
-   * Enforces rate limiting of 50 tokens per day
+   * Enforces rate limiting of 50 tokens per day and max 500 active tokens
    */
   async createToken(
     userId: string,
@@ -54,6 +57,20 @@ export class TokenService {
     expiresAt: Date | null;
     createdAt: Date;
   }> {
+    // Check max active tokens limit
+    const activeTokensCount = await this.prisma.personalAccessToken.count({
+      where: { userId },
+    });
+
+    if (activeTokensCount >= TokenService.MAX_ACTIVE_TOKENS) {
+      const error = new Error(
+        `Maximum active API keys limit reached. You can have up to ${TokenService.MAX_ACTIVE_TOKENS} active keys. ` +
+        `Please delete unused keys before creating new ones.`
+      ) as Error & { code: string };
+      error.code = 'MAX_TOKENS_EXCEEDED';
+      throw error;
+    }
+
     // Check rate limit
     const rateLimitKey = `api_key_creation:${userId}`;
     const rateLimit = await rateLimiter.checkLimit(
@@ -195,6 +212,8 @@ export class TokenService {
     remaining: number;
     limit: number;
     resetAt: Date;
+    activeTokens: number;
+    maxActiveTokens: number;
   }> {
     const rateLimitKey = `api_key_creation:${userId}`;
     const rateLimit = await rateLimiter.checkLimit(
@@ -203,10 +222,16 @@ export class TokenService {
       TokenService.RATE_LIMIT_WINDOW
     );
 
+    const activeTokensCount = await this.prisma.personalAccessToken.count({
+      where: { userId },
+    });
+
     return {
       remaining: rateLimit.remaining,
       limit: TokenService.RATE_LIMIT,
       resetAt: rateLimit.resetAt,
+      activeTokens: activeTokensCount,
+      maxActiveTokens: TokenService.MAX_ACTIVE_TOKENS,
     };
   }
 }

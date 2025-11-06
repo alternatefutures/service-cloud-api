@@ -67,6 +67,13 @@ export const authMutations = {
           },
         });
       }
+      if (error.code === 'MAX_TOKENS_EXCEEDED') {
+        throw new GraphQLError(error.message, {
+          extensions: {
+            code: 'MAX_TOKENS_EXCEEDED',
+          },
+        });
+      }
       throw error;
     }
   },

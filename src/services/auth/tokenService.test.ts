@@ -122,6 +122,62 @@ describe('TokenService', () => {
     });
   });
 
+  describe('Max Active Tokens', () => {
+    it('should reject token creation after exceeding max active tokens', async () => {
+      // This test would be very slow with 500 tokens, so we'll just test the logic
+      // by mocking the count. In a real scenario, you'd need to create 500 tokens.
+
+      // Create a few tokens
+      await tokenService.createToken(testUserId, 'Token 1');
+      await tokenService.createToken(testUserId, 'Token 2');
+
+      // Mock the prisma count to simulate 500 existing tokens
+      const originalCount = prisma.personalAccessToken.count;
+      prisma.personalAccessToken.count = async () => 500;
+
+      // Should fail due to max active tokens
+      await expect(tokenService.createToken(testUserId, 'Token 501')).rejects.toThrow(
+        /Maximum active API keys limit reached/
+      );
+
+      // Check error code
+      try {
+        await tokenService.createToken(testUserId, 'Token 501');
+        throw new Error('Expected max tokens error');
+      } catch (error: any) {
+        expect(error.code).toBe('MAX_TOKENS_EXCEEDED');
+      }
+
+      // Restore original count
+      prisma.personalAccessToken.count = originalCount;
+    });
+
+    it('should allow creating tokens when deleting brings count below max', async () => {
+      // Create a couple of tokens
+      const token1 = await tokenService.createToken(testUserId, 'Token 1');
+      const token2 = await tokenService.createToken(testUserId, 'Token 2');
+
+      // Mock to simulate being at max
+      const originalCount = prisma.personalAccessToken.count;
+      prisma.personalAccessToken.count = async () => 500;
+
+      // Should fail
+      await expect(tokenService.createToken(testUserId, 'Token 3')).rejects.toThrow(
+        /Maximum active API keys limit reached/
+      );
+
+      // Restore count
+      prisma.personalAccessToken.count = originalCount;
+
+      // Delete one token
+      await tokenService.deleteToken(token1.id, testUserId);
+
+      // Now should be able to create again (we're back under the limit)
+      const token3 = await tokenService.createToken(testUserId, 'Token 3');
+      expect(token3).toBeDefined();
+    });
+  });
+
   describe('Token Validation', () => {
     it('should validate a valid token', async () => {
       const createdToken = await tokenService.createToken(testUserId, 'Valid Token');
@@ -236,7 +292,7 @@ describe('TokenService', () => {
   });
 
   describe('Rate Limit Info', () => {
-    it('should return correct remaining limit', async () => {
+    it('should return correct remaining limit and active tokens count', async () => {
       await tokenService.createToken(testUserId, 'Token 1');
       await tokenService.createToken(testUserId, 'Token 2');
 
@@ -245,6 +301,8 @@ describe('TokenService', () => {
       expect(rateLimit.limit).toBe(50);
       expect(rateLimit.remaining).toBe(48);
       expect(rateLimit.resetAt).toBeInstanceOf(Date);
+      expect(rateLimit.activeTokens).toBe(2);
+      expect(rateLimit.maxActiveTokens).toBe(500);
     });
   });
 });

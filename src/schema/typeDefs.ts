@@ -34,6 +34,8 @@ export const typeDefs = /* GraphQL */ `
     remaining: Int!
     limit: Int!
     resetAt: Date!
+    activeTokens: Int!
+    maxActiveTokens: Int!
   }
 
   # ============================================
