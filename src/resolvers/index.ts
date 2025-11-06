@@ -8,6 +8,8 @@ import type { StorageType } from '../services/storage/factory.js';
 import { deploymentEvents } from '../services/events/index.js';
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
 import { chatResolvers } from './chat.js';
+import { billingResolvers } from './billing.js';
+import { domainQueries, domainMutations } from './domain.js';
 import type { Context } from './types.js';
 
 export type { Context };
@@ -105,12 +107,8 @@ export const resolvers = {
       });
     },
 
-    // Domains
-    domains: async (_: unknown, { siteId }: { siteId?: string }, context: Context) => {
-      return context.prisma.domain.findMany({
-        where: siteId ? { siteId } : undefined,
-      });
-    },
+    // Domains (from domain resolvers)
+    ...domainQueries,
 
     // Storage Analytics
     storageAnalytics: async (
@@ -261,6 +259,9 @@ export const resolvers = {
 
     // Chat queries (from chat resolvers)
     ...chatResolvers.Query,
+
+    // Billing queries (from billing resolvers)
+    ...billingResolvers.Query,
   },
 
   Mutation: {
@@ -453,23 +454,14 @@ export const resolvers = {
       return true;
     },
 
-    // Domains
-    createDomain: async (
-      _: unknown,
-      { hostname, siteId }: { hostname: string; siteId: string },
-      context: Context
-    ) => {
-      return context.prisma.domain.create({
-        data: {
-          hostname,
-          siteId,
-          verified: false,
-        },
-      });
-    },
+    // Domains (from domain resolvers)
+    ...domainMutations,
 
     // Chat mutations (from chat resolvers)
     ...chatResolvers.Mutation,
+
+    // Billing mutations (from billing resolvers)
+    ...billingResolvers.Mutation,
   },
 
   // Field resolvers
@@ -550,8 +542,20 @@ export const resolvers = {
   Chat: chatResolvers.Chat,
   Message: chatResolvers.Message,
 
+  // Billing field resolvers
+  Customer: billingResolvers.Customer,
+  PaymentMethod: billingResolvers.PaymentMethod,
+  Invoice: billingResolvers.Invoice,
+  Payment: billingResolvers.Payment,
+  UsageRecord: billingResolvers.UsageRecord,
+  PinnedContent: billingResolvers.PinnedContent,
+  StorageSnapshot: billingResolvers.StorageSnapshot,
+
   // Subscriptions for real-time updates
   Subscription: {
+    // Billing subscription field resolvers
+    ...billingResolvers.Subscription,
+    // GraphQL subscription operations
     deploymentLogs: {
       subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
         // Verify deployment exists

@@ -131,9 +131,71 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     hostname: String!
     verified: Boolean!
+    domainType: DomainType!
     site: Site!
+    txtVerificationToken: String
+    txtVerificationStatus: VerificationStatus!
+    dnsVerifiedAt: Date
+    sslStatus: SslStatus!
+    sslIssuedAt: Date
+    sslExpiresAt: Date
+    sslAutoRenew: Boolean!
+    arnsName: String
+    ensName: String
+    ipnsHash: String
+    lastDnsCheck: Date
+    dnsCheckAttempts: Int!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  enum DomainType {
+    WEB2
+    ARNS
+    ENS
+    IPNS
+  }
+
+  enum VerificationStatus {
+    PENDING
+    VERIFIED
+    FAILED
+  }
+
+  enum SslStatus {
+    NONE
+    PENDING
+    ACTIVE
+    EXPIRED
+    FAILED
+  }
+
+  type DomainVerificationInstructions {
+    method: String!
+    recordType: String!
+    hostname: String!
+    value: String!
+    instructions: String!
+  }
+
+  type SslCertificateStatusInfo {
+    id: ID!
+    hostname: String!
+    sslStatus: SslStatus!
+    sslExpiresAt: Date
+    sslAutoRenew: Boolean!
+    verified: Boolean!
+    daysUntilExpiry: Int
+    needsRenewal: Boolean!
+    isExpired: Boolean!
+    site: Site!
+  }
+
+  input CreateDomainInput {
+    hostname: String!
+    siteId: ID!
+    domainType: DomainType
+    verificationMethod: String
   }
 
   # ============================================
@@ -341,6 +403,266 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # BILLING SYSTEM
+  # ============================================
+
+  type Customer {
+    id: ID!
+    userId: ID!
+    user: User!
+    email: String
+    name: String
+    stripeCustomerId: String
+    defaultPaymentMethod: PaymentMethod
+    paymentMethods: [PaymentMethod!]!
+    subscriptions: [Subscription!]!
+    invoices: [Invoice!]!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  # ============================================
+  # STORAGE TRACKING FOR BILLING
+  # ============================================
+
+  type PinnedContent {
+    id: ID!
+    userId: ID!
+    user: User!
+    cid: String!
+    sizeBytes: String!
+    pinnedAt: Date!
+    unpinnedAt: Date
+    filename: String
+    mimeType: String
+    metadata: JSON
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  type StorageSnapshot {
+    id: ID!
+    userId: ID!
+    user: User!
+    date: Date!
+    totalBytes: String!
+    pinCount: Int!
+    createdAt: Date!
+  }
+
+  type StorageTrackingStats {
+    currentBytes: String!
+    currentBytesFormatted: String!
+    pinCount: Int!
+    lastSnapshot: StorageSnapshot
+  }
+
+  # ============================================
+  # USAGE BUFFER MONITORING
+  # ============================================
+
+  type UsageBufferStats {
+    activeUsers: Int!
+    totalBandwidth: Float!
+    totalCompute: Float!
+    totalRequests: Int!
+    bufferHealthy: Boolean!
+  }
+
+  type FlushUsageBufferResult {
+    success: Boolean!
+    usersFlushed: Int!
+    errors: Int!
+    duration: Int!
+    message: String!
+  }
+
+  type PaymentMethod {
+    id: ID!
+    type: PaymentMethodType!
+    customer: Customer!
+    cardBrand: String
+    cardLast4: String
+    cardExpMonth: Int
+    cardExpYear: Int
+    walletAddress: String
+    blockchain: String
+    isDefault: Boolean!
+    createdAt: Date!
+  }
+
+  enum PaymentMethodType {
+    CARD
+    CRYPTO_WALLET
+  }
+
+  type Subscription {
+    id: ID!
+    status: SubscriptionStatus!
+    plan: SubscriptionPlan!
+    customer: Customer!
+    basePricePerSeat: Float!
+    usageMarkup: Float!
+    seats: Int!
+    currentPeriodStart: Date!
+    currentPeriodEnd: Date!
+    cancelAt: Date
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  enum SubscriptionStatus {
+    ACTIVE
+    PAST_DUE
+    CANCELED
+    TRIALING
+    PAUSED
+  }
+
+  enum SubscriptionPlan {
+    FREE
+    STARTER
+    PRO
+    ENTERPRISE
+  }
+
+  type Invoice {
+    id: ID!
+    invoiceNumber: String!
+    status: InvoiceStatus!
+    customer: Customer!
+    subscription: Subscription
+    subtotal: Int!
+    tax: Int!
+    total: Int!
+    amountPaid: Int!
+    amountDue: Int!
+    currency: String!
+    periodStart: Date!
+    periodEnd: Date!
+    dueDate: Date
+    paidAt: Date
+    pdfUrl: String
+    lineItems: [InvoiceLineItem!]!
+    createdAt: Date!
+  }
+
+  enum InvoiceStatus {
+    DRAFT
+    OPEN
+    PAID
+    VOID
+    UNCOLLECTIBLE
+  }
+
+  type InvoiceLineItem {
+    id: ID!
+    description: String!
+    quantity: Float!
+    unitPrice: Int!
+    amount: Int!
+  }
+
+  type Payment {
+    id: ID!
+    customer: Customer!
+    invoice: Invoice
+    paymentMethod: PaymentMethod
+    amount: Int!
+    currency: String!
+    status: PaymentStatus!
+    txHash: String
+    blockchain: String
+    failureMessage: String
+    createdAt: Date!
+  }
+
+  enum PaymentStatus {
+    PENDING
+    PROCESSING
+    SUCCEEDED
+    FAILED
+    CANCELED
+    REFUNDED
+  }
+
+  type UsageRecord {
+    id: ID!
+    customer: Customer!
+    type: UsageType!
+    resourceType: String!
+    quantity: Float!
+    unit: String!
+    amount: Int
+    timestamp: Date!
+  }
+
+  enum UsageType {
+    STORAGE
+    BANDWIDTH
+    COMPUTE
+    REQUESTS
+    SEATS
+  }
+
+  type UsageSummary {
+    storage: UsageMetric!
+    bandwidth: UsageMetric!
+    compute: UsageMetric!
+    requests: UsageMetric!
+    total: Int!
+  }
+
+  type UsageMetric {
+    quantity: Float!
+    amount: Int!
+  }
+
+  type BillingSettings {
+    id: ID!
+    pricePerSeatCents: Int!
+    usageMarkupPercent: Float!
+    storagePerGBCents: Int!
+    bandwidthPerGBCents: Int!
+    computePerHourCents: Int!
+    requestsPer1000Cents: Int!
+    taxRatePercent: Float!
+    invoiceDueDays: Int!
+    trialPeriodDays: Int!
+  }
+
+  input CreateSubscriptionInput {
+    plan: SubscriptionPlan!
+    seats: Int
+  }
+
+  input AddPaymentMethodInput {
+    stripePaymentMethodId: String
+    walletAddress: String
+    blockchain: String
+    setAsDefault: Boolean
+  }
+
+  input RecordCryptoPaymentInput {
+    txHash: String!
+    blockchain: String!
+    amount: Int!
+    invoiceId: ID
+  }
+
+  input UpdateBillingSettingsInput {
+    pricePerSeatCents: Int
+    usageMarkupPercent: Float
+    storagePerGBCents: Int
+    bandwidthPerGBCents: Int
+    computePerHourCents: Int
+    requestsPer1000Cents: Int
+    taxRatePercent: Float
+    invoiceDueDays: Int
+    trialPeriodDays: Int
+  }
+
+  # ============================================
   # QUERIES
   # ============================================
 
@@ -374,6 +696,8 @@ export const typeDefs = /* GraphQL */ `
     domain(id: ID!): Domain
     domains(siteId: ID): [Domain!]!
     domainByHostname(hostname: String!): Domain
+    domainVerificationInstructions(domainId: ID!): DomainVerificationInstructions!
+    sslCertificateStatus: [SslCertificateStatusInfo!]!
 
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
@@ -389,6 +713,24 @@ export const typeDefs = /* GraphQL */ `
     chat(id: ID!): Chat
     chats: [Chat!]!
     messages(chatId: ID!, limit: Int, before: String): [Message!]!
+
+    # Billing
+    customer: Customer
+    paymentMethods: [PaymentMethod!]!
+    subscriptions: [Subscription!]!
+    activeSubscription: Subscription
+    invoices(status: InvoiceStatus, limit: Int): [Invoice!]!
+    invoice(id: ID!): Invoice
+    currentUsage: UsageSummary!
+    billingSettings: BillingSettings
+
+    # Storage Tracking
+    pinnedContent(limit: Int): [PinnedContent!]!
+    storageSnapshots(startDate: Date, endDate: Date, limit: Int): [StorageSnapshot!]!
+    storageStats: StorageTrackingStats!
+
+    # Usage Buffer Monitoring
+    usageBufferStats: UsageBufferStats!
   }
 
   # ============================================
@@ -442,7 +784,11 @@ export const typeDefs = /* GraphQL */ `
     deleteAFFunction(id: ID!): Boolean!
 
     # Domains
-    createDomain(hostname: String!, siteId: ID!): Domain!
+    createDomain(input: CreateDomainInput!): Domain!
+    verifyDomain(domainId: ID!): Boolean!
+    provisionSsl(domainId: ID!, email: String!): Domain!
+    renewSslCertificate(domainId: ID!): Domain!
+    setPrimaryDomain(siteId: ID!, domainId: ID!): Boolean!
     deleteDomain(id: ID!): Boolean!
 
     # Agent Chat
@@ -450,6 +796,32 @@ export const typeDefs = /* GraphQL */ `
     createChat(input: CreateChatInput!): Chat!
     sendMessage(input: SendMessageInput!): Message!
     deleteChat(id: ID!): Boolean!
+
+    # Billing
+    createSubscription(input: CreateSubscriptionInput!): Subscription!
+    cancelSubscription(id: ID!, immediately: Boolean): Subscription!
+    updateSubscriptionSeats(id: ID!, seats: Int!): Subscription!
+    addPaymentMethod(input: AddPaymentMethodInput!): PaymentMethod!
+    removePaymentMethod(id: ID!): Boolean!
+    setDefaultPaymentMethod(id: ID!): PaymentMethod!
+    processPayment(amount: Int!, currency: String, invoiceId: ID): Payment!
+    recordCryptoPayment(input: RecordCryptoPaymentInput!): Payment!
+    generateInvoice(subscriptionId: ID!): Invoice!
+    updateBillingSettings(input: UpdateBillingSettingsInput!): BillingSettings!
+
+    # Storage Tracking
+    triggerStorageSnapshot: StorageSnapshot!
+    triggerInvoiceGeneration: [Invoice!]!
+
+    # Usage Buffer Management
+    flushUsageBuffer: FlushUsageBufferResult!
+
+    # Web3 Domains
+    registerArns(domainId: ID!, arnsName: String!, contentId: String!): Domain!
+    updateArnsContent(domainId: ID!, contentId: String!): Domain!
+    setEnsContentHash(domainId: ID!, ensName: String!, contentHash: String!): Domain!
+    publishIpns(domainId: ID!, cid: String!): Domain!
+    updateIpns(domainId: ID!, cid: String!): Domain!
   }
 
   # ============================================
