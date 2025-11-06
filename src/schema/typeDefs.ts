@@ -178,6 +178,19 @@ export const typeDefs = /* GraphQL */ `
     instructions: String!
   }
 
+  type SslCertificateStatusInfo {
+    id: ID!
+    hostname: String!
+    sslStatus: SslStatus!
+    sslExpiresAt: Date
+    sslAutoRenew: Boolean!
+    verified: Boolean!
+    daysUntilExpiry: Int
+    needsRenewal: Boolean!
+    isExpired: Boolean!
+    site: Site!
+  }
+
   input CreateDomainInput {
     hostname: String!
     siteId: ID!
@@ -684,6 +697,7 @@ export const typeDefs = /* GraphQL */ `
     domains(siteId: ID): [Domain!]!
     domainByHostname(hostname: String!): Domain
     domainVerificationInstructions(domainId: ID!): DomainVerificationInstructions!
+    sslCertificateStatus: [SslCertificateStatusInfo!]!
 
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
@@ -773,6 +787,7 @@ export const typeDefs = /* GraphQL */ `
     createDomain(input: CreateDomainInput!): Domain!
     verifyDomain(domainId: ID!): Boolean!
     provisionSsl(domainId: ID!, email: String!): Domain!
+    renewSslCertificate(domainId: ID!): Domain!
     setPrimaryDomain(siteId: ID!, domainId: ID!): Boolean!
     deleteDomain(id: ID!): Boolean!
 

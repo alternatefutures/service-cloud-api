@@ -14,6 +14,7 @@ import {
   InvoiceScheduler,
   UsageAggregator,
 } from './services/billing/index.js';
+import { startSslRenewalJob } from './jobs/sslRenewal.js';
 
 const prisma = new PrismaClient();
 
@@ -88,6 +89,10 @@ server.listen(port, () => {
   usageAggregator.start();
   console.log(`📊 Billing schedulers started`);
   console.log(`⚡ Usage aggregator running (1-minute intervals)`);
+
+  // Start SSL renewal job
+  startSslRenewalJob();
+  console.log(`🔒 SSL renewal job started (runs daily at 2 AM)`);
 });
 
 // Graceful shutdown
