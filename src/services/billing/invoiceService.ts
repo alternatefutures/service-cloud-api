@@ -6,6 +6,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import PDFDocument from 'pdfkit';
+// @ts-ignore - svg-to-pdfkit doesn't have type declarations
 import SVGtoPDF from 'svg-to-pdfkit';
 import { writeFileSync, readFileSync, createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';

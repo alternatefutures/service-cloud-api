@@ -23,7 +23,7 @@ function getStripeClient(): Stripe {
       );
     }
     stripe = new Stripe(apiKey, {
-      apiVersion: '2024-12-18.acacia',
+      apiVersion: '2025-10-29.clover',
     });
   }
   return stripe;
@@ -274,7 +274,7 @@ export class StripeService {
                 interval: 'month',
               },
               unit_amount: basePricePerSeat,
-            },
+            } as any, // Type assertion for API version compatibility
             quantity: seats,
           },
         ],
@@ -454,13 +454,16 @@ export class StripeService {
       return;
     }
 
+    // Type assertion for API version compatibility
+    const subAny = subscription as any;
+
     await this.prisma.subscription.update({
       where: { id: sub.id },
       data: {
         status: this.mapStripeStatus(subscription.status),
-        currentPeriodStart: new Date(subscription.current_period_start * 1000),
-        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-        cancelAt: subscription.cancel_at ? new Date(subscription.cancel_at * 1000) : null,
+        currentPeriodStart: new Date(subAny.current_period_start * 1000),
+        currentPeriodEnd: new Date(subAny.current_period_end * 1000),
+        cancelAt: subAny.cancel_at ? new Date(subAny.cancel_at * 1000) : null,
       },
     });
   }

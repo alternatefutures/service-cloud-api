@@ -13,7 +13,7 @@
  * Cost savings: $565/month → $70/month for 10K users
  */
 
-import cron from 'node-cron';
+import * as cron from 'node-cron';
 import type { PrismaClient } from '@prisma/client';
 import { UsageBuffer } from './usageBuffer.js';
 
