@@ -116,6 +116,32 @@ After seeding:
 - **Token**: `af_local_test_token_12345`
 - **Project ID**: `proj-1`
 
+## ⚙️ GitHub Actions & CI/CD
+
+This repository includes automated workflows for continuous integration and code review:
+
+### Automated Testing
+- **Runs on:** Pull requests and pushes to `main`, `staging`, `develop`
+- **Tests:** Vitest test suite with PostgreSQL and Redis
+- **Type checking:** TypeScript compilation
+- **Build verification:** Ensures code compiles successfully
+
+### Claude Code Review
+- **AI-powered code reviews** on every pull request
+- Uses Claude Sonnet 4.5 to analyze changes
+- Posts review comments directly on PRs
+- Identifies bugs, security issues, and suggests improvements
+
+### Setup Required
+To enable Claude Code Review, add `ANTHROPIC_API_KEY` to your repository secrets.
+
+See [.github/SETUP.md](.github/SETUP.md) for detailed configuration instructions.
+
+### Branch Strategy
+- **`main`** - Production (protected)
+- **`staging`** - Pre-production testing
+- **`develop`** - Active development
+
 ## 📚 API Documentation
 
 GraphQL Playground available at `/graphql`
