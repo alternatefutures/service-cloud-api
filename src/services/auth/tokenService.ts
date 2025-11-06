@@ -216,20 +216,23 @@ export class TokenService {
     maxActiveTokens: number;
   }> {
     const rateLimitKey = `api_key_creation:${userId}`;
-    const rateLimit = await rateLimiter.checkLimit(
-      rateLimitKey,
-      TokenService.RATE_LIMIT,
-      TokenService.RATE_LIMIT_WINDOW
-    );
+
+    // Use getCount instead of checkLimit to avoid consuming a rate limit slot
+    const currentCount = await rateLimiter.getCount(rateLimitKey);
+    const remaining = Math.max(0, TokenService.RATE_LIMIT - currentCount);
+
+    // Calculate reset time
+    const now = Date.now();
+    const resetAt = new Date(now + TokenService.RATE_LIMIT_WINDOW * 1000);
 
     const activeTokensCount = await this.prisma.personalAccessToken.count({
       where: { userId },
     });
 
     return {
-      remaining: rateLimit.remaining,
+      remaining,
       limit: TokenService.RATE_LIMIT,
-      resetAt: rateLimit.resetAt,
+      resetAt,
       activeTokens: activeTokensCount,
       maxActiveTokens: TokenService.MAX_ACTIVE_TOKENS,
     };
