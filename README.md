@@ -142,6 +142,16 @@ See [.github/SETUP.md](.github/SETUP.md) for detailed configuration instructions
 - **`staging`** - Pre-production testing
 - **`develop`** - Active development
 
+**Workflow:**
+- **Feature branches** → Merge into `develop`
+  - Naming: `feature/ALT-123-description` (based on Linear ticket)
+  - Example: `feature/ALT-456-add-webhook-support`
+- **Bug fixes** → Can merge directly into `staging`
+  - Naming: `fix/ALT-789-description`
+  - Example: `fix/ALT-123-auth-token-expiry`
+- **Hotfixes** → Merge directly into `main` (emergency only)
+  - Naming: `hotfix/ALT-999-description`
+
 ## 📚 API Documentation
 
 GraphQL Playground available at `/graphql`

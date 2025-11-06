@@ -64,13 +64,58 @@ Go to: **Repository Settings** → **Secrets and variables** → **Actions** →
 
 ---
 
+## Branch Strategy & Workflow
+
+### Protected Branches
+- **`main`** - Production (protected)
+- **`staging`** - Pre-production testing
+- **`develop`** - Active development
+
+### Branch Naming Convention
+
+All branches should be named based on your Linear ticket:
+
+**Feature Branches:**
+- Format: `feature/ALT-123-description`
+- Merge target: `develop`
+- Example: `feature/ALT-456-add-webhook-support`
+
+**Bug Fixes:**
+- Format: `fix/ALT-789-description`
+- Merge target: `staging` (can merge directly)
+- Example: `fix/ALT-123-auth-token-expiry`
+
+**Hotfixes:**
+- Format: `hotfix/ALT-999-description`
+- Merge target: `main` (emergency only)
+- Example: `hotfix/ALT-234-security-patch`
+
+### Workflow
+1. **Feature development:**
+   - Create branch from `develop`: `feature/ALT-XXX-name`
+   - Open PR to `develop`
+   - CI and Claude review run automatically
+   - Merge to `develop` after approval
+
+2. **Bug fixes:**
+   - Create branch from `staging`: `fix/ALT-XXX-name`
+   - Open PR to `staging`
+   - CI and Claude review run automatically
+   - Merge to `staging` after approval
+
+3. **Releases:**
+   - `develop` → `staging` (for testing)
+   - `staging` → `main` (for production)
+
+---
+
 ## Verify Setup
 
 After adding secrets, you can verify the setup by:
 
-1. Creating a new branch
+1. Creating a new feature branch: `feature/ALT-123-test`
 2. Making a small change
-3. Opening a pull request
+3. Opening a pull request to `develop`
 
 You should see:
 - ✅ CI workflow running tests
