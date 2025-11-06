@@ -16,29 +16,30 @@ jobs:
           echo "Checking branch name: $BRANCH_NAME"
 
           # Valid patterns:
-          # - feature/ALT-123-description
-          # - fix/ALT-456-description
-          # - hotfix/ALT-789-description
+          # - feature/ALT-123-description or feat/alt-123-description
+          # - fix/ALT-456-description or fix/alt-456-description
+          # - hotfix/ALT-789-description or hotfix/alt-789-description
 
-          if [[ "$BRANCH_NAME" =~ ^(feature|fix|hotfix)/ALT-[0-9]+-[a-z0-9-]+$ ]]; then
+          if [[ "$BRANCH_NAME" =~ ^(feature|feat|fix|hotfix)/(ALT|alt)-[0-9]+-[a-z0-9-]+$ ]]; then
             echo "✅ Branch name is valid: $BRANCH_NAME"
             exit 0
           else
             echo "❌ Invalid branch name: $BRANCH_NAME"
             echo ""
             echo "Branch names must follow this format:"
-            echo "  - feature/ALT-123-description"
+            echo "  - feature/ALT-123-description or feat/ALT-123-description"
             echo "  - fix/ALT-456-description"
             echo "  - hotfix/ALT-789-description"
             echo ""
             echo "Where:"
-            echo "  - ALT-### is your Linear ticket number"
+            echo "  - ALT-### or alt-### is your Linear ticket number (case-insensitive)"
             echo "  - description uses lowercase letters, numbers, and hyphens"
             echo ""
             echo "Examples:"
             echo "  ✅ feature/ALT-123-add-webhook-support"
+            echo "  ✅ feat/alt-123-add-webhook-support"
             echo "  ✅ fix/ALT-456-auth-token-expiry"
-            echo "  ✅ hotfix/ALT-789-security-patch"
+            echo "  ✅ hotfix/alt-789-security-patch"
             echo "  ❌ feature/add-new-feature"
             echo "  ❌ ALT-123-my-feature"
             exit 1
@@ -55,9 +56,9 @@ jobs:
           echo "Checking PR title: $PR_TITLE"
 
           # PR title should include Linear ticket number
-          # Format: ALT-123: Description or [ALT-123] Description
+          # Format: ALT-123: Description or [alt-123] Description (case-insensitive)
 
-          if [[ "$PR_TITLE" =~ (ALT-[0-9]+) ]]; then
+          if [[ "$PR_TITLE" =~ ([Aa][Ll][Tt]-[0-9]+) ]]; then
             TICKET_NUMBER="${BASH_REMATCH[1]}"
             echo "✅ PR title includes Linear ticket: $TICKET_NUMBER"
             exit 0
@@ -66,7 +67,9 @@ jobs:
             echo ""
             echo "Valid formats:"
             echo "  - ALT-123: Add webhook support"
+            echo "  - alt-123: Add webhook support"
             echo "  - [ALT-456] Fix auth token expiry"
+            echo "  - [alt-456] Fix auth token expiry"
             echo "  - ALT-789 Security patch"
             echo ""
             echo "Current title: $PR_TITLE"

@@ -127,7 +127,7 @@ This repository includes automated workflows for continuous integration and code
 - **Build verification:** Ensures code compiles successfully
 
 ### Automated Enforcement
-- **Branch name validation:** Enforces `feature/ALT-###-description` format
+- **Branch name validation:** Enforces `feature/ALT-###-description` or `feat/alt-###-description` format (case-insensitive)
 - **PR title validation:** Requires Linear ticket number in PR title
 - **Status checks:** All checks must pass before merging
 
@@ -149,13 +149,13 @@ See [.github/SETUP.md](.github/SETUP.md) for detailed configuration instructions
 
 **Workflow:**
 - **Feature branches** → Merge into `develop`
-  - Naming: `feature/ALT-123-description` (based on Linear ticket)
-  - Example: `feature/ALT-456-add-webhook-support`
+  - Naming: `feature/ALT-123-description` or `feat/alt-123-description` (based on Linear ticket)
+  - Example: `feature/ALT-456-add-webhook-support` or `feat/alt-456-add-webhook-support`
 - **Bug fixes** → Can merge directly into `staging`
-  - Naming: `fix/ALT-789-description`
+  - Naming: `fix/ALT-789-description` or `fix/alt-789-description`
   - Example: `fix/ALT-123-auth-token-expiry`
 - **Hotfixes** → Merge directly into `main` (emergency only)
-  - Naming: `hotfix/ALT-999-description`
+  - Naming: `hotfix/ALT-999-description` or `hotfix/alt-999-description`
 
 ## 📚 API Documentation
 

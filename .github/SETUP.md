@@ -76,29 +76,29 @@ Go to: **Repository Settings** → **Secrets and variables** → **Actions** →
 All branches should be named based on your Linear ticket:
 
 **Feature Branches:**
-- Format: `feature/ALT-123-description`
+- Format: `feature/ALT-123-description` or `feat/alt-123-description`
 - Merge target: `develop`
-- Example: `feature/ALT-456-add-webhook-support`
+- Example: `feature/ALT-456-add-webhook-support` or `feat/alt-456-add-webhook-support`
 
 **Bug Fixes:**
-- Format: `fix/ALT-789-description`
+- Format: `fix/ALT-789-description` or `fix/alt-789-description`
 - Merge target: `staging` (can merge directly)
 - Example: `fix/ALT-123-auth-token-expiry`
 
 **Hotfixes:**
-- Format: `hotfix/ALT-999-description`
+- Format: `hotfix/ALT-999-description` or `hotfix/alt-999-description`
 - Merge target: `main` (emergency only)
 - Example: `hotfix/ALT-234-security-patch`
 
 ### Workflow
 1. **Feature development:**
-   - Create branch from `develop`: `feature/ALT-XXX-name`
+   - Create branch from `develop`: `feature/ALT-XXX-name` or `feat/alt-xxx-name`
    - Open PR to `develop`
    - CI and Claude review run automatically
    - Merge to `develop` after approval
 
 2. **Bug fixes:**
-   - Create branch from `staging`: `fix/ALT-XXX-name`
+   - Create branch from `staging`: `fix/ALT-XXX-name` or `fix/alt-xxx-name`
    - Open PR to `staging`
    - CI and Claude review run automatically
    - Merge to `staging` after approval
@@ -113,7 +113,7 @@ All branches should be named based on your Linear ticket:
 
 After adding secrets, you can verify the setup by:
 
-1. Creating a new feature branch: `feature/ALT-123-test`
+1. Creating a new feature branch: `feature/ALT-123-test` or `feat/alt-123-test`
 2. Making a small change
 3. Opening a pull request to `develop`
 
@@ -189,9 +189,9 @@ Repository Settings → Rules → Rulesets → **New ruleset**
 The repository includes automated checks that run on every PR:
 
 **Branch Name Validation:**
-- ✅ Validates branch names match pattern: `feature/ALT-###-description`
-- ✅ Enforces lowercase and hyphens only
-- ✅ Requires Linear ticket number (ALT-###)
+- ✅ Validates branch names match pattern: `feature/ALT-###-description` or `feat/alt-###-description`
+- ✅ Enforces lowercase and hyphens only in description
+- ✅ Requires Linear ticket number (ALT-### or alt-###, case-insensitive)
 - ❌ Fails CI if branch name is invalid
 
 **PR Title Validation:**
@@ -222,10 +222,10 @@ These checks run automatically via `.github/workflows/branch-name-check.yml`
 
 ### Branch name check failing
 **Invalid branch name format:**
-- Branch must start with `feature/`, `fix/`, or `hotfix/`
-- Must include Linear ticket: `ALT-###`
+- Branch must start with `feature/`, `feat/`, `fix/`, or `hotfix/`
+- Must include Linear ticket: `ALT-###` or `alt-###` (case-insensitive)
 - Description must use lowercase and hyphens
-- Example: `feature/ALT-123-add-new-feature`
+- Example: `feature/ALT-123-add-new-feature` or `feat/alt-123-add-new-feature`
 
 **PR title check failing:**
 - PR title must include Linear ticket number
