@@ -20,75 +20,54 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Anthropic SDK
-        run: npm install -g @anthropic-ai/sdk
-
       - name: Claude Code Review
-        uses: actions/github-script@v7
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const Anthropic = require('@anthropic-ai/sdk');
-            const { execSync } = require('child_process');
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get PR diff
+          DIFF=$(git diff origin/main...HEAD)
 
-            const anthropic = new Anthropic({
-              apiKey: process.env.ANTHROPIC_API_KEY,
-            });
+          if [ -z "$DIFF" ]; then
+            echo "No changes to review"
+            exit 0
+          fi
 
-            // Get PR diff
-            const diff = execSync('git diff origin/main...HEAD').toString();
+          # Limit diff size (first 30000 chars to stay within API limits)
+          DIFF_TRUNCATED=$(echo "$DIFF" | head -c 30000)
+          if [ ${#DIFF} -gt 30000 ]; then
+            DIFF_TRUNCATED="$DIFF_TRUNCATED\n\n... (diff truncated)"
+          fi
 
-            if (!diff || diff.length === 0) {
-              core.info('No changes to review');
-              return;
-            }
+          # Escape for JSON
+          DIFF_JSON=$(echo "$DIFF_TRUNCATED" | jq -Rs .)
 
-            // Limit diff size to avoid API limits
-            const maxDiffSize = 50000;
-            const truncatedDiff = diff.length > maxDiffSize
-              ? diff.substring(0, maxDiffSize) + '\n\n... (diff truncated)'
-              : diff;
+          # Call Claude API
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "{
+              \"model\": \"claude-sonnet-4-5-20250929\",
+              \"max_tokens\": 4096,
+              \"messages\": [{
+                \"role\": \"user\",
+                \"content\": \"Review this code change and provide concise feedback on: 1. Potential bugs or issues, 2. Security concerns, 3. Performance improvements, 4. Best practices violations. Be concise and only mention significant issues.\n\nDiff:\n\`\`\`diff\n$DIFF_JSON\n\`\`\`\"
+              }]
+            }")
 
-            try {
-              const message = await anthropic.messages.create({
-                model: 'claude-sonnet-4-5-20250929',
-                max_tokens: 4096,
-                messages: [{
-                  role: 'user',
-                  content: `Review this code change and provide concise feedback on:
-                  1. Potential bugs or issues
-                  2. Security concerns
-                  3. Performance improvements
-                  4. Best practices violations
+          # Extract review text
+          REVIEW=$(echo "$RESPONSE" | jq -r '.content[0].text // "Review generation failed"')
 
-                  Be concise and only mention significant issues.
+          # Post as PR comment
+          COMMENT_BODY=$(jq -n --arg review "$REVIEW" '{
+            body: ("## 🤖 Claude Code Review\n\n" + $review + "\n\n---\n*Powered by Claude Sonnet 4.5*")
+          }')
 
-                  Diff:
-                  \`\`\`diff
-                  ${truncatedDiff}
-                  \`\`\``
-                }]
-              });
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$COMMENT_BODY" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
 
-              const review = message.content[0].text;
-
-              // Post review as comment
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `## 🤖 Claude Code Review\n\n${review}\n\n---\n*Powered by Claude Sonnet 4.5*`
-              });
-
-              core.info('✅ Claude Code Review completed successfully');
-            } catch (error) {
-              core.warning(`Claude API error: ${error.message}`);
-              // Don't fail the workflow if review fails
-            }
+          echo "✅ Claude Code Review completed"
