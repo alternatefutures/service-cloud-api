@@ -29,6 +29,11 @@ jobs:
     if: github.event_name == 'pull_request'
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Claude Automated Review
         uses: anthropics/claude-code-action@v1
         with:
@@ -60,6 +65,11 @@ jobs:
       github.event_name == 'pull_request_review'
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Claude Interactive Response
         uses: anthropics/claude-code-action@v1
         with:
