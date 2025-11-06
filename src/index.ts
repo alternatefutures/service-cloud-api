@@ -9,13 +9,18 @@ import { resolvers } from './resolvers/index.js';
 import { getAuthContext } from './auth/middleware.js';
 import { ChatServer } from './services/chat/chatServer.js';
 import { handleStripeWebhook } from './services/billing/webhookHandler.js';
-import { StorageSnapshotScheduler, InvoiceScheduler } from './services/billing/index.js';
+import {
+  StorageSnapshotScheduler,
+  InvoiceScheduler,
+  UsageAggregator,
+} from './services/billing/index.js';
 
 const prisma = new PrismaClient();
 
 // Initialize billing schedulers
 const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma);
 const invoiceScheduler = new InvoiceScheduler(prisma);
+const usageAggregator = new UsageAggregator(prisma);
 const jwtSecret = process.env.JWT_SECRET || 'development-secret-change-in-production';
 
 const schema = makeExecutableSchema({
@@ -80,7 +85,9 @@ server.listen(port, () => {
   // Start billing schedulers
   storageSnapshotScheduler.start();
   invoiceScheduler.start();
+  usageAggregator.start();
   console.log(`📊 Billing schedulers started`);
+  console.log(`⚡ Usage aggregator running (1-minute intervals)`);
 });
 
 // Graceful shutdown
@@ -88,6 +95,7 @@ process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server');
   server.close(async () => {
     await chatServer.shutdown();
+    await usageAggregator.shutdown();
     await prisma.$disconnect();
     process.exit(0);
   });
@@ -97,6 +105,7 @@ process.on('SIGINT', async () => {
   console.log('\nSIGINT signal received: closing HTTP server');
   server.close(async () => {
     await chatServer.shutdown();
+    await usageAggregator.shutdown();
     await prisma.$disconnect();
     process.exit(0);
   });

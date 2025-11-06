@@ -9,7 +9,7 @@ import {
 } from './dnsVerification';
 import { requestSslCertificate } from './sslCertificate';
 
-const prisma = new PrismaClient();
+const defaultPrisma = new PrismaClient();
 
 export interface CreateDomainInput {
   hostname: string;
@@ -29,7 +29,7 @@ export interface DomainVerificationInstructions {
 /**
  * Create a new custom domain for a site
  */
-export async function createCustomDomain(input: CreateDomainInput) {
+export async function createCustomDomain(input: CreateDomainInput, prisma: PrismaClient = defaultPrisma) {
   const { hostname, siteId, domainType = 'WEB2', verificationMethod = 'TXT' } = input;
 
   // Check if domain already exists
@@ -69,7 +69,7 @@ export async function createCustomDomain(input: CreateDomainInput) {
 /**
  * Get verification instructions for a domain
  */
-export async function getVerificationInstructions(domainId: string): Promise<DomainVerificationInstructions> {
+export async function getVerificationInstructions(domainId: string, prisma: PrismaClient = defaultPrisma): Promise<DomainVerificationInstructions> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId }
   });
@@ -115,7 +115,7 @@ export async function getVerificationInstructions(domainId: string): Promise<Dom
 /**
  * Verify domain ownership via DNS
  */
-export async function verifyDomainOwnership(domainId: string): Promise<boolean> {
+export async function verifyDomainOwnership(domainId: string, prisma: PrismaClient = defaultPrisma): Promise<boolean> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId }
   });
@@ -187,7 +187,7 @@ export async function verifyDomainOwnership(domainId: string): Promise<boolean> 
 /**
  * Provision SSL certificate for verified domain
  */
-export async function provisionSslCertificate(domainId: string, email: string): Promise<void> {
+export async function provisionSslCertificate(domainId: string, email: string, prisma: PrismaClient = defaultPrisma): Promise<void> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId }
   });
@@ -235,7 +235,7 @@ export async function provisionSslCertificate(domainId: string, email: string): 
 /**
  * Remove a custom domain
  */
-export async function removeCustomDomain(domainId: string): Promise<void> {
+export async function removeCustomDomain(domainId: string, prisma: PrismaClient = defaultPrisma): Promise<void> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId },
     include: { primarySite: true }
@@ -261,7 +261,7 @@ export async function removeCustomDomain(domainId: string): Promise<void> {
 /**
  * Set domain as primary for site
  */
-export async function setPrimaryDomain(siteId: string, domainId: string): Promise<void> {
+export async function setPrimaryDomain(siteId: string, domainId: string, prisma: PrismaClient = defaultPrisma): Promise<void> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId }
   });
@@ -288,7 +288,7 @@ export async function setPrimaryDomain(siteId: string, domainId: string): Promis
 /**
  * List all domains for a site
  */
-export async function listDomainsForSite(siteId: string) {
+export async function listDomainsForSite(siteId: string, prisma: PrismaClient = defaultPrisma) {
   return await prisma.domain.findMany({
     where: { siteId },
     orderBy: { createdAt: 'desc' }

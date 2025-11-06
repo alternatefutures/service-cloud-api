@@ -27,6 +27,7 @@ Server runs at: **http://localhost:4000/graphql** 🎉
 
 - Node.js 18+
 - PostgreSQL (local or Railway)
+- Redis (required for usage buffering)
 - pnpm (recommended)
 
 ## 🌐 Deploy to Railway

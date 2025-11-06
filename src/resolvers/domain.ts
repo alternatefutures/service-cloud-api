@@ -130,7 +130,7 @@ export const domainMutations = {
   createDomain: async (
     _: unknown,
     { input }: { input: { hostname: string; siteId: string; domainType?: string; verificationMethod?: 'TXT' | 'CNAME' | 'A' } },
-    { userId }: Context
+    { prisma, userId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required');
 
