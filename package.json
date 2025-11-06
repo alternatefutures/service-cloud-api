@@ -18,6 +18,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "generate:invoice": "tsx scripts/generate-sample-invoice.ts",
     "deploy:railway": "./deploy-railway.sh"
   },
   "dependencies": {

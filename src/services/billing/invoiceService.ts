@@ -7,7 +7,7 @@
 import type { PrismaClient } from '@prisma/client';
 import PDFDocument from 'pdfkit';
 import SVGtoPDF from 'svg-to-pdfkit';
-import { writeFileSync, readFileSync } from 'fs';
+import { writeFileSync, readFileSync, createWriteStream, mkdirSync } from 'fs';
 import { join } from 'path';
 
 export class InvoiceService {
@@ -267,13 +267,12 @@ export class InvoiceService {
 
     // Ensure directory exists
     try {
-      const fs = await import('fs');
-      fs.mkdirSync(join(process.cwd(), 'invoices'), { recursive: true });
+      mkdirSync(join(process.cwd(), 'invoices'), { recursive: true });
     } catch (e) {
       // Directory might already exist
     }
 
-    doc.pipe(require('fs').createWriteStream(filepath));
+    doc.pipe(createWriteStream(filepath));
     doc.end();
 
     // Update invoice with PDF URL
