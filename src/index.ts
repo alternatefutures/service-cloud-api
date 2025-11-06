@@ -9,8 +9,13 @@ import { resolvers } from './resolvers/index.js';
 import { getAuthContext } from './auth/middleware.js';
 import { ChatServer } from './services/chat/chatServer.js';
 import { handleStripeWebhook } from './services/billing/webhookHandler.js';
+import { StorageSnapshotScheduler, InvoiceScheduler } from './services/billing/index.js';
 
 const prisma = new PrismaClient();
+
+// Initialize billing schedulers
+const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma);
+const invoiceScheduler = new InvoiceScheduler(prisma);
 const jwtSecret = process.env.JWT_SECRET || 'development-secret-change-in-production';
 
 const schema = makeExecutableSchema({
@@ -71,6 +76,11 @@ const port = process.env.PORT || 4000;
 server.listen(port, () => {
   console.log(`🚀 GraphQL server running at http://localhost:${port}/graphql`);
   console.log(`💬 WebSocket chat server running at ws://localhost:${port}/ws`);
+
+  // Start billing schedulers
+  storageSnapshotScheduler.start();
+  invoiceScheduler.start();
+  console.log(`📊 Billing schedulers started`);
 });
 
 // Graceful shutdown

@@ -548,6 +548,8 @@ export const resolvers = {
   Invoice: billingResolvers.Invoice,
   Payment: billingResolvers.Payment,
   UsageRecord: billingResolvers.UsageRecord,
+  PinnedContent: billingResolvers.PinnedContent,
+  StorageSnapshot: billingResolvers.StorageSnapshot,
 
   // Subscriptions for real-time updates
   Subscription: {

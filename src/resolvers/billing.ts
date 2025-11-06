@@ -10,6 +10,9 @@ import { StripeService } from '../services/billing/stripeService.js';
 import { CryptoService } from '../services/billing/cryptoService.js';
 import { UsageService } from '../services/billing/usageService.js';
 import { InvoiceService } from '../services/billing/invoiceService.js';
+import { StorageTracker } from '../services/billing/storageTracker.js';
+import { StorageSnapshotScheduler } from '../services/billing/storageSnapshotScheduler.js';
+import { InvoiceScheduler } from '../services/billing/invoiceScheduler.js';
 import type { Context } from './types.js';
 
 // Service factory functions
@@ -17,6 +20,9 @@ const stripeService = (prisma: PrismaClient) => new StripeService(prisma);
 const cryptoService = (prisma: PrismaClient) => new CryptoService(prisma);
 const usageService = (prisma: PrismaClient) => new UsageService(prisma);
 const invoiceService = (prisma: PrismaClient) => new InvoiceService(prisma);
+const storageTracker = (prisma: PrismaClient) => new StorageTracker(prisma);
+const storageSnapshotScheduler = (prisma: PrismaClient) => new StorageSnapshotScheduler(prisma);
+const invoiceSchedulerService = (prisma: PrismaClient) => new InvoiceScheduler(prisma);
 
 export const billingResolvers = {
   Query: {
@@ -186,6 +192,96 @@ export const billingResolvers = {
     billingSettings: async (_: any, __: any, context: Context) => {
       // TODO: Add admin check
       return context.prisma.billingSettings.findFirst();
+    },
+
+    /**
+     * Get pinned content for authenticated user
+     */
+    pinnedContent: async (_: any, { limit = 100 }: { limit?: number }, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const pins = await storageTracker(context.prisma).getActivePins(context.userId, limit);
+
+      // Convert BigInt to string for GraphQL
+      return pins.map((pin: any) => ({
+        ...pin,
+        sizeBytes: pin.sizeBytes.toString(),
+      }));
+    },
+
+    /**
+     * Get storage snapshots for authenticated user
+     */
+    storageSnapshots: async (
+      _: any,
+      {
+        startDate,
+        endDate,
+        limit = 30,
+      }: { startDate?: Date; endDate?: Date; limit?: number },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // Default 30 days ago
+      const end = endDate || new Date();
+
+      const snapshots = await storageTracker(context.prisma).getSnapshots(
+        context.userId,
+        start,
+        end
+      );
+
+      // Convert BigInt to string for GraphQL and apply limit
+      return snapshots.slice(0, limit).map((snapshot: any) => ({
+        ...snapshot,
+        totalBytes: snapshot.totalBytes.toString(),
+      }));
+    },
+
+    /**
+     * Get storage statistics for authenticated user
+     */
+    storageStats: async (_: any, __: any, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const currentBytes = await storageTracker(context.prisma).getCurrentStorage(context.userId);
+      const pinCount = await storageTracker(context.prisma).getPinCount(context.userId);
+
+      // Get last snapshot
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      const snapshots = await storageTracker(context.prisma).getSnapshots(
+        context.userId,
+        yesterday,
+        today
+      );
+      const lastSnapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+
+      // Format bytes for display (GB)
+      const gb = Number(currentBytes) / (1024 * 1024 * 1024);
+      const formatted = gb < 0.01 ? `${(gb * 1024).toFixed(2)} MB` : `${gb.toFixed(2)} GB`;
+
+      return {
+        currentBytes: currentBytes.toString(),
+        currentBytesFormatted: formatted,
+        pinCount,
+        lastSnapshot: lastSnapshot
+          ? {
+              ...lastSnapshot,
+              totalBytes: lastSnapshot.totalBytes.toString(),
+            }
+          : null,
+      };
     },
   },
 
@@ -533,6 +629,62 @@ export const billingResolvers = {
         data: input,
       });
     },
+
+    /**
+     * Trigger a storage snapshot for authenticated user
+     */
+    triggerStorageSnapshot: async (_: any, __: any, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const snapshotId = await storageTracker(context.prisma).createDailySnapshot(
+        context.userId
+      );
+
+      const snapshot = await context.prisma.storageSnapshot.findUnique({
+        where: { id: snapshotId },
+      });
+
+      if (!snapshot) {
+        throw new GraphQLError('Failed to create snapshot');
+      }
+
+      return {
+        ...snapshot,
+        totalBytes: snapshot.totalBytes.toString(),
+      };
+    },
+
+    /**
+     * Trigger invoice generation for all due subscriptions (admin only)
+     */
+    triggerInvoiceGeneration: async (_: any, __: any, context: Context) => {
+      // TODO: Add admin check
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      // Run the invoice generation immediately
+      await invoiceSchedulerService(context.prisma).runNow();
+
+      // Return recently generated invoices (from last hour)
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+      const invoices = await context.prisma.invoice.findMany({
+        where: {
+          createdAt: {
+            gte: oneHourAgo,
+          },
+        },
+        include: {
+          lineItems: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return invoices;
+    },
   },
 
   // Field resolvers
@@ -627,6 +779,22 @@ export const billingResolvers = {
     customer: async (parent: any, _: any, context: Context) => {
       return context.prisma.customer.findUnique({
         where: { id: parent.customerId },
+      });
+    },
+  },
+
+  PinnedContent: {
+    user: async (parent: any, _: any, context: Context) => {
+      return context.prisma.user.findUnique({
+        where: { id: parent.userId },
+      });
+    },
+  },
+
+  StorageSnapshot: {
+    user: async (parent: any, _: any, context: Context) => {
+      return context.prisma.user.findUnique({
+        where: { id: parent.userId },
       });
     },
   },
