@@ -15,6 +15,7 @@ import {
   updateIpnsRecord
 } from '../services/dns';
 import { getSslCertificateStatus, renewSslCertificate as renewSsl } from '../jobs/sslRenewal';
+import { DomainUsageTracker } from '../services/billing/domainUsageTracker';
 
 export const domainQueries = {
   /**
@@ -165,12 +166,38 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this site');
     }
 
-    return await createCustomDomain({
+    const domain = await createCustomDomain({
       hostname: input.hostname,
       siteId: input.siteId,
       domainType: input.domainType as any,
       verificationMethod: input.verificationMethod
     });
+
+    // Track domain creation for billing
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { userId },
+        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+      });
+
+      if (customer && customer.subscriptions.length > 0) {
+        const subscription = customer.subscriptions[0];
+        const domainUsageTracker = new DomainUsageTracker(prisma);
+
+        await domainUsageTracker.trackDomainCreation({
+          customerId: customer.id,
+          domainId: domain.id,
+          hostname: input.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+        });
+      }
+    } catch (error) {
+      // Don't fail the request if usage tracking fails
+      console.error('Failed to track domain creation:', error);
+    }
+
+    return domain;
   },
 
   /**
@@ -192,7 +219,34 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this domain');
     }
 
-    return await verifyDomainOwnership(domainId);
+    const verificationResult = await verifyDomainOwnership(domainId);
+
+    // Track verification attempt for billing
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { userId },
+        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+      });
+
+      if (customer && customer.subscriptions.length > 0) {
+        const subscription = customer.subscriptions[0];
+        const domainUsageTracker = new DomainUsageTracker(prisma);
+
+        await domainUsageTracker.trackDomainVerification({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          verificationMethod: (domain.txtVerificationToken ? 'TXT' : domain.expectedCname ? 'CNAME' : 'A') as 'TXT' | 'CNAME' | 'A',
+          success: verificationResult,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track domain verification:', error);
+    }
+
+    return verificationResult;
   },
 
   /**
@@ -219,6 +273,30 @@ export const domainMutations = {
     }
 
     await provisionSslCertificate(domainId, email);
+
+    // Track SSL provisioning for billing
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { userId },
+        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+      });
+
+      if (customer && customer.subscriptions.length > 0) {
+        const subscription = customer.subscriptions[0];
+        const domainUsageTracker = new DomainUsageTracker(prisma);
+
+        await domainUsageTracker.trackSslProvisioning({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+          isRenewal: false,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track SSL provisioning:', error);
+    }
 
     // Return updated domain
     return await prisma.domain.findUnique({
@@ -440,6 +518,30 @@ export const domainMutations = {
     }
 
     await renewSsl(domainId);
+
+    // Track SSL renewal for billing
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { userId },
+        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+      });
+
+      if (customer && customer.subscriptions.length > 0) {
+        const subscription = customer.subscriptions[0];
+        const domainUsageTracker = new DomainUsageTracker(prisma);
+
+        await domainUsageTracker.trackSslProvisioning({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+          isRenewal: true,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track SSL renewal:', error);
+    }
 
     return await prisma.domain.findUnique({ where: { id: domainId } });
   }

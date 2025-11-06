@@ -30,6 +30,12 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
   }
 
+  type ApiKeyRateLimit {
+    remaining: Int!
+    limit: Int!
+    resetAt: Date!
+  }
+
   # ============================================
   # PROJECTS
   # ============================================
@@ -672,6 +678,8 @@ export const typeDefs = /* GraphQL */ `
 
     # User & Auth
     me: User
+    personalAccessTokens: [PersonalAccessToken!]!
+    apiKeyRateLimit: ApiKeyRateLimit!
 
     # Projects
     project(id: ID!): Project
@@ -746,7 +754,7 @@ export const typeDefs = /* GraphQL */ `
 
   type Mutation {
     # Auth
-    createPersonalAccessToken(name: String!): PersonalAccessToken!
+    createPersonalAccessToken(name: String!, expiresAt: Date): PersonalAccessToken!
     deletePersonalAccessToken(id: ID!): Boolean!
 
     # Projects
