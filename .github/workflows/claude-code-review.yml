@@ -39,22 +39,24 @@ jobs:
             DIFF_TRUNCATED="$DIFF_TRUNCATED\n\n... (diff truncated)"
           fi
 
-          # Escape for JSON
-          DIFF_JSON=$(echo "$DIFF_TRUNCATED" | jq -Rs .)
+          # Create API request payload using jq
+          PAYLOAD=$(jq -n \
+            --arg diff "$DIFF_TRUNCATED" \
+            '{
+              model: "claude-sonnet-4-5-20250929",
+              max_tokens: 4096,
+              messages: [{
+                role: "user",
+                content: ("Review this code change and provide concise feedback on: 1. Potential bugs or issues, 2. Security concerns, 3. Performance improvements, 4. Best practices violations. Be concise and only mention significant issues.\n\nDiff:\n```diff\n" + $diff + "\n```")
+              }]
+            }')
 
           # Call Claude API
           RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -d "{
-              \"model\": \"claude-sonnet-4-5-20250929\",
-              \"max_tokens\": 4096,
-              \"messages\": [{
-                \"role\": \"user\",
-                \"content\": \"Review this code change and provide concise feedback on: 1. Potential bugs or issues, 2. Security concerns, 3. Performance improvements, 4. Best practices violations. Be concise and only mention significant issues.\n\nDiff:\n\`\`\`diff\n$DIFF_JSON\n\`\`\`\"
-              }]
-            }")
+            -d "$PAYLOAD")
 
           # Extract review text
           REVIEW=$(echo "$RESPONSE" | jq -r '.content[0].text // "Review generation failed"')
