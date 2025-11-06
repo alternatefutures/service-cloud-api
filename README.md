@@ -147,6 +147,22 @@ Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 - Customer portal access
 - Branded invoice PDFs with company logo
 
+**Preview Invoice Template:**
+
+Generate a sample invoice PDF to preview the branding and layout:
+
+```bash
+npm run generate:invoice
+```
+
+This creates a test invoice with:
+- Alternate Futures logo and Instrument Sans typography
+- Sample customer data (Acme Corporation)
+- Example usage charges (bandwidth, compute, requests)
+- Professional styling matching the brand
+
+The PDF is saved to `/invoices` and opens automatically.
+
 **Payment Retries:**
 
 Failed payments are handled automatically via Stripe's Smart Retries feature. Configure in your Stripe Dashboard:
