@@ -144,6 +144,12 @@ export class InvoiceService {
     // Create PDF
     const doc = new PDFDocument({ margin: 50 });
 
+    // Register Instrument Sans font (from home page)
+    const fontsDir = join(process.cwd(), 'assets', 'fonts');
+    doc.registerFont('Instrument Sans', join(fontsDir, 'InstrumentSans-Regular.ttf'));
+    doc.registerFont('Instrument Sans Medium', join(fontsDir, 'InstrumentSans-Medium.ttf'));
+    doc.registerFont('Instrument Sans SemiBold', join(fontsDir, 'InstrumentSans-SemiBold.ttf'));
+
     // Load and add logo
     const logoPath = join(process.cwd(), 'assets', 'logo.svg');
     const logoSVG = readFileSync(logoPath, 'utf-8');
@@ -153,18 +159,22 @@ export class InvoiceService {
 
     // Company name and info
     doc
+      .font('Instrument Sans SemiBold')
       .fontSize(16)
       .fillColor('#0026ff')
       .text('Alternate Futures', 110, 50)
+      .font('Instrument Sans')
       .fontSize(9)
       .fillColor('#666666')
       .text('alternatefutures.ai', 110, 70);
 
     // Invoice title and info (right side)
     doc
+      .font('Instrument Sans SemiBold')
       .fontSize(24)
       .fillColor('#000000')
       .text('INVOICE', 400, 50, { align: 'right' })
+      .font('Instrument Sans')
       .fontSize(10)
       .fillColor('#666666')
       .text(`Invoice #: ${invoice.invoiceNumber}`, 350, 80, { align: 'right' })
@@ -180,12 +190,15 @@ export class InvoiceService {
 
     // Customer info
     doc
+      .font('Instrument Sans SemiBold')
       .fontSize(10)
       .fillColor('#666666')
       .text('BILL TO:', 50, 150)
+      .font('Instrument Sans Medium')
       .fontSize(12)
       .fillColor('#000000')
       .text(invoice.customer.name || 'N/A', 50, 165)
+      .font('Instrument Sans')
       .fontSize(10)
       .fillColor('#666666')
       .text(invoice.customer.email || 'N/A', 50, 180);
@@ -199,6 +212,7 @@ export class InvoiceService {
       .fillAndStroke('#f5f5f5', '#e0e0e0');
 
     doc
+      .font('Instrument Sans SemiBold')
       .fontSize(10)
       .fillColor('#000000')
       .text('Description', 55, y)
@@ -209,6 +223,7 @@ export class InvoiceService {
     y += 25;
     for (const item of invoice.lineItems) {
       doc
+        .font('Instrument Sans')
         .fillColor('#000000')
         .text(item.description, 55, y)
         .text(item.quantity.toString(), 280, y)
@@ -234,6 +249,7 @@ export class InvoiceService {
     y += 20;
 
     doc
+      .font('Instrument Sans')
       .fontSize(10)
       .fillColor('#666666')
       .text('Subtotal:', 350, y)
@@ -254,9 +270,11 @@ export class InvoiceService {
       .fillAndStroke('#f8f9fa', '#e0e0e0');
 
     doc
+      .font('Instrument Sans SemiBold')
       .fontSize(13)
       .fillColor('#000000')
       .text('Total:', 350, y)
+      .font('Instrument Sans SemiBold')
       .fontSize(14)
       .fillColor('#0026ff')
       .text(`$${(invoice.total / 100).toFixed(2)}`, 450, y);
