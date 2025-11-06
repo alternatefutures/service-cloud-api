@@ -226,7 +226,7 @@ export async function getEnsRecord(ensName: string, config: EnsConfig): Promise<
       where: { ensName }
     });
 
-    if (!domain || !domain.ensContentHash) {
+    if (!domain || !domain.ensContentHash || !domain.ensName) {
       return null;
     }
 

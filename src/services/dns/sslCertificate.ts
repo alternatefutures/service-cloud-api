@@ -77,7 +77,7 @@ export async function requestSslCertificate(
     const issuedAt = certInfo.notBefore;
 
     return {
-      certificateId: certInfo.serial,
+      certificateId: (certInfo as any).serial || 'unknown',
       certificate: cert.toString(),
       privateKey: key.toString(),
       issuedAt,
@@ -111,7 +111,7 @@ export async function requestWildcardCertificate(
       challengeCreateFn: async (authz, challenge, keyAuthorization) => {
         // DNS-01 challenge required for wildcard
         if (challenge.type === 'dns-01') {
-          const dnsRecord = await acme.crypto.getDnsChallenge(keyAuthorization);
+          const dnsRecord = await (acme.crypto as any).getDnsChallenge(keyAuthorization);
           await storeDnsChallenge(domain, challenge.token, dnsRecord);
         }
       },
@@ -125,7 +125,7 @@ export async function requestWildcardCertificate(
     const certInfo = await acme.crypto.readCertificateInfo(cert);
 
     return {
-      certificateId: certInfo.serial,
+      certificateId: (certInfo as any).serial || 'unknown',
       certificate: cert.toString(),
       privateKey: key.toString(),
       issuedAt: certInfo.notBefore,

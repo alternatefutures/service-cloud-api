@@ -37,7 +37,7 @@ export class IPFSWithTracking extends IPFSStorageService {
     await this.storageTracker.trackPinEvent(
       userId,
       result.cid,
-      result.size,
+      result.size || 0,
       filename,
       mimeType
     );
@@ -59,7 +59,7 @@ export class IPFSWithTracking extends IPFSStorageService {
     await this.storageTracker.trackPinEvent(
       userId,
       result.cid,
-      result.size,
+      result.size || 0,
       path
     );
 
