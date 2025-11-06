@@ -126,6 +126,11 @@ This repository includes automated workflows for continuous integration and code
 - **Type checking:** TypeScript compilation
 - **Build verification:** Ensures code compiles successfully
 
+### Automated Enforcement
+- **Branch name validation:** Enforces `feature/ALT-###-description` format
+- **PR title validation:** Requires Linear ticket number in PR title
+- **Status checks:** All checks must pass before merging
+
 ### Claude Code Review
 - **AI-powered code reviews** on every pull request
 - Uses Claude Sonnet 4.5 to analyze changes

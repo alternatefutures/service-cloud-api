@@ -1,0 +1,74 @@
+name: Branch Name Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  check-branch-name:
+    name: Validate Branch Name
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check branch name
+        run: |
+          BRANCH_NAME="${{ github.head_ref }}"
+          echo "Checking branch name: $BRANCH_NAME"
+
+          # Valid patterns:
+          # - feature/ALT-123-description
+          # - fix/ALT-456-description
+          # - hotfix/ALT-789-description
+
+          if [[ "$BRANCH_NAME" =~ ^(feature|fix|hotfix)/ALT-[0-9]+-[a-z0-9-]+$ ]]; then
+            echo "✅ Branch name is valid: $BRANCH_NAME"
+            exit 0
+          else
+            echo "❌ Invalid branch name: $BRANCH_NAME"
+            echo ""
+            echo "Branch names must follow this format:"
+            echo "  - feature/ALT-123-description"
+            echo "  - fix/ALT-456-description"
+            echo "  - hotfix/ALT-789-description"
+            echo ""
+            echo "Where:"
+            echo "  - ALT-### is your Linear ticket number"
+            echo "  - description uses lowercase letters, numbers, and hyphens"
+            echo ""
+            echo "Examples:"
+            echo "  ✅ feature/ALT-123-add-webhook-support"
+            echo "  ✅ fix/ALT-456-auth-token-expiry"
+            echo "  ✅ hotfix/ALT-789-security-patch"
+            echo "  ❌ feature/add-new-feature"
+            echo "  ❌ ALT-123-my-feature"
+            exit 1
+          fi
+
+  check-pr-title:
+    name: Validate PR Title
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check PR title format
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          echo "Checking PR title: $PR_TITLE"
+
+          # PR title should include Linear ticket number
+          # Format: ALT-123: Description or [ALT-123] Description
+
+          if [[ "$PR_TITLE" =~ (ALT-[0-9]+) ]]; then
+            TICKET_NUMBER="${BASH_REMATCH[1]}"
+            echo "✅ PR title includes Linear ticket: $TICKET_NUMBER"
+            exit 0
+          else
+            echo "❌ PR title must include Linear ticket number"
+            echo ""
+            echo "Valid formats:"
+            echo "  - ALT-123: Add webhook support"
+            echo "  - [ALT-456] Fix auth token expiry"
+            echo "  - ALT-789 Security patch"
+            echo ""
+            echo "Current title: $PR_TITLE"
+            exit 1
+          fi

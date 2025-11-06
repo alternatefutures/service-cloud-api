@@ -124,6 +124,85 @@ You should see:
 
 ---
 
+## Branch Protection Rules
+
+To enforce branch naming conventions and workflow rules, configure branch protection in GitHub.
+
+### Setting Up Protection Rules
+
+**Navigate to:**
+Repository Settings → Rules → Rulesets → **New ruleset**
+
+### Recommended Rules for `main`
+
+**Protection Settings:**
+- ✅ Require pull request before merging
+- ✅ Require approvals: **1**
+- ✅ Require status checks to pass before merging
+  - `test` (CI)
+  - `lint` (CI)
+  - `build` (CI)
+  - `check-branch-name` (Branch Name Check)
+  - `check-pr-title` (Branch Name Check)
+- ✅ Require conversation resolution before merging
+- ✅ Require linear history
+- ✅ Do not allow bypassing the above settings
+
+**Restrict who can push:**
+- Only allow admins to push directly (no one else)
+
+---
+
+### Recommended Rules for `staging`
+
+**Protection Settings:**
+- ✅ Require pull request before merging
+- ✅ Require approvals: **1**
+- ✅ Require status checks to pass before merging
+  - `test` (CI)
+  - `lint` (CI)
+  - `build` (CI)
+  - `check-branch-name` (Branch Name Check)
+- ✅ Do not allow bypassing the above settings
+
+**Allowed merge sources:**
+- `develop` (features)
+- `fix/*` branches (bug fixes)
+
+---
+
+### Recommended Rules for `develop`
+
+**Protection Settings:**
+- ✅ Require pull request before merging
+- ✅ Require status checks to pass before merging
+  - `test` (CI)
+  - `check-branch-name` (Branch Name Check)
+
+**Allowed merge sources:**
+- `feature/*` branches only
+
+---
+
+### Automated Enforcement
+
+The repository includes automated checks that run on every PR:
+
+**Branch Name Validation:**
+- ✅ Validates branch names match pattern: `feature/ALT-###-description`
+- ✅ Enforces lowercase and hyphens only
+- ✅ Requires Linear ticket number (ALT-###)
+- ❌ Fails CI if branch name is invalid
+
+**PR Title Validation:**
+- ✅ Requires Linear ticket number in PR title
+- ✅ Accepts formats: `ALT-123: Description` or `[ALT-123] Description`
+- ❌ Fails CI if ticket number is missing
+
+These checks run automatically via `.github/workflows/branch-name-check.yml`
+
+---
+
 ## Troubleshooting
 
 ### Claude Code Review not running
@@ -140,3 +219,15 @@ You should see:
 - Ensure Node.js version matches (20.x)
 - Clear npm cache if dependencies are stale
 - Check TypeScript compilation errors
+
+### Branch name check failing
+**Invalid branch name format:**
+- Branch must start with `feature/`, `fix/`, or `hotfix/`
+- Must include Linear ticket: `ALT-###`
+- Description must use lowercase and hyphens
+- Example: `feature/ALT-123-add-new-feature`
+
+**PR title check failing:**
+- PR title must include Linear ticket number
+- Format: `ALT-123: Description` or `[ALT-123] Description`
+- The ticket number must match your branch name
