@@ -131,9 +131,58 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     hostname: String!
     verified: Boolean!
+    domainType: DomainType!
     site: Site!
+    txtVerificationToken: String
+    txtVerificationStatus: VerificationStatus!
+    dnsVerifiedAt: Date
+    sslStatus: SslStatus!
+    sslIssuedAt: Date
+    sslExpiresAt: Date
+    sslAutoRenew: Boolean!
+    arnsName: String
+    ensName: String
+    ipnsHash: String
+    lastDnsCheck: Date
+    dnsCheckAttempts: Int!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  enum DomainType {
+    WEB2
+    ARNS
+    ENS
+    IPNS
+  }
+
+  enum VerificationStatus {
+    PENDING
+    VERIFIED
+    FAILED
+  }
+
+  enum SslStatus {
+    NONE
+    PENDING
+    ACTIVE
+    EXPIRED
+    FAILED
+  }
+
+  type DomainVerificationInstructions {
+    method: String!
+    recordType: String!
+    hostname: String!
+    value: String!
+    instructions: String!
+  }
+
+  input CreateDomainInput {
+    hostname: String!
+    siteId: ID!
+    domainType: DomainType
+    verificationMethod: String
   }
 
   # ============================================
@@ -359,6 +408,42 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
   }
 
+  # ============================================
+  # STORAGE TRACKING FOR BILLING
+  # ============================================
+
+  type PinnedContent {
+    id: ID!
+    userId: ID!
+    user: User!
+    cid: String!
+    sizeBytes: String!
+    pinnedAt: Date!
+    unpinnedAt: Date
+    filename: String
+    mimeType: String
+    metadata: JSON
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  type StorageSnapshot {
+    id: ID!
+    userId: ID!
+    user: User!
+    date: Date!
+    totalBytes: String!
+    pinCount: Int!
+    createdAt: Date!
+  }
+
+  type StorageTrackingStats {
+    currentBytes: String!
+    currentBytesFormatted: String!
+    pinCount: Int!
+    lastSnapshot: StorageSnapshot
+  }
+
   type PaymentMethod {
     id: ID!
     type: PaymentMethodType!
@@ -578,6 +663,7 @@ export const typeDefs = /* GraphQL */ `
     domain(id: ID!): Domain
     domains(siteId: ID): [Domain!]!
     domainByHostname(hostname: String!): Domain
+    domainVerificationInstructions(domainId: ID!): DomainVerificationInstructions!
 
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
@@ -603,6 +689,11 @@ export const typeDefs = /* GraphQL */ `
     invoice(id: ID!): Invoice
     currentUsage: UsageSummary!
     billingSettings: BillingSettings
+
+    # Storage Tracking
+    pinnedContent(limit: Int): [PinnedContent!]!
+    storageSnapshots(startDate: Date, endDate: Date, limit: Int): [StorageSnapshot!]!
+    storageStats: StorageTrackingStats!
   }
 
   # ============================================
@@ -656,7 +747,10 @@ export const typeDefs = /* GraphQL */ `
     deleteAFFunction(id: ID!): Boolean!
 
     # Domains
-    createDomain(hostname: String!, siteId: ID!): Domain!
+    createDomain(input: CreateDomainInput!): Domain!
+    verifyDomain(domainId: ID!): Boolean!
+    provisionSsl(domainId: ID!, email: String!): Domain!
+    setPrimaryDomain(siteId: ID!, domainId: ID!): Boolean!
     deleteDomain(id: ID!): Boolean!
 
     # Agent Chat
@@ -676,6 +770,10 @@ export const typeDefs = /* GraphQL */ `
     recordCryptoPayment(input: RecordCryptoPaymentInput!): Payment!
     generateInvoice(subscriptionId: ID!): Invoice!
     updateBillingSettings(input: UpdateBillingSettingsInput!): BillingSettings!
+
+    # Storage Tracking
+    triggerStorageSnapshot: StorageSnapshot!
+    triggerInvoiceGeneration: [Invoice!]!
   }
 
   # ============================================

@@ -9,6 +9,7 @@ import { deploymentEvents } from '../services/events/index.js';
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
 import { chatResolvers } from './chat.js';
 import { billingResolvers } from './billing.js';
+import { domainQueries, domainMutations } from './domain.js';
 import type { Context } from './types.js';
 
 export type { Context };
@@ -106,12 +107,8 @@ export const resolvers = {
       });
     },
 
-    // Domains
-    domains: async (_: unknown, { siteId }: { siteId?: string }, context: Context) => {
-      return context.prisma.domain.findMany({
-        where: siteId ? { siteId } : undefined,
-      });
-    },
+    // Domains (from domain resolvers)
+    ...domainQueries,
 
     // Storage Analytics
     storageAnalytics: async (
@@ -457,20 +454,8 @@ export const resolvers = {
       return true;
     },
 
-    // Domains
-    createDomain: async (
-      _: unknown,
-      { hostname, siteId }: { hostname: string; siteId: string },
-      context: Context
-    ) => {
-      return context.prisma.domain.create({
-        data: {
-          hostname,
-          siteId,
-          verified: false,
-        },
-      });
-    },
+    // Domains (from domain resolvers)
+    ...domainMutations,
 
     // Chat mutations (from chat resolvers)
     ...chatResolvers.Mutation,

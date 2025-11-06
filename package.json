@@ -27,6 +27,8 @@
     "@pinata/sdk": "^2.1.0",
     "@prisma/client": "^5.22.0",
     "@solana/web3.js": "^1.98.4",
+    "@types/node-cron": "^3.0.11",
+    "acme-client": "^5.4.0",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.5",
     "ethers": "^6.15.0",
@@ -34,6 +36,7 @@
     "graphql-yoga": "^5.7.0",
     "ipfs-http-client": "^60.0.1",
     "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.2.1",
     "pdfkit": "^0.17.2",
     "stripe": "^19.2.1",
     "ws": "^8.18.3"

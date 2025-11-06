@@ -24,6 +24,8 @@ model User {
   chats                 Chat[]
   messages              Message[]
   customer              Customer?
+  pinnedContent         PinnedContent[]
+  storageSnapshots      StorageSnapshot[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -195,20 +197,72 @@ enum FunctionStatus {
 // ============================================
 
 model Domain {
-  id          String   @id @default(cuid())
-  hostname    String   @unique
-  verified    Boolean  @default(false)
+  id          String       @id @default(cuid())
+  hostname    String       @unique
+  verified    Boolean      @default(false)
+  domainType  DomainType   @default(WEB2)
 
   siteId      String
-  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  primarySite Site[]   @relation("PrimaryDomain")
+  primarySite Site[]       @relation("PrimaryDomain")
+
+  // DNS Verification
+  txtVerificationToken    String?   // Token to verify via TXT record
+  txtVerificationStatus   VerificationStatus @default(PENDING)
+  dnsVerifiedAt           DateTime?
+
+  // DNS Records for verification
+  expectedCname           String?   // Expected CNAME value
+  expectedARecord         String?   // Expected A record value
+
+  // SSL Certificate
+  sslStatus               SslStatus @default(NONE)
+  sslCertificateId        String?   // Let's Encrypt cert ID
+  sslIssuedAt             DateTime?
+  sslExpiresAt            DateTime?
+  sslAutoRenew            Boolean   @default(true)
+
+  // Web3 Domain Integration
+  arnsName                String?   // ArNS name for Arweave
+  arnsTransactionId       String?   // Arweave transaction ID
+  ensName                 String?   // ENS domain name
+  ensContentHash          String?   // ENS content hash
+  ipnsHash                String?   // IPNS hash
+
+  // DNS Propagation
+  lastDnsCheck            DateTime?
+  dnsCheckAttempts        Int       @default(0)
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([siteId])
   @@index([hostname])
+  @@index([txtVerificationStatus])
+  @@index([sslStatus])
+  @@index([domainType])
+}
+
+enum DomainType {
+  WEB2        // Traditional domain (example.com)
+  ARNS        // Arweave Name System
+  ENS         // Ethereum Name System
+  IPNS        // InterPlanetary Name System
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+enum SslStatus {
+  NONE
+  PENDING
+  ACTIVE
+  EXPIRED
+  FAILED
 }
 
 model Zone {
@@ -712,4 +766,61 @@ model BillingSettings {
 
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+}
+
+// ============================================
+// STORAGE TRACKING
+// ============================================
+
+model PinnedContent {
+  id          String    @id @default(cuid())
+
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // IPFS Content Identifier (immutable)
+  cid         String
+
+  // Size in bytes (immutable for this CID)
+  sizeBytes   BigInt
+
+  // Pin tracking
+  pinnedAt    DateTime  @default(now())
+  unpinnedAt  DateTime? // Null if still pinned
+
+  // Optional metadata
+  filename    String?
+  mimeType    String?
+  metadata    Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([cid])
+  @@index([userId, unpinnedAt]) // For quick active pins query
+  @@index([pinnedAt])
+  @@index([unpinnedAt])
+}
+
+model StorageSnapshot {
+  id          String   @id @default(cuid())
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Snapshot date (daily)
+  date        DateTime
+
+  // Total storage at this date
+  totalBytes  BigInt
+
+  // Pin count
+  pinCount    Int
+
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
 }
