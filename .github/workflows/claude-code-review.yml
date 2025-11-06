@@ -20,30 +20,75 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Claude Code Review
-        uses: anthropics/anthropic-quickstarts@main
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-sonnet-4-5-20250929
+          node-version: '20'
 
-      - name: Post Review Summary
-        if: always()
+      - name: Install Anthropic SDK
+        run: npm install -g @anthropic-ai/sdk
+
+      - name: Claude Code Review
         uses: actions/github-script@v7
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+            const Anthropic = require('@anthropic-ai/sdk');
+            const { execSync } = require('child_process');
+
+            const anthropic = new Anthropic({
+              apiKey: process.env.ANTHROPIC_API_KEY,
             });
 
-            const claudeComments = comments.filter(comment =>
-              comment.user.login === 'github-actions[bot]' &&
-              comment.body.includes('Claude Code Review')
-            );
+            // Get PR diff
+            const diff = execSync('git diff origin/main...HEAD').toString();
 
-            if (claudeComments.length > 0) {
+            if (!diff || diff.length === 0) {
+              core.info('No changes to review');
+              return;
+            }
+
+            // Limit diff size to avoid API limits
+            const maxDiffSize = 50000;
+            const truncatedDiff = diff.length > maxDiffSize
+              ? diff.substring(0, maxDiffSize) + '\n\n... (diff truncated)'
+              : diff;
+
+            try {
+              const message = await anthropic.messages.create({
+                model: 'claude-sonnet-4-5-20250929',
+                max_tokens: 4096,
+                messages: [{
+                  role: 'user',
+                  content: `Review this code change and provide concise feedback on:
+                  1. Potential bugs or issues
+                  2. Security concerns
+                  3. Performance improvements
+                  4. Best practices violations
+
+                  Be concise and only mention significant issues.
+
+                  Diff:
+                  \`\`\`diff
+                  ${truncatedDiff}
+                  \`\`\``
+                }]
+              });
+
+              const review = message.content[0].text;
+
+              // Post review as comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `## 🤖 Claude Code Review\n\n${review}\n\n---\n*Powered by Claude Sonnet 4.5*`
+              });
+
               core.info('✅ Claude Code Review completed successfully');
+            } catch (error) {
+              core.warning(`Claude API error: ${error.message}`);
+              // Don't fail the workflow if review fails
             }
