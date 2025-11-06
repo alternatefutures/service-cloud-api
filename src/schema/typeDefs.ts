@@ -774,6 +774,13 @@ export const typeDefs = /* GraphQL */ `
     # Storage Tracking
     triggerStorageSnapshot: StorageSnapshot!
     triggerInvoiceGeneration: [Invoice!]!
+
+    # Web3 Domains
+    registerArns(domainId: ID!, arnsName: String!, contentId: String!): Domain!
+    updateArnsContent(domainId: ID!, contentId: String!): Domain!
+    setEnsContentHash(domainId: ID!, ensName: String!, contentHash: String!): Domain!
+    publishIpns(domainId: ID!, cid: String!): Domain!
+    updateIpns(domainId: ID!, cid: String!): Domain!
   }
 
   # ============================================

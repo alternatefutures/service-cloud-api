@@ -7,7 +7,12 @@ import {
   provisionSslCertificate,
   setPrimaryDomain as setPrimary,
   removeCustomDomain,
-  listDomainsForSite
+  listDomainsForSite,
+  registerArnsName,
+  updateArnsRecord,
+  setEnsContentHash,
+  publishIpnsRecord,
+  updateIpnsRecord
 } from '../services/dns';
 
 export const domainQueries = {
@@ -252,5 +257,145 @@ export const domainMutations = {
 
     await removeCustomDomain(id);
     return true;
+  },
+
+  /**
+   * Register ArNS name for Arweave domain
+   */
+  registerArns: async (
+    _: unknown,
+    { domainId, arnsName, contentId }: { domainId: string; arnsName: string; contentId: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required');
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } }
+    });
+
+    if (!domain) {
+      throw new GraphQLError('Domain not found');
+    }
+
+    if (domain.site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to modify this domain');
+    }
+
+    await registerArnsName(domainId, arnsName, contentId, {});
+
+    return await prisma.domain.findUnique({ where: { id: domainId } });
+  },
+
+  /**
+   * Update ArNS content
+   */
+  updateArnsContent: async (
+    _: unknown,
+    { domainId, contentId }: { domainId: string; contentId: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required');
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } }
+    });
+
+    if (!domain) {
+      throw new GraphQLError('Domain not found');
+    }
+
+    if (domain.site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to modify this domain');
+    }
+
+    await updateArnsRecord(domainId, contentId, {});
+
+    return await prisma.domain.findUnique({ where: { id: domainId } });
+  },
+
+  /**
+   * Set ENS content hash
+   */
+  setEnsContentHash: async (
+    _: unknown,
+    { domainId, ensName, contentHash }: { domainId: string; ensName: string; contentHash: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required');
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } }
+    });
+
+    if (!domain) {
+      throw new GraphQLError('Domain not found');
+    }
+
+    if (domain.site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to modify this domain');
+    }
+
+    await setEnsContentHash(domainId, ensName, contentHash, {});
+
+    return await prisma.domain.findUnique({ where: { id: domainId } });
+  },
+
+  /**
+   * Publish IPNS record
+   */
+  publishIpns: async (
+    _: unknown,
+    { domainId, cid }: { domainId: string; cid: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required');
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } }
+    });
+
+    if (!domain) {
+      throw new GraphQLError('Domain not found');
+    }
+
+    if (domain.site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to modify this domain');
+    }
+
+    await publishIpnsRecord(domainId, cid, {});
+
+    return await prisma.domain.findUnique({ where: { id: domainId } });
+  },
+
+  /**
+   * Update IPNS record
+   */
+  updateIpns: async (
+    _: unknown,
+    { domainId, cid }: { domainId: string; cid: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required');
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } }
+    });
+
+    if (!domain) {
+      throw new GraphQLError('Domain not found');
+    }
+
+    if (domain.site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to modify this domain');
+    }
+
+    await updateIpnsRecord(domainId, cid, {});
+
+    return await prisma.domain.findUnique({ where: { id: domainId } });
   }
 };
