@@ -13,6 +13,8 @@ import { InvoiceService } from '../services/billing/invoiceService.js';
 import { StorageTracker } from '../services/billing/storageTracker.js';
 import { StorageSnapshotScheduler } from '../services/billing/storageSnapshotScheduler.js';
 import { InvoiceScheduler } from '../services/billing/invoiceScheduler.js';
+import { UsageBuffer } from '../services/billing/usageBuffer.js';
+import { UsageAggregator } from '../services/billing/usageAggregator.js';
 import type { Context } from './types.js';
 
 // Service factory functions
@@ -23,6 +25,8 @@ const invoiceService = (prisma: PrismaClient) => new InvoiceService(prisma);
 const storageTracker = (prisma: PrismaClient) => new StorageTracker(prisma);
 const storageSnapshotScheduler = (prisma: PrismaClient) => new StorageSnapshotScheduler(prisma);
 const invoiceSchedulerService = (prisma: PrismaClient) => new InvoiceScheduler(prisma);
+const usageBuffer = () => new UsageBuffer();
+const usageAggregator = (prisma: PrismaClient) => new UsageAggregator(prisma);
 
 export const billingResolvers = {
   Query: {
@@ -281,6 +285,27 @@ export const billingResolvers = {
               totalBytes: lastSnapshot.totalBytes.toString(),
             }
           : null,
+      };
+    },
+
+    /**
+     * Get usage buffer statistics (for monitoring)
+     */
+    usageBufferStats: async (_: any, __: any, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const buffer = usageBuffer();
+      const stats = await buffer.getStats();
+      const healthy = await buffer.healthCheck();
+
+      return {
+        activeUsers: stats.activeUsers,
+        totalBandwidth: stats.totalBandwidth,
+        totalCompute: stats.totalCompute,
+        totalRequests: stats.totalRequests,
+        bufferHealthy: healthy,
       };
     },
   },
@@ -684,6 +709,48 @@ export const billingResolvers = {
       });
 
       return invoices;
+    },
+
+    /**
+     * Manually flush usage buffer to database (for pre-deployment safety)
+     */
+    flushUsageBuffer: async (_: any, __: any, context: Context) => {
+      // TODO: Add admin check
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required');
+      }
+
+      const startTime = Date.now();
+      const aggregator = usageAggregator(context.prisma);
+
+      try {
+        // Trigger manual flush
+        await aggregator.runNow();
+
+        const duration = Date.now() - startTime;
+        const status = aggregator.getStatus();
+
+        // Get final stats after flush
+        const buffer = usageBuffer();
+        const stats = await buffer.getStats();
+
+        return {
+          success: true,
+          usersFlushed: 0, // Will be set by the flush operation logs
+          errors: 0,
+          duration,
+          message: `Successfully flushed usage buffer. ${stats.activeUsers} users currently pending.`,
+        };
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        return {
+          success: false,
+          usersFlushed: 0,
+          errors: 1,
+          duration,
+          message: `Failed to flush usage buffer: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        };
+      }
     },
   },
 

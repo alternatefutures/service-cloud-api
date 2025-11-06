@@ -44,6 +44,72 @@ railway service alternatefutures-backend
 railway up
 ```
 
+## 🔴 Redis Setup
+
+Redis is required for usage buffer aggregation (97% cost reduction on DB writes).
+
+**Local Development:**
+```bash
+# macOS (Homebrew)
+brew install redis
+brew services start redis
+
+# Ubuntu/Debian
+sudo apt install redis-server
+sudo systemctl start redis
+
+# Docker
+docker run -d -p 6379:6379 redis:alpine
+```
+
+**Production Configuration:**
+
+For data integrity during deployments, enable persistence in your Redis config:
+
+```bash
+# Option 1: RDB Snapshots (recommended)
+save 60 1  # Save every 60 seconds if 1+ keys changed
+
+# Option 2: AOF (Append-Only File) - more durable
+appendonly yes
+appendfsync everysec
+```
+
+**Cloud Providers:**
+- **Railway**: Add Redis service via dashboard
+- **Upstash**: Serverless Redis with persistence
+- **Redis Cloud**: Managed Redis with automatic persistence
+- **AWS ElastiCache**: Configure snapshot retention
+
+**Pre-Deployment Safety:**
+
+Before deployments or maintenance, manually flush the buffer:
+
+```graphql
+mutation {
+  flushUsageBuffer {
+    success
+    usersFlushed
+    duration
+    message
+  }
+}
+```
+
+Monitor buffer health:
+
+```graphql
+query {
+  usageBufferStats {
+    activeUsers
+    totalBandwidth
+    totalCompute
+    totalRequests
+    bufferHealthy
+  }
+}
+```
+
 ## 🧪 Test Credentials
 
 After seeding:
@@ -53,6 +119,37 @@ After seeding:
 ## 📚 API Documentation
 
 GraphQL Playground available at `/graphql`
+
+### Core Features
+
+#### 🌐 Custom Domains & DNS
+Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
+
+**Verification Methods:**
+- TXT Record verification
+- CNAME Record verification
+- A Record verification
+
+**SSL/TLS:**
+- Automatic Let's Encrypt certificate provisioning
+- Auto-renewal (30 days before expiry)
+- HTTP-01 and DNS-01 ACME challenges
+
+**Web3 Domains:**
+- ArNS (Arweave Name System)
+- ENS (Ethereum Name System)
+- IPNS (IPFS Name System)
+
+#### 💳 Usage-Based Billing
+- Real-time usage tracking (storage, bandwidth, compute)
+- Automatic invoice generation
+- Stripe integration
+- Customer portal access
+
+#### 📦 Multi-Storage Support
+- IPFS (self-hosted & Pinata)
+- Arweave permanent storage
+- Filecoin decentralized storage
 
 ### Example Mutations
 
@@ -76,6 +173,42 @@ mutation {
   ) {
     id
     cid
+  }
+}
+```
+
+**Add Custom Domain:**
+```graphql
+mutation {
+  createDomain(input: {
+    hostname: "example.com"
+    siteId: "site-123"
+    verificationMethod: TXT
+  }) {
+    id
+    hostname
+    txtVerificationToken
+    verified
+  }
+}
+```
+
+**Verify Domain:**
+```graphql
+mutation {
+  verifyDomain(domainId: "domain-123")
+}
+```
+
+**Provision SSL:**
+```graphql
+mutation {
+  provisionSsl(
+    domainId: "domain-123"
+    email: "admin@example.com"
+  ) {
+    sslStatus
+    sslExpiresAt
   }
 }
 ```

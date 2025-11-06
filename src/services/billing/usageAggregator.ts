@@ -252,8 +252,8 @@ export class UsageAggregator {
     // Stop accepting new flush jobs
     this.stop();
 
-    // Wait for current flush to complete (max 30 seconds)
-    const maxWait = 30000;
+    // Wait for current flush to complete (max 60 seconds for large batches)
+    const maxWait = 60000;
     const checkInterval = 100;
     let waited = 0;
 

@@ -444,6 +444,26 @@ export const typeDefs = /* GraphQL */ `
     lastSnapshot: StorageSnapshot
   }
 
+  # ============================================
+  # USAGE BUFFER MONITORING
+  # ============================================
+
+  type UsageBufferStats {
+    activeUsers: Int!
+    totalBandwidth: Float!
+    totalCompute: Float!
+    totalRequests: Int!
+    bufferHealthy: Boolean!
+  }
+
+  type FlushUsageBufferResult {
+    success: Boolean!
+    usersFlushed: Int!
+    errors: Int!
+    duration: Int!
+    message: String!
+  }
+
   type PaymentMethod {
     id: ID!
     type: PaymentMethodType!
@@ -694,6 +714,9 @@ export const typeDefs = /* GraphQL */ `
     pinnedContent(limit: Int): [PinnedContent!]!
     storageSnapshots(startDate: Date, endDate: Date, limit: Int): [StorageSnapshot!]!
     storageStats: StorageTrackingStats!
+
+    # Usage Buffer Monitoring
+    usageBufferStats: UsageBufferStats!
   }
 
   # ============================================
@@ -774,6 +797,9 @@ export const typeDefs = /* GraphQL */ `
     # Storage Tracking
     triggerStorageSnapshot: StorageSnapshot!
     triggerInvoiceGeneration: [Invoice!]!
+
+    # Usage Buffer Management
+    flushUsageBuffer: FlushUsageBufferResult!
 
     # Web3 Domains
     registerArns(domainId: ID!, arnsName: String!, contentId: String!): Domain!
