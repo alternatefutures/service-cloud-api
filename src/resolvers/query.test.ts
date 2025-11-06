@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { resolvers } from './index.js';
 import type { Context } from './index.js';
 
+// Mock listDomainsForSite function
+const { mockListDomainsForSite } = vi.hoisted(() => ({
+  mockListDomainsForSite: vi.fn(),
+}));
+
+vi.mock('../services/dns/domainService.js', async () => {
+  const actual = await vi.importActual('../services/dns/domainService.js');
+  return {
+    ...actual,
+    listDomainsForSite: mockListDomainsForSite,
+  };
+});
+
 describe('Query Resolvers', () => {
   let mockContext: Context;
 
@@ -263,20 +276,34 @@ describe('Query Resolvers', () => {
 
       expect(result).toEqual(mockDomains);
       expect(mockContext.prisma.domain.findMany).toHaveBeenCalledWith({
-        where: undefined,
+        where: {
+          site: {
+            project: {
+              userId: 'user-123',
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
       });
     });
 
     it('should return domains for specific site', async () => {
+      const mockSite = {
+        id: 'site-123',
+        project: {
+          userId: 'user-123',
+        },
+      };
+
       const mockDomains = [{ id: 'domain-1', hostname: 'example.com', siteId: 'site-123' }];
-      vi.mocked(mockContext.prisma.domain.findMany).mockResolvedValue(mockDomains);
+
+      vi.mocked(mockContext.prisma.site.findUnique).mockResolvedValue(mockSite as any);
+      mockListDomainsForSite.mockResolvedValue(mockDomains);
 
       const result = await resolvers.Query.domains({}, { siteId: 'site-123' }, mockContext);
 
       expect(result).toEqual(mockDomains);
-      expect(mockContext.prisma.domain.findMany).toHaveBeenCalledWith({
-        where: { siteId: 'site-123' },
-      });
+      expect(mockListDomainsForSite).toHaveBeenCalledWith('site-123');
     });
   });
 });

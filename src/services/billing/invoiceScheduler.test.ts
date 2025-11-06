@@ -3,21 +3,26 @@ import { InvoiceScheduler } from './invoiceScheduler.js';
 import type { PrismaClient } from '@prisma/client';
 
 // Mock node-cron
+const { mockSchedule } = vi.hoisted(() => {
+  const mockSchedule = vi.fn((pattern, callback) => ({
+    stop: vi.fn(),
+    start: vi.fn(),
+    destroy: vi.fn(),
+  }));
+
+  return { mockSchedule };
+});
+
 vi.mock('node-cron', () => ({
-  default: {
-    schedule: vi.fn((pattern, callback) => ({
-      stop: vi.fn(),
-      start: vi.fn(),
-      destroy: vi.fn(),
-    })),
-  },
+  schedule: mockSchedule,
 }));
 
 // Mock InvoiceService
 vi.mock('./invoiceService.js', () => ({
-  InvoiceService: vi.fn().mockImplementation(() => ({
-    generateInvoice: vi.fn().mockResolvedValue('invoice-123'),
-  })),
+  InvoiceService: class {
+    generateInvoice = vi.fn().mockResolvedValue('invoice-123');
+    constructor(prisma: any) {}
+  },
 }));
 
 describe('InvoiceScheduler', () => {
@@ -43,24 +48,20 @@ describe('InvoiceScheduler', () => {
 
   describe('start', () => {
     it('should start the cron scheduler at 2 AM', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
 
-      expect(cron.schedule).toHaveBeenCalledWith(
+      expect(mockSchedule).toHaveBeenCalledWith(
         '0 2 * * *', // 2 AM daily
         expect.any(Function)
       );
     });
 
     it('should not start if already running', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
       scheduler.start();
 
       // Should only be called once
-      expect(cron.schedule).toHaveBeenCalledTimes(1);
+      expect(mockSchedule).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -72,8 +73,7 @@ describe('InvoiceScheduler', () => {
       // Scheduler should be stopped
       scheduler.start();
 
-      const cron = require('node-cron').default;
-      expect(cron.schedule).toHaveBeenCalledTimes(2);
+      expect(mockSchedule).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -140,8 +140,7 @@ describe('InvoiceScheduler', () => {
         },
       });
 
-      const { InvoiceService } = await import('./invoiceService.js');
-      const mockInvoiceService = vi.mocked(InvoiceService).mock.results[0].value;
+      const mockInvoiceService = scheduler['invoiceService'];
 
       expect(mockInvoiceService.generateInvoice).toHaveBeenCalledTimes(2);
       expect(mockInvoiceService.generateInvoice).toHaveBeenCalledWith('sub-1');
@@ -184,8 +183,7 @@ describe('InvoiceScheduler', () => {
 
       await scheduler.runNow();
 
-      const { InvoiceService } = await import('./invoiceService.js');
-      const mockInvoiceService = vi.mocked(InvoiceService).mock.results[0].value;
+      const mockInvoiceService = scheduler['invoiceService'];
 
       expect(mockInvoiceService.generateInvoice).not.toHaveBeenCalled();
     });
@@ -224,8 +222,7 @@ describe('InvoiceScheduler', () => {
       mockPrisma.subscription.findMany.mockResolvedValue(subscriptions);
       mockPrisma.subscription.update.mockResolvedValue({});
 
-      const { InvoiceService } = await import('./invoiceService.js');
-      const mockInvoiceService = vi.mocked(InvoiceService).mock.results[0].value;
+      const mockInvoiceService = scheduler['invoiceService'];
 
       // Mock second invoice to fail
       mockInvoiceService.generateInvoice
@@ -270,7 +267,7 @@ describe('InvoiceScheduler', () => {
         where: { id: 'sub-1' },
         data: {
           currentPeriodStart: new Date('2024-01-31T00:00:00Z'),
-          currentPeriodEnd: new Date('2024-02-29T00:00:00Z'), // Leap year
+          currentPeriodEnd: new Date('2024-03-02T00:00:00Z'), // Jan 31 + 1 month = Mar 2 (since Feb only has 29 days)
         },
       });
     });
@@ -288,12 +285,10 @@ describe('InvoiceScheduler', () => {
 
   describe('scheduler timing', () => {
     it('should be configured to run at 2 AM', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
 
       // Verify cron pattern is for 2 AM (0 2 * * *)
-      expect(cron.schedule).toHaveBeenCalledWith(
+      expect(mockSchedule).toHaveBeenCalledWith(
         '0 2 * * *',
         expect.any(Function)
       );

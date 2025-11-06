@@ -13,12 +13,13 @@ vi.mock('./ipfs.js', () => ({
 
 // Mock StorageTracker
 vi.mock('../billing/storageTracker.js', () => ({
-  StorageTracker: vi.fn().mockImplementation(() => ({
-    trackPinEvent: vi.fn().mockResolvedValue('pin-123'),
-    trackUnpinEvent: vi.fn().mockResolvedValue(true),
-    getCurrentStorage: vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 500)),
-    getActivePins: vi.fn().mockResolvedValue([]),
-  })),
+  StorageTracker: class {
+    trackPinEvent = vi.fn().mockResolvedValue('pin-123');
+    trackUnpinEvent = vi.fn().mockResolvedValue(true);
+    getCurrentStorage = vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 500));
+    getActivePins = vi.fn().mockResolvedValue([]);
+    constructor(prisma: any) {}
+  },
 }));
 
 describe('IPFSWithTracking', () => {
@@ -53,8 +54,7 @@ describe('IPFSWithTracking', () => {
       expect(result).toEqual(uploadResult);
       expect(mockUpload).toHaveBeenCalledWith(Buffer.from('test data'), 'test.jpg');
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackPinEvent).toHaveBeenCalledWith(
         'user-123',
@@ -80,8 +80,7 @@ describe('IPFSWithTracking', () => {
         'user-456'
       );
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackPinEvent).toHaveBeenCalledWith(
         'user-456',
@@ -104,8 +103,7 @@ describe('IPFSWithTracking', () => {
         )
       ).rejects.toThrow('IPFS upload failed');
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       // Tracking should not be called if upload fails
       expect(mockTracker.trackPinEvent).not.toHaveBeenCalled();
@@ -130,8 +128,7 @@ describe('IPFSWithTracking', () => {
       expect(result).toEqual(uploadResult);
       expect(mockUploadDir).toHaveBeenCalledWith('/path/to/dir');
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackPinEvent).toHaveBeenCalledWith(
         'user-789',
@@ -149,8 +146,7 @@ describe('IPFSWithTracking', () => {
         ipfsService.uploadDirectoryWithTracking('/bad/path', 'user-789')
       ).rejects.toThrow('Directory not found');
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackPinEvent).not.toHaveBeenCalled();
     });
@@ -162,15 +158,13 @@ describe('IPFSWithTracking', () => {
 
       expect(result).toBe(true);
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackUnpinEvent).toHaveBeenCalledWith('user-123', 'QmTest123');
     });
 
     it('should throw error if unpin tracking fails', async () => {
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       mockTracker.trackUnpinEvent.mockRejectedValue(new Error('Database error'));
 
@@ -186,8 +180,7 @@ describe('IPFSWithTracking', () => {
 
       expect(result).toBe(BigInt(1024 * 1024 * 500)); // 500 MB
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.getCurrentStorage).toHaveBeenCalledWith('user-123');
     });
@@ -210,8 +203,7 @@ describe('IPFSWithTracking', () => {
         },
       ];
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       mockTracker.getActivePins.mockResolvedValue(mockPins);
 
@@ -222,8 +214,7 @@ describe('IPFSWithTracking', () => {
     });
 
     it('should return active pins with custom limit', async () => {
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       await ipfsService.getActivePins('user-123', 50);
 
@@ -242,8 +233,7 @@ describe('IPFSWithTracking', () => {
       const mockUpload = ipfsService['upload'] as any;
       mockUpload.mockResolvedValue(uploadResult);
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       await ipfsService.uploadWithTracking(
         Buffer.from('cycle test'),
@@ -276,15 +266,15 @@ describe('IPFSWithTracking', () => {
       const mockUpload = ipfsService['upload'] as any;
       mockUpload.mockResolvedValue(uploadResult);
 
+      // Use a small buffer since upload is mocked - we're just testing the tracking
       await ipfsService.uploadWithTracking(
-        Buffer.alloc(largeFileSize),
+        Buffer.alloc(1024), // Small buffer, actual size comes from uploadResult
         'large.iso',
         'user-large',
         'application/octet-stream'
       );
 
-      const { StorageTracker } = await import('../billing/storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = ipfsService['storageTracker'];
 
       expect(mockTracker.trackPinEvent).toHaveBeenCalledWith(
         'user-large',

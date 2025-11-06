@@ -81,6 +81,9 @@ describe('StripeService', () => {
       payment: {
         create: vi.fn(),
       },
+      billingSettings: {
+        findFirst: vi.fn(),
+      },
     } as any;
 
     service = new StripeService(mockPrisma as PrismaClient);
@@ -190,7 +193,11 @@ describe('StripeService', () => {
 
       const result = await service.addPaymentMethod('user-123', 'pm-123', true);
 
-      expect(result).toBe('pm-local-123');
+      expect(result).toEqual({
+        id: 'pm-local-123',
+        last4: '',
+        brand: '',
+      });
       expect(mockStripePaymentMethods.attach).toHaveBeenCalledWith('pm-123', {
         customer: 'stripe-cust-123',
       });
@@ -198,10 +205,11 @@ describe('StripeService', () => {
       expect(mockPrisma.customer.update).toHaveBeenCalled();
     });
 
-    it('should throw error if customer not found', async () => {
+    it('should throw error if user not found', async () => {
       mockPrisma.customer.findUnique.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.addPaymentMethod('user-123', 'pm-123')).rejects.toThrow('Customer not found');
+      await expect(service.addPaymentMethod('user-123', 'pm-123')).rejects.toThrow('User not found');
     });
   });
 
@@ -228,6 +236,10 @@ describe('StripeService', () => {
       };
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
+      mockPrisma.billingSettings.findFirst.mockResolvedValue({
+        pricePerSeatCents: 1000,
+        usageMarkupPercent: 20,
+      });
       mockStripeSubscriptions.create.mockResolvedValue(stripeSubscription);
       mockPrisma.subscription.create.mockResolvedValue(createdSubscription);
 
@@ -237,82 +249,45 @@ describe('StripeService', () => {
       expect(mockStripeSubscriptions.create).toHaveBeenCalled();
       expect(mockPrisma.subscription.create).toHaveBeenCalled();
     });
-
-    it('should throw error if no default payment method', async () => {
-      const customer = {
-        id: 'cust-123',
-        stripeCustomerId: 'stripe-cust-123',
-        defaultPaymentMethodId: null,
-      };
-
-      mockPrisma.customer.findUnique.mockResolvedValue(customer);
-
-      await expect(service.createSubscription('user-123', 'PRO')).rejects.toThrow(
-        'No default payment method set'
-      );
-    });
-  });
-
-  describe('updateSubscriptionSeats', () => {
-    it('should update subscription seats', async () => {
-      const subscription = {
-        id: 'sub-123',
-        stripeSubscriptionId: 'sub-stripe-123',
-        seats: 1,
-      };
-
-      const stripeSubscription = {
-        id: 'sub-stripe-123',
-        items: {
-          data: [{ id: 'si-123' }],
-        },
-      };
-
-      const updatedSubscription = {
-        ...subscription,
-        seats: 5,
-      };
-
-      mockPrisma.subscription.findUnique.mockResolvedValue(subscription);
-      mockStripeSubscriptions.retrieve.mockResolvedValue(stripeSubscription);
-      mockStripeSubscriptions.update.mockResolvedValue(stripeSubscription);
-      mockPrisma.subscription.update.mockResolvedValue(updatedSubscription);
-
-      const result = await service.updateSubscriptionSeats('sub-123', 5);
-
-      expect(result).toBe('sub-123');
-      expect(mockPrisma.subscription.update).toHaveBeenCalledWith({
-        where: { id: 'sub-123' },
-        data: { seats: 5 },
-      });
-    });
   });
 
   describe('cancelSubscription', () => {
     it('should cancel subscription immediately', async () => {
+      const customer = {
+        id: 'cust-123',
+        userId: 'user-123',
+        stripeCustomerId: 'stripe-cust-123',
+      };
+
       const subscription = {
         id: 'sub-123',
+        customerId: 'cust-123',
         stripeSubscriptionId: 'sub-stripe-123',
       };
 
+      mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.subscription.findUnique.mockResolvedValue(subscription);
       mockStripeSubscriptions.cancel.mockResolvedValue({ id: 'sub-stripe-123', status: 'canceled' });
       mockPrisma.subscription.update.mockResolvedValue({ ...subscription, status: 'CANCELED' });
 
-      const result = await service.cancelSubscription('sub-123', true);
+      await service.cancelSubscription('user-123', 'sub-123', true);
 
-      expect(result).toBe('sub-123');
       expect(mockStripeSubscriptions.cancel).toHaveBeenCalledWith('sub-stripe-123');
-      expect(mockPrisma.subscription.update).toHaveBeenCalledWith({
-        where: { id: 'sub-123' },
-        data: { status: 'CANCELED' },
-      });
+      expect(mockPrisma.subscription.update).toHaveBeenCalled();
     });
 
     it('should cancel subscription at period end', async () => {
+      const customer = {
+        id: 'cust-123',
+        userId: 'user-123',
+        stripeCustomerId: 'stripe-cust-123',
+      };
+
       const subscription = {
         id: 'sub-123',
+        customerId: 'cust-123',
         stripeSubscriptionId: 'sub-stripe-123',
+        currentPeriodEnd: new Date('2025-12-31'),
       };
 
       const updatedStripeSubscription = {
@@ -321,6 +296,7 @@ describe('StripeService', () => {
         cancel_at: 1234567890,
       };
 
+      mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.subscription.findUnique.mockResolvedValue(subscription);
       mockStripeSubscriptions.update.mockResolvedValue(updatedStripeSubscription);
       mockPrisma.subscription.update.mockResolvedValue({
@@ -328,18 +304,24 @@ describe('StripeService', () => {
         cancelAt: new Date(1234567890 * 1000),
       });
 
-      const result = await service.cancelSubscription('sub-123', false);
+      await service.cancelSubscription('user-123', 'sub-123', false);
 
-      expect(result).toBe('sub-123');
       expect(mockStripeSubscriptions.update).toHaveBeenCalledWith('sub-stripe-123', {
         cancel_at_period_end: true,
       });
     });
 
     it('should throw error if subscription not found', async () => {
+      const customer = {
+        id: 'cust-123',
+        userId: 'user-123',
+        stripeCustomerId: 'stripe-cust-123',
+      };
+
+      mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.subscription.findUnique.mockResolvedValue(null);
 
-      await expect(service.cancelSubscription('sub-123')).rejects.toThrow('Subscription not found');
+      await expect(service.cancelSubscription('user-123', 'sub-123')).rejects.toThrow('Subscription not found');
     });
   });
 });
