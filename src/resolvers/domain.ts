@@ -16,6 +16,40 @@ import {
 } from '../services/dns';
 import { getSslCertificateStatus, renewSslCertificate as renewSsl } from '../jobs/sslRenewal';
 import { DomainUsageTracker } from '../services/billing/domainUsageTracker';
+import type { PrismaClient } from '@prisma/client';
+
+/**
+ * Track domain usage asynchronously without blocking the main operation
+ * Returns a promise that can be awaited if needed, but won't throw to parent
+ */
+async function trackDomainUsageAsync(
+  prisma: PrismaClient,
+  userId: string,
+  trackingFn: (tracker: DomainUsageTracker, customer: any, subscription: any) => Promise<void>
+): Promise<void> {
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { userId },
+      include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    });
+
+    if (!customer || customer.subscriptions.length === 0) {
+      // No active subscription, skip tracking
+      return;
+    }
+
+    const subscription = customer.subscriptions[0];
+    const domainUsageTracker = new DomainUsageTracker(prisma);
+
+    await trackingFn(domainUsageTracker, customer, subscription);
+  } catch (error) {
+    // Log error but don't propagate to avoid blocking domain operations
+    console.error('[Domain Usage Tracking]', error instanceof Error ? error.message : 'Unknown error', {
+      userId,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
 
 export const domainQueries = {
   /**
@@ -166,36 +200,28 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this site');
     }
 
-    const domain = await createCustomDomain({
-      hostname: input.hostname,
-      siteId: input.siteId,
-      domainType: input.domainType as any,
-      verificationMethod: input.verificationMethod
-    });
-
-    // Track domain creation for billing
-    try {
-      const customer = await prisma.customer.findUnique({
-        where: { userId },
-        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    // Create domain with transaction to ensure consistency
+    const domain = await prisma.$transaction(async (tx) => {
+      const newDomain = await createCustomDomain({
+        hostname: input.hostname,
+        siteId: input.siteId,
+        domainType: input.domainType as any,
+        verificationMethod: input.verificationMethod
       });
 
-      if (customer && customer.subscriptions.length > 0) {
-        const subscription = customer.subscriptions[0];
-        const domainUsageTracker = new DomainUsageTracker(prisma);
-
-        await domainUsageTracker.trackDomainCreation({
+      // Track usage within transaction for consistency
+      await trackDomainUsageAsync(tx as PrismaClient, userId, async (tracker, customer, subscription) => {
+        await tracker.trackDomainCreation({
           customerId: customer.id,
-          domainId: domain.id,
+          domainId: newDomain.id,
           hostname: input.hostname,
           periodStart: subscription.currentPeriodStart,
           periodEnd: subscription.currentPeriodEnd,
         });
-      }
-    } catch (error) {
-      // Don't fail the request if usage tracking fails
-      console.error('Failed to track domain creation:', error);
-    }
+      });
+
+      return newDomain;
+    });
 
     return domain;
   },
@@ -221,30 +247,18 @@ export const domainMutations = {
 
     const verificationResult = await verifyDomainOwnership(domainId);
 
-    // Track verification attempt for billing
-    try {
-      const customer = await prisma.customer.findUnique({
-        where: { userId },
-        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    // Track verification attempt asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackDomainVerification({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        verificationMethod: (domain.txtVerificationToken ? 'TXT' : domain.expectedCname ? 'CNAME' : 'A') as 'TXT' | 'CNAME' | 'A',
+        success: verificationResult,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
       });
-
-      if (customer && customer.subscriptions.length > 0) {
-        const subscription = customer.subscriptions[0];
-        const domainUsageTracker = new DomainUsageTracker(prisma);
-
-        await domainUsageTracker.trackDomainVerification({
-          customerId: customer.id,
-          domainId,
-          hostname: domain.hostname,
-          verificationMethod: (domain.txtVerificationToken ? 'TXT' : domain.expectedCname ? 'CNAME' : 'A') as 'TXT' | 'CNAME' | 'A',
-          success: verificationResult,
-          periodStart: subscription.currentPeriodStart,
-          periodEnd: subscription.currentPeriodEnd,
-        });
-      }
-    } catch (error) {
-      console.error('Failed to track domain verification:', error);
-    }
+    }).catch(() => {}); // Fire and forget
 
     return verificationResult;
   },
@@ -274,29 +288,17 @@ export const domainMutations = {
 
     await provisionSslCertificate(domainId, email);
 
-    // Track SSL provisioning for billing
-    try {
-      const customer = await prisma.customer.findUnique({
-        where: { userId },
-        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    // Track SSL provisioning asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackSslProvisioning({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        isRenewal: false,
       });
-
-      if (customer && customer.subscriptions.length > 0) {
-        const subscription = customer.subscriptions[0];
-        const domainUsageTracker = new DomainUsageTracker(prisma);
-
-        await domainUsageTracker.trackSslProvisioning({
-          customerId: customer.id,
-          domainId,
-          hostname: domain.hostname,
-          periodStart: subscription.currentPeriodStart,
-          periodEnd: subscription.currentPeriodEnd,
-          isRenewal: false,
-        });
-      }
-    } catch (error) {
-      console.error('Failed to track SSL provisioning:', error);
-    }
+    }).catch(() => {}); // Fire and forget
 
     // Return updated domain
     return await prisma.domain.findUnique({
@@ -519,29 +521,17 @@ export const domainMutations = {
 
     await renewSsl(domainId);
 
-    // Track SSL renewal for billing
-    try {
-      const customer = await prisma.customer.findUnique({
-        where: { userId },
-        include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    // Track SSL renewal asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackSslProvisioning({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        isRenewal: true,
       });
-
-      if (customer && customer.subscriptions.length > 0) {
-        const subscription = customer.subscriptions[0];
-        const domainUsageTracker = new DomainUsageTracker(prisma);
-
-        await domainUsageTracker.trackSslProvisioning({
-          customerId: customer.id,
-          domainId,
-          hostname: domain.hostname,
-          periodStart: subscription.currentPeriodStart,
-          periodEnd: subscription.currentPeriodEnd,
-          isRenewal: true,
-        });
-      }
-    } catch (error) {
-      console.error('Failed to track SSL renewal:', error);
-    }
+    }).catch(() => {}); // Fire and forget
 
     return await prisma.domain.findUnique({ where: { id: domainId } });
   }

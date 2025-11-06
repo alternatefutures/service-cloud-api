@@ -55,6 +55,13 @@ describe('Mutation Resolvers', () => {
           create: vi.fn(),
           findUnique: vi.fn(),
         },
+        customer: {
+          findUnique: vi.fn(),
+        },
+        $transaction: vi.fn(async (callback) => {
+          // Execute the callback with the mock prisma as the transaction
+          return await callback(mockContext.prisma);
+        }),
       } as any,
       userId: 'user-123',
       projectId: 'project-123',
@@ -479,6 +486,7 @@ describe('Mutation Resolvers', () => {
       };
 
       vi.mocked(mockContext.prisma.site.findUnique).mockResolvedValue(mockSite as any);
+      vi.mocked(mockContext.prisma.customer.findUnique).mockResolvedValue(null); // No active subscription
       mockCreateCustomDomain.mockResolvedValue(mockDomain);
 
       const result = await resolvers.Mutation.createDomain(
