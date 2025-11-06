@@ -50,17 +50,52 @@ Go to: **Repository Settings** → **Secrets and variables** → **Actions** →
 **File:** `.github/workflows/claude-code-review.yml`
 
 **Triggers:**
-- Pull requests opened, synchronized, or reopened on `main`, `staging`, or `develop`
+- **Automated Review:** Pull requests opened, synchronized, or reopened on `main`, `staging`, or `develop`
+- **Interactive Review:** Comments containing `@claude` on PRs or issues
 
 **What it does:**
-- Reviews code changes using Claude Sonnet 4.5
-- Posts review comments directly on the PR
+
+#### Automated Reviews (on PR open/update)
+- Automatically reviews code changes using Claude Sonnet 4.5
+- Analyzes code quality, security, performance, testing, and documentation
+- Posts comprehensive review comments directly on the PR
 - Identifies potential issues, bugs, and improvements
-- Suggests code optimizations
+- Suggests code optimizations and best practices
+- Verifies TypeScript typing and type safety
+
+#### Interactive Reviews (via @claude mentions)
+- Responds to `@claude` mentions in PR comments
+- Answers questions about the codebase
+- Provides explanations for specific code sections
+- Helps with debugging and troubleshooting
+- Can suggest alternative implementations
+- Supports back-and-forth conversations (up to 10 turns)
+
+**How to use @claude:**
+
+Comment on any PR or issue with:
+```
+@claude can you explain how the authentication works in this PR?
+```
+
+```
+@claude please review the database schema changes for potential issues
+```
+
+```
+@claude can you suggest a better way to handle error cases here?
+```
 
 **Required secrets:**
 - `ANTHROPIC_API_KEY`
 - `GITHUB_TOKEN` (automatically provided)
+
+**Features:**
+- ✅ Automatic code review on every PR
+- ✅ Interactive AI assistance via @claude
+- ✅ Progress tracking with status updates
+- ✅ Multi-turn conversations (up to 10 for interactive, 5 for automated)
+- ✅ Context-aware analysis of full PR changes
 
 ---
 
@@ -113,14 +148,37 @@ All branches should be named based on your Linear ticket:
 
 After adding secrets, you can verify the setup by:
 
+### Testing Automated Review
+
 1. Creating a new feature branch: `feature/ALT-123-test` or `feat/alt-123-test`
-2. Making a small change
+2. Making a small change (e.g., add a new function or update a file)
 3. Opening a pull request to `develop`
 
 You should see:
 - ✅ CI workflow running tests
-- ✅ Claude Code Review analyzing changes
-- 📝 Review comments posted on your PR
+- ✅ Claude Code Review workflow triggered (check Actions tab)
+- ✅ "Automated AI Code Review" job running
+- 📝 Automated review comments posted on your PR within 2-5 minutes
+- 📊 Review covering code quality, security, performance, testing, and documentation
+
+### Testing Interactive Review
+
+1. Open any existing PR or the test PR from above
+2. Add a comment: `@claude can you review this change?`
+3. Wait 30-60 seconds
+
+You should see:
+- ✅ "Interactive Claude Assistant" workflow triggered
+- 🤖 Claude responds to your comment
+- 💬 Ability to continue the conversation by replying with more `@claude` mentions
+
+### Verification Checklist
+
+- [ ] `ANTHROPIC_API_KEY` is added to repository secrets
+- [ ] Automated review runs when PR is opened
+- [ ] Interactive `@claude` mentions get responses
+- [ ] Review comments are helpful and relevant
+- [ ] No permission errors in GitHub Actions logs
 
 ---
 
@@ -206,9 +264,25 @@ These checks run automatically via `.github/workflows/branch-name-check.yml`
 ## Troubleshooting
 
 ### Claude Code Review not running
+
+**For Automated Reviews:**
 - Verify `ANTHROPIC_API_KEY` is set in repository secrets
-- Check workflow file permissions (needs `pull-requests: write`)
-- Ensure API key has sufficient credits
+- Check workflow file permissions (needs `contents: write`, `pull-requests: write`, `issues: write`)
+- Ensure API key has sufficient credits in [Anthropic Console](https://console.anthropic.com/)
+- Verify PR is targeting `main`, `staging`, or `develop` branch
+- Check GitHub Actions logs for error messages
+
+**For Interactive @claude Reviews:**
+- Ensure you're using `@claude` (not `@Claude` or other variations)
+- Verify the comment is on a PR or issue (not a commit comment)
+- Check that the workflow has been triggered in Actions tab
+- Review permissions: action needs `id-token: write` and `actions: read`
+
+**Common Issues:**
+- **Rate limiting:** If you see API rate limit errors, wait a few minutes before trying again
+- **Permission errors:** Ensure all required permissions are granted in the workflow file
+- **No response:** Check if the workflow was triggered in the Actions tab
+- **API key invalid:** Generate a new key from [Anthropic Console](https://console.anthropic.com/)
 
 ### Tests failing
 - Check PostgreSQL/Redis service health

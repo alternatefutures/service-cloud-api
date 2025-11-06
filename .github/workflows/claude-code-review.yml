@@ -1,49 +1,71 @@
 name: Claude Code Review
 
 on:
+  # Automated review on PR events
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main, staging, develop]
 
+  # Interactive review via @claude mentions
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
 
 jobs:
-  claude-review:
-    name: AI Code Review
+  # Automated code review when PR is opened/updated
+  automated-review:
+    name: Automated AI Code Review
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Claude Automated Review
+        uses: anthropics/claude-code-action@v1
         with:
-          fetch-depth: 0
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Please review this pull request focusing on:
 
-      - name: Claude Code Review
-        uses: anthropics/anthropic-quickstarts@main
+            1. **Code Quality**: Check for code smells, anti-patterns, and best practices
+            2. **Security**: Identify potential security vulnerabilities
+            3. **Performance**: Look for performance issues or inefficiencies
+            4. **Testing**: Verify test coverage and quality
+            5. **Documentation**: Check if code changes are well-documented
+            6. **TypeScript**: Ensure proper typing and type safety
+
+            Provide constructive feedback with specific suggestions for improvement.
+            If everything looks good, provide a summary of what was reviewed.
+          claude_args: |
+            --max-turns 5
+            --model claude-sonnet-4-5-20250929
+          track_progress: true
+
+  # Interactive review via @claude mentions
+  interactive-review:
+    name: Interactive Claude Assistant
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' ||
+      github.event_name == 'pull_request_review_comment' ||
+      github.event_name == 'pull_request_review'
+
+    steps:
+      - name: Claude Interactive Response
+        uses: anthropics/claude-code-action@v1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-sonnet-4-5-20250929
-
-      - name: Post Review Summary
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const claudeComments = comments.filter(comment =>
-              comment.user.login === 'github-actions[bot]' &&
-              comment.body.includes('Claude Code Review')
-            );
-
-            if (claudeComments.length > 0) {
-              core.info('✅ Claude Code Review completed successfully');
-            }
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          claude_args: |
+            --max-turns 10
+            --model claude-sonnet-4-5-20250929
+          track_progress: true
