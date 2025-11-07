@@ -362,4 +362,37 @@ export class TokenService {
       maxActiveTokens: TokenService.MAX_ACTIVE_TOKENS,
     };
   }
+
+  /**
+   * Clean up expired tokens
+   * Returns count of deleted tokens
+   * Should be run periodically (e.g., daily via cron job)
+   */
+  async cleanupExpiredTokens(): Promise<number> {
+    try {
+      const now = new Date();
+
+      const result = await this.prisma.personalAccessToken.deleteMany({
+        where: {
+          expiresAt: {
+            lte: now,
+          },
+        },
+      });
+
+      if (result.count > 0) {
+        tokenServiceLogger.info('Cleaned up expired tokens', {
+          operation: 'cleanup',
+          deletedCount: result.count,
+        });
+      }
+
+      return result.count;
+    } catch (error) {
+      tokenServiceLogger.error('Error cleaning up expired tokens', {
+        operation: 'cleanup',
+      }, error as Error);
+      throw error;
+    }
+  }
 }
