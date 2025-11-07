@@ -200,28 +200,24 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this site');
     }
 
-    // Create domain with transaction to ensure consistency
-    const domain = await prisma.$transaction(async (tx) => {
-      const newDomain = await createCustomDomain({
-        hostname: input.hostname,
-        siteId: input.siteId,
-        domainType: input.domainType as any,
-        verificationMethod: input.verificationMethod
-      });
-
-      // Track usage within transaction for consistency
-      await trackDomainUsageAsync(tx as PrismaClient, userId, async (tracker, customer, subscription) => {
-        await tracker.trackDomainCreation({
-          customerId: customer.id,
-          domainId: newDomain.id,
-          hostname: input.hostname,
-          periodStart: subscription.currentPeriodStart,
-          periodEnd: subscription.currentPeriodEnd,
-        });
-      });
-
-      return newDomain;
+    // Create domain
+    const domain = await createCustomDomain({
+      hostname: input.hostname,
+      siteId: input.siteId,
+      domainType: input.domainType as any,
+      verificationMethod: input.verificationMethod
     });
+
+    // Track usage asynchronously (fire-and-forget) to avoid blocking domain creation
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackDomainCreation({
+        customerId: customer.id,
+        domainId: domain.id,
+        hostname: input.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+      });
+    }).catch(() => {}); // Fire and forget
 
     return domain;
   },

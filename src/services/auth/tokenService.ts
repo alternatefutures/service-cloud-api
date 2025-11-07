@@ -22,6 +22,9 @@ export class TokenService {
   // Max active tokens: 500 per user
   private static readonly MAX_ACTIVE_TOKENS = 500;
 
+  // Max retries for token generation
+  private static readonly MAX_RETRIES = 5;
+
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
   }
@@ -57,21 +60,31 @@ export class TokenService {
     expiresAt: Date | null;
     createdAt: Date;
   }> {
-    // Check max active tokens limit
-    const activeTokensCount = await this.prisma.personalAccessToken.count({
-      where: { userId },
-    });
+    return this.createTokenWithRetries(userId, name, expiresAt, 0);
+  }
 
-    if (activeTokensCount >= TokenService.MAX_ACTIVE_TOKENS) {
-      const error = new Error(
-        `Maximum active API keys limit reached. You can have up to ${TokenService.MAX_ACTIVE_TOKENS} active keys. ` +
-        `Please delete unused keys before creating new ones.`
-      ) as Error & { code: string };
-      error.code = 'MAX_TOKENS_EXCEEDED';
-      throw error;
+  /**
+   * Internal method to create token with retry limiting and transaction safety
+   * Prevents race conditions by checking limits and creating token atomically
+   */
+  private async createTokenWithRetries(
+    userId: string,
+    name: string,
+    expiresAt: Date | undefined,
+    retryCount: number
+  ): Promise<{
+    token: string;
+    id: string;
+    name: string;
+    expiresAt: Date | null;
+    createdAt: Date;
+  }> {
+    // Check retry limit
+    if (retryCount >= TokenService.MAX_RETRIES) {
+      throw new Error('Failed to generate unique token after multiple attempts');
     }
 
-    // Check rate limit
+    // Check rate limit (outside transaction since it uses Redis)
     const rateLimitKey = `api_key_creation:${userId}`;
     const rateLimit = await rateLimiter.checkLimit(
       rateLimitKey,
@@ -80,45 +93,77 @@ export class TokenService {
     );
 
     if (!rateLimit.allowed) {
+      // Round resetAt to nearest hour to prevent timing attacks
+      const resetHour = new Date(rateLimit.resetAt);
+      resetHour.setMinutes(0, 0, 0);
+
       const error = new Error(
         `Rate limit exceeded. You can only create ${TokenService.RATE_LIMIT} API keys per day. ` +
-        `Limit resets at ${rateLimit.resetAt.toISOString()}`
+        `Limit resets at approximately ${resetHour.toISOString()}`
       ) as Error & { code: string; resetAt: Date };
       error.code = 'RATE_LIMIT_EXCEEDED';
-      (error as any).resetAt = rateLimit.resetAt;
+      (error as any).resetAt = resetHour; // Rounded timestamp
       throw error;
     }
 
     // Generate token
     const token = this.generateToken();
 
-    // Verify token is unique (extremely unlikely collision, but good practice)
-    const existing = await this.prisma.personalAccessToken.findUnique({
-      where: { token },
-    });
+    // Use transaction to prevent race conditions
+    try {
+      const tokenRecord = await this.prisma.$transaction(async (tx) => {
+        // Check max active tokens limit within transaction
+        const activeTokensCount = await tx.personalAccessToken.count({
+          where: { userId },
+        });
 
-    if (existing) {
-      // Recursive retry on collision
-      return this.createToken(userId, name, expiresAt);
+        if (activeTokensCount >= TokenService.MAX_ACTIVE_TOKENS) {
+          const error = new Error(
+            `Maximum active API keys limit reached. You can have up to ${TokenService.MAX_ACTIVE_TOKENS} active keys. ` +
+            `Please delete unused keys before creating new ones.`
+          ) as Error & { code: string };
+          error.code = 'MAX_TOKENS_EXCEEDED';
+          throw error;
+        }
+
+        // Verify token is unique (extremely unlikely collision, but good practice)
+        const existing = await tx.personalAccessToken.findUnique({
+          where: { token },
+        });
+
+        if (existing) {
+          // Token collision detected - signal retry
+          const retryError = new Error('TOKEN_COLLISION') as Error & { retry: boolean };
+          (retryError as any).retry = true;
+          throw retryError;
+        }
+
+        // Create token in database
+        return await tx.personalAccessToken.create({
+          data: {
+            name,
+            token,
+            userId,
+            expiresAt,
+          },
+        });
+      });
+
+      return {
+        token: tokenRecord.token,
+        id: tokenRecord.id,
+        name: tokenRecord.name,
+        expiresAt: tokenRecord.expiresAt,
+        createdAt: tokenRecord.createdAt,
+      };
+    } catch (error: any) {
+      // If token collision, retry with incremented counter
+      if (error.message === 'TOKEN_COLLISION' || error.retry) {
+        return this.createTokenWithRetries(userId, name, expiresAt, retryCount + 1);
+      }
+      // Re-throw other errors
+      throw error;
     }
-
-    // Create token in database
-    const tokenRecord = await this.prisma.personalAccessToken.create({
-      data: {
-        name,
-        token,
-        userId,
-        expiresAt,
-      },
-    });
-
-    return {
-      token: tokenRecord.token,
-      id: tokenRecord.id,
-      name: tokenRecord.name,
-      expiresAt: tokenRecord.expiresAt,
-      createdAt: tokenRecord.createdAt,
-    };
   }
 
   /**
