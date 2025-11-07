@@ -15,6 +15,19 @@ vi.mock('../utils/routeValidation.js', () => ({
   validateRoutes: vi.fn(),
 }));
 
+// Mock createCustomDomain function
+const { mockCreateCustomDomain } = vi.hoisted(() => ({
+  mockCreateCustomDomain: vi.fn(),
+}));
+
+vi.mock('../services/dns/domainService.js', async () => {
+  const actual = await vi.importActual('../services/dns/domainService.js');
+  return {
+    ...actual,
+    createCustomDomain: mockCreateCustomDomain,
+  };
+});
+
 describe('Mutation Resolvers', () => {
   let mockContext: Context;
 
@@ -28,6 +41,7 @@ describe('Mutation Resolvers', () => {
         },
         site: {
           create: vi.fn(),
+          findUnique: vi.fn(),
         },
         aFFunction: {
           create: vi.fn(),
@@ -39,7 +53,15 @@ describe('Mutation Resolvers', () => {
         },
         domain: {
           create: vi.fn(),
+          findUnique: vi.fn(),
         },
+        customer: {
+          findUnique: vi.fn(),
+        },
+        $transaction: vi.fn(async (callback) => {
+          // Execute the callback with the mock prisma as the transaction
+          return await callback(mockContext.prisma);
+        }),
       } as any,
       userId: 'user-123',
       projectId: 'project-123',
@@ -449,28 +471,32 @@ describe('Mutation Resolvers', () => {
 
   describe('createDomain', () => {
     it('should create a new domain', async () => {
+      const mockSite = {
+        id: 'site-123',
+        project: {
+          userId: 'user-123',
+        },
+      };
+
       const mockDomain = {
         id: 'domain-123',
         hostname: 'example.com',
         siteId: 'site-123',
-        verified: false,
+        verificationStatus: 'PENDING',
       };
-      vi.mocked(mockContext.prisma.domain.create).mockResolvedValue(mockDomain);
+
+      vi.mocked(mockContext.prisma.site.findUnique).mockResolvedValue(mockSite as any);
+      vi.mocked(mockContext.prisma.customer.findUnique).mockResolvedValue(null); // No active subscription
+      mockCreateCustomDomain.mockResolvedValue(mockDomain);
 
       const result = await resolvers.Mutation.createDomain(
         {},
-        { hostname: 'example.com', siteId: 'site-123' },
+        { input: { hostname: 'example.com', siteId: 'site-123' } },
         mockContext
       );
 
       expect(result).toEqual(mockDomain);
-      expect(mockContext.prisma.domain.create).toHaveBeenCalledWith({
-        data: {
-          hostname: 'example.com',
-          siteId: 'site-123',
-          verified: false,
-        },
-      });
+      expect(mockCreateCustomDomain).toHaveBeenCalled();
     });
   });
 });

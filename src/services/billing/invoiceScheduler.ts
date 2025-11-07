@@ -5,7 +5,7 @@
  * Runs daily at 2 AM to check for subscriptions that need invoicing
  */
 
-import cron from 'node-cron';
+import * as cron from 'node-cron';
 import type { PrismaClient } from '@prisma/client';
 import { InvoiceService } from './invoiceService.js';
 

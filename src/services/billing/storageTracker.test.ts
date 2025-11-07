@@ -20,6 +20,7 @@ describe('StorageTracker', () => {
       },
       usageRecord: {
         create: vi.fn(),
+        groupBy: vi.fn(),
       },
       storageSnapshot: {
         create: vi.fn(),
@@ -29,6 +30,15 @@ describe('StorageTracker', () => {
       },
       user: {
         findMany: vi.fn(),
+      },
+      customer: {
+        findUnique: vi.fn(),
+      },
+      subscription: {
+        findFirst: vi.fn(),
+      },
+      billingSettings: {
+        findFirst: vi.fn(),
       },
     } as any;
 
@@ -49,6 +59,20 @@ describe('StorageTracker', () => {
       };
 
       mockPrisma.pinnedContent.create.mockResolvedValue(pinData);
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: 'cust-123',
+        userId: 'user-123',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      });
+      mockPrisma.usageRecord.create.mockResolvedValue({
+        id: 'usage-123',
+        userId: 'user-123',
+        type: 'STORAGE',
+      });
 
       const result = await storageTracker.trackPinEvent(
         'user-123',
@@ -71,18 +95,22 @@ describe('StorageTracker', () => {
         },
       });
       expect(mockPrisma.usageRecord.create).toHaveBeenCalledWith({
-        data: {
-          userId: 'user-123',
+        data: expect.objectContaining({
+          customerId: 'cust-123',
           type: 'STORAGE',
-          resourceType: 'IPFS_PIN',
-          quantity: 100, // MB
-          unit: 'MB',
-          metadata: {
+          resourceType: 'IPFS',
+          resourceId: 'QmTest123',
+          unit: 'GB',
+          quantity: expect.any(Number),
+          periodStart: expect.any(Date),
+          periodEnd: expect.any(Date),
+          metadata: expect.objectContaining({
             cid: 'QmTest123',
             filename: 'test.jpg',
             action: 'pin',
-          },
-        },
+            sizeBytes: 1024 * 1024 * 100,
+          }),
+        }),
       });
     });
 
@@ -96,6 +124,20 @@ describe('StorageTracker', () => {
       };
 
       mockPrisma.pinnedContent.create.mockResolvedValue(pinData);
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: 'cust-456',
+        userId: 'user-456',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-456',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      });
+      mockPrisma.usageRecord.create.mockResolvedValue({
+        id: 'usage-456',
+        userId: 'user-456',
+        type: 'STORAGE',
+      });
 
       const result = await storageTracker.trackPinEvent('user-456', 'QmTest456', 1024 * 1024 * 50);
 
@@ -129,6 +171,20 @@ describe('StorageTracker', () => {
         ...existingPin,
         unpinnedAt: new Date(),
       });
+      mockPrisma.customer.findUnique.mockResolvedValue({
+        id: 'cust-123',
+        userId: 'user-123',
+      });
+      mockPrisma.subscription.findFirst.mockResolvedValue({
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      });
+      mockPrisma.usageRecord.create.mockResolvedValue({
+        id: 'usage-unpin-123',
+        userId: 'user-123',
+        type: 'STORAGE',
+      });
 
       const result = await storageTracker.trackUnpinEvent('user-123', 'QmTest123');
 
@@ -145,17 +201,21 @@ describe('StorageTracker', () => {
         data: { unpinnedAt: expect.any(Date) },
       });
       expect(mockPrisma.usageRecord.create).toHaveBeenCalledWith({
-        data: {
-          userId: 'user-123',
+        data: expect.objectContaining({
+          customerId: 'cust-123',
           type: 'STORAGE',
-          resourceType: 'IPFS_PIN',
-          quantity: -100, // Negative to deduct
-          unit: 'MB',
-          metadata: {
+          resourceType: 'IPFS',
+          resourceId: 'QmTest123',
+          unit: 'GB',
+          quantity: expect.any(Number), // Should be negative for unpin
+          periodStart: expect.any(Date),
+          periodEnd: expect.any(Date),
+          metadata: expect.objectContaining({
             cid: 'QmTest123',
             action: 'unpin',
-          },
-        },
+            sizeBytes: 1024 * 1024 * 100,
+          }),
+        }),
       });
     });
 
@@ -290,6 +350,7 @@ describe('StorageTracker', () => {
         where: {
           userId: 'user-123',
           OR: expect.any(Array),
+          pinnedAt: expect.any(Object),
         },
       });
     });

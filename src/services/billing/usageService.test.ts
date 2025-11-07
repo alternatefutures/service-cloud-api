@@ -14,9 +14,13 @@ describe('UsageService', () => {
       customer: {
         findUnique: vi.fn(),
       },
+      subscription: {
+        findFirst: vi.fn(),
+      },
       usageRecord: {
         create: vi.fn(),
         findMany: vi.fn(),
+        groupBy: vi.fn(),
       },
       billingSettings: {
         findFirst: vi.fn(),
@@ -29,6 +33,11 @@ describe('UsageService', () => {
   describe('recordUsage', () => {
     it('should record storage usage', async () => {
       const customer = { id: 'cust-123', userId: 'user-123' };
+      const subscription = {
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      };
       const createdUsage = {
         id: 'usage-123',
         customerId: 'cust-123',
@@ -39,6 +48,7 @@ describe('UsageService', () => {
       };
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
+      mockPrisma.subscription.findFirst.mockResolvedValue(subscription);
       mockPrisma.usageRecord.create.mockResolvedValue(createdUsage);
 
       const result = await service.recordUsage(
@@ -52,7 +62,7 @@ describe('UsageService', () => {
 
       expect(result).toBe('usage-123');
       expect(mockPrisma.usageRecord.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           customerId: 'cust-123',
           type: 'STORAGE',
           quantity: 1024,
@@ -60,12 +70,17 @@ describe('UsageService', () => {
           resourceType: 'IPFS',
           resourceId: 'resource-123',
           metadata: undefined,
-        },
+        }),
       });
     });
 
     it('should record bandwidth usage', async () => {
       const customer = { id: 'cust-123', userId: 'user-123' };
+      const subscription = {
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      };
       const createdUsage = {
         id: 'usage-456',
         type: 'BANDWIDTH',
@@ -74,6 +89,7 @@ describe('UsageService', () => {
       };
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
+      mockPrisma.subscription.findFirst.mockResolvedValue(subscription);
       mockPrisma.usageRecord.create.mockResolvedValue(createdUsage);
 
       const result = await service.recordUsage(
@@ -89,6 +105,11 @@ describe('UsageService', () => {
 
     it('should record compute usage with metadata', async () => {
       const customer = { id: 'cust-123', userId: 'user-123' };
+      const subscription = {
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      };
       const metadata = { functionName: 'test-function', invocations: 1000 };
       const createdUsage = {
         id: 'usage-789',
@@ -97,6 +118,7 @@ describe('UsageService', () => {
       };
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
+      mockPrisma.subscription.findFirst.mockResolvedValue(subscription);
       mockPrisma.usageRecord.create.mockResolvedValue(createdUsage);
 
       const result = await service.recordUsage(
@@ -136,17 +158,16 @@ describe('UsageService', () => {
         requestsPer1000Cents: 1,
       };
 
-      const usageRecords = [
-        { type: 'STORAGE', quantity: 100, unit: 'GB' },
-        { type: 'STORAGE', quantity: 50, unit: 'GB' },
-        { type: 'BANDWIDTH', quantity: 200, unit: 'GB' },
-        { type: 'COMPUTE', quantity: 10, unit: 'hours' },
-        { type: 'REQUESTS', quantity: 5000, unit: 'count' },
+      const groupedUsage = [
+        { type: 'STORAGE', _sum: { quantity: 150, amount: 1500 } },
+        { type: 'BANDWIDTH', _sum: { quantity: 200, amount: 1000 } },
+        { type: 'COMPUTE', _sum: { quantity: 10, amount: 200 } },
+        { type: 'REQUESTS', _sum: { quantity: 5000, amount: 5 } },
       ];
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
-      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue(groupedUsage);
 
       const periodStart = new Date('2025-01-01');
       const periodEnd = new Date('2025-01-31');
@@ -176,13 +197,13 @@ describe('UsageService', () => {
 
     it('should use default billing settings if none configured', async () => {
       const customer = { id: 'cust-123', userId: 'user-123' };
-      const usageRecords = [
-        { type: 'STORAGE', quantity: 100, unit: 'GB' },
+      const groupedUsage = [
+        { type: 'STORAGE', _sum: { quantity: 100, amount: 1000 } },
       ];
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(null);
-      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue(groupedUsage);
 
       const periodStart = new Date('2025-01-01');
       const periodEnd = new Date('2025-01-31');
@@ -205,7 +226,7 @@ describe('UsageService', () => {
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
-      mockPrisma.usageRecord.findMany.mockResolvedValue([]);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue([]);
 
       const periodStart = new Date('2025-01-01');
       const periodEnd = new Date('2025-01-31');
@@ -225,6 +246,11 @@ describe('UsageService', () => {
   describe('getCurrentUsage', () => {
     it('should get usage for current billing period', async () => {
       const customer = { id: 'cust-123', userId: 'user-123' };
+      const subscription = {
+        id: 'sub-123',
+        currentPeriodStart: new Date('2025-01-01'),
+        currentPeriodEnd: new Date('2025-01-31'),
+      };
       const billingSettings = {
         storagePerGBCents: 10,
         bandwidthPerGBCents: 5,
@@ -232,14 +258,15 @@ describe('UsageService', () => {
         requestsPer1000Cents: 1,
       };
 
-      const usageRecords = [
-        { type: 'STORAGE', quantity: 50, unit: 'GB' },
-        { type: 'BANDWIDTH', quantity: 100, unit: 'GB' },
+      const groupedUsage = [
+        { type: 'STORAGE', _sum: { quantity: 50, amount: 500 } },
+        { type: 'BANDWIDTH', _sum: { quantity: 100, amount: 500 } },
       ];
 
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
+      mockPrisma.subscription.findFirst.mockResolvedValue(subscription);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
-      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue(groupedUsage);
 
       const result = await service.getCurrentUsage('user-123');
 

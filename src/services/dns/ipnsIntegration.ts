@@ -70,7 +70,7 @@ export async function publishIpnsRecord(
     await prisma.iPNSRecord.upsert({
       where: {
         siteId: domain.siteId
-      },
+      } as any, // Type assertion for unique constraint compatibility
       create: {
         name: ipnsKey,
         hash: cid,

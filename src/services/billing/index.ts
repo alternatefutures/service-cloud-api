@@ -11,3 +11,4 @@ export { StorageSnapshotScheduler } from './storageSnapshotScheduler.js';
 export { InvoiceScheduler } from './invoiceScheduler.js';
 export { UsageBuffer } from './usageBuffer.js';
 export { UsageAggregator } from './usageAggregator.js';
+export { DomainUsageTracker } from './domainUsageTracker.js';

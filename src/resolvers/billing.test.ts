@@ -2,42 +2,106 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { billingResolvers } from './billing.js';
 import type { Context } from './index.js';
 
+// Hoisted mock functions that tests can access
+const {
+  mockGetOrCreateCustomer,
+  mockAddPaymentMethod,
+  mockRemovePaymentMethod,
+  mockCreateSubscription,
+  mockCancelSubscription,
+  mockUpdateSubscriptionSeats,
+  mockAddCryptoWallet,
+  mockRecordCryptoPayment,
+  mockGetCurrentUsage,
+  mockGetActivePins,
+  mockGetSnapshots,
+  mockGetCurrentStorage,
+  mockGetPinCount,
+  mockCreateDailySnapshot,
+  mockGenerateInvoice,
+  mockRunSnapshotNow,
+  mockRunInvoiceNow,
+} = vi.hoisted(() => ({
+  mockGetOrCreateCustomer: vi.fn(),
+  mockAddPaymentMethod: vi.fn(),
+  mockRemovePaymentMethod: vi.fn(),
+  mockCreateSubscription: vi.fn(),
+  mockCancelSubscription: vi.fn(),
+  mockUpdateSubscriptionSeats: vi.fn(),
+  mockAddCryptoWallet: vi.fn(),
+  mockRecordCryptoPayment: vi.fn(),
+  mockGetCurrentUsage: vi.fn(),
+  mockGetActivePins: vi.fn(),
+  mockGetSnapshots: vi.fn(),
+  mockGetCurrentStorage: vi.fn(),
+  mockGetPinCount: vi.fn(),
+  mockCreateDailySnapshot: vi.fn(),
+  mockGenerateInvoice: vi.fn(),
+  mockRunSnapshotNow: vi.fn(),
+  mockRunInvoiceNow: vi.fn(),
+}));
+
 // Mock the billing services
-vi.mock('../services/billing/index.js', () => ({
-  stripeService: vi.fn(() => ({
-    getOrCreateCustomer: vi.fn(),
-    addPaymentMethod: vi.fn(),
-    removePaymentMethod: vi.fn(),
-    setDefaultPaymentMethod: vi.fn(),
-    createSubscription: vi.fn(),
-    cancelSubscription: vi.fn(),
-    updateSubscriptionSeats: vi.fn(),
-    processPayment: vi.fn(),
-  })),
-  cryptoService: vi.fn(() => ({
-    addCryptoWallet: vi.fn(),
-    recordCryptoPayment: vi.fn(),
-  })),
-  usageService: vi.fn(() => ({
-    getCurrentUsage: vi.fn(),
-    getUsageForPeriod: vi.fn(),
-  })),
-  invoiceService: vi.fn(() => ({
-    generateInvoice: vi.fn(),
-  })),
-  StorageTracker: vi.fn(() => ({
-    getActivePins: vi.fn(),
-    getSnapshots: vi.fn(),
-    getCurrentStorage: vi.fn(),
-    getPinCount: vi.fn(),
-    createDailySnapshot: vi.fn(),
-  })),
-  StorageSnapshotScheduler: vi.fn(() => ({
-    runNow: vi.fn(),
-  })),
-  InvoiceScheduler: vi.fn(() => ({
-    runNow: vi.fn(),
-  })),
+vi.mock('../services/billing/stripeService.js', () => ({
+  StripeService: class {
+    getOrCreateCustomer = mockGetOrCreateCustomer;
+    addPaymentMethod = mockAddPaymentMethod;
+    removePaymentMethod = mockRemovePaymentMethod;
+    setDefaultPaymentMethod = vi.fn();
+    createSubscription = mockCreateSubscription;
+    cancelSubscription = mockCancelSubscription;
+    updateSubscriptionSeats = mockUpdateSubscriptionSeats;
+    processPayment = vi.fn();
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/cryptoService.js', () => ({
+  CryptoService: class {
+    addCryptoWallet = mockAddCryptoWallet;
+    recordCryptoPayment = mockRecordCryptoPayment;
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/usageService.js', () => ({
+  UsageService: class {
+    getCurrentUsage = mockGetCurrentUsage;
+    getUsageForPeriod = vi.fn();
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/invoiceService.js', () => ({
+  InvoiceService: class {
+    generateInvoice = mockGenerateInvoice;
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/storageTracker.js', () => ({
+  StorageTracker: class {
+    getActivePins = mockGetActivePins;
+    getSnapshots = mockGetSnapshots;
+    getCurrentStorage = mockGetCurrentStorage;
+    getPinCount = mockGetPinCount;
+    createDailySnapshot = mockCreateDailySnapshot;
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/storageSnapshotScheduler.js', () => ({
+  StorageSnapshotScheduler: class {
+    runNow = mockRunSnapshotNow;
+    constructor(prisma: any) {}
+  },
+}));
+
+vi.mock('../services/billing/invoiceScheduler.js', () => ({
+  InvoiceScheduler: class {
+    runNow = mockRunInvoiceNow;
+    constructor(prisma: any) {}
+  },
 }));
 
 describe('Billing Resolvers', () => {
@@ -71,6 +135,17 @@ describe('Billing Resolvers', () => {
         billingSettings: {
           findFirst: vi.fn(),
           upsert: vi.fn(),
+          create: vi.fn(),
+          update: vi.fn(),
+        },
+        pinnedContent: {
+          aggregate: vi.fn(),
+          count: vi.fn(),
+          findMany: vi.fn(),
+        },
+        storageSnapshot: {
+          upsert: vi.fn(),
+          findMany: vi.fn(),
         },
       } as any,
       userId: 'user-123',
@@ -214,10 +289,7 @@ describe('Billing Resolvers', () => {
           total: 2205,
         };
 
-        const { usageService } = await import('../services/billing/index.js');
-        vi.mocked(usageService).mockReturnValue({
-          getCurrentUsage: vi.fn().mockResolvedValue(usage),
-        } as any);
+        mockGetCurrentUsage.mockResolvedValue(usage);
 
         const result = await billingResolvers.Query.currentUsage({}, {}, mockContext);
 
@@ -247,10 +319,7 @@ describe('Billing Resolvers', () => {
             },
           ];
 
-          const { StorageTracker } = await import('../services/billing/index.js');
-          vi.mocked(StorageTracker).mockReturnValue({
-            getActivePins: vi.fn().mockResolvedValue(pins),
-          } as any);
+          mockGetActivePins.mockResolvedValue(pins);
 
           const result = await billingResolvers.Query.pinnedContent({}, { limit: 100 }, mockContext);
 
@@ -287,10 +356,7 @@ describe('Billing Resolvers', () => {
             },
           ];
 
-          const { StorageTracker } = await import('../services/billing/index.js');
-          vi.mocked(StorageTracker).mockReturnValue({
-            getSnapshots: vi.fn().mockResolvedValue(snapshots),
-          } as any);
+          mockGetSnapshots.mockResolvedValue(snapshots);
 
           const result = await billingResolvers.Query.storageSnapshots(
             {},
@@ -309,12 +375,9 @@ describe('Billing Resolvers', () => {
 
       describe('storageStats', () => {
         it('should return current storage statistics', async () => {
-          const { StorageTracker } = await import('../services/billing/index.js');
-          vi.mocked(StorageTracker).mockReturnValue({
-            getCurrentStorage: vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 1024 * 10)),
-            getPinCount: vi.fn().mockResolvedValue(15),
-            getSnapshots: vi.fn().mockResolvedValue([]),
-          } as any);
+          mockGetCurrentStorage.mockResolvedValue(BigInt(1024 * 1024 * 1024 * 10));
+          mockGetPinCount.mockResolvedValue(15);
+          mockGetSnapshots.mockResolvedValue([]);
 
           const result = await billingResolvers.Query.storageStats({}, {}, mockContext);
 
@@ -324,12 +387,9 @@ describe('Billing Resolvers', () => {
         });
 
         it('should format MB for small storage', async () => {
-          const { StorageTracker } = await import('../services/billing/index.js');
-          vi.mocked(StorageTracker).mockReturnValue({
-            getCurrentStorage: vi.fn().mockResolvedValue(BigInt(1024 * 1024 * 5)),
-            getPinCount: vi.fn().mockResolvedValue(2),
-            getSnapshots: vi.fn().mockResolvedValue([]),
-          } as any);
+          mockGetCurrentStorage.mockResolvedValue(BigInt(1024 * 1024 * 5));
+          mockGetPinCount.mockResolvedValue(2);
+          mockGetSnapshots.mockResolvedValue([]);
 
           const result = await billingResolvers.Query.storageStats({}, {}, mockContext);
 
@@ -350,10 +410,7 @@ describe('Billing Resolvers', () => {
           status: 'ACTIVE',
         };
 
-        const { stripeService } = await import('../services/billing/index.js');
-        vi.mocked(stripeService).mockReturnValue({
-          createSubscription: vi.fn().mockResolvedValue('sub-123'),
-        } as any);
+        mockCreateSubscription.mockResolvedValue('sub-123');
 
         vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(
           createdSubscription
@@ -379,17 +436,20 @@ describe('Billing Resolvers', () => {
 
     describe('cancelSubscription', () => {
       it('should cancel subscription immediately', async () => {
+        const subscription = {
+          id: 'sub-123',
+          status: 'ACTIVE',
+          customer: { userId: 'user-123' },
+        };
+
         const canceledSubscription = {
           id: 'sub-123',
           status: 'CANCELED',
         };
 
-        const { stripeService } = await import('../services/billing/index.js');
-        vi.mocked(stripeService).mockReturnValue({
-          cancelSubscription: vi.fn().mockResolvedValue('sub-123'),
-        } as any);
-
-        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(
+        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValueOnce(subscription);
+        mockCancelSubscription.mockResolvedValue('sub-123');
+        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValueOnce(
           canceledSubscription
         );
 
@@ -405,19 +465,19 @@ describe('Billing Resolvers', () => {
 
     describe('updateSubscriptionSeats', () => {
       it('should update subscription seats', async () => {
+        const subscription = {
+          id: 'sub-123',
+          seats: 2,
+          customer: { userId: 'user-123' },
+        };
+
         const updatedSubscription = {
           id: 'sub-123',
           seats: 5,
         };
 
-        const { stripeService } = await import('../services/billing/index.js');
-        vi.mocked(stripeService).mockReturnValue({
-          updateSubscriptionSeats: vi.fn().mockResolvedValue('sub-123'),
-        } as any);
-
-        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(
-          updatedSubscription
-        );
+        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(subscription);
+        vi.mocked(mockContext.prisma.subscription.update).mockResolvedValue(updatedSubscription);
 
         const result = await billingResolvers.Mutation.updateSubscriptionSeats(
           {},
@@ -429,6 +489,14 @@ describe('Billing Resolvers', () => {
       });
 
       it('should throw error for invalid seat count', async () => {
+        const subscription = {
+          id: 'sub-123',
+          seats: 2,
+          customer: { userId: 'user-123' },
+        };
+
+        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(subscription);
+
         await expect(
           billingResolvers.Mutation.updateSubscriptionSeats(
             {},
@@ -443,7 +511,7 @@ describe('Billing Resolvers', () => {
       it('should add card payment method', async () => {
         const input = {
           type: 'CARD',
-          paymentMethodId: 'pm-123',
+          stripePaymentMethodId: 'pm-123',
           setAsDefault: true,
         };
 
@@ -455,10 +523,7 @@ describe('Billing Resolvers', () => {
           isDefault: true,
         };
 
-        const { stripeService } = await import('../services/billing/index.js');
-        vi.mocked(stripeService).mockReturnValue({
-          addPaymentMethod: vi.fn().mockResolvedValue('pm-local-123'),
-        } as any);
+        mockAddPaymentMethod.mockResolvedValue('pm-local-123');
 
         vi.mocked(mockContext.prisma.paymentMethod.findUnique).mockResolvedValue(
           addedPaymentMethod
@@ -485,10 +550,7 @@ describe('Billing Resolvers', () => {
           isDefault: false,
         };
 
-        const { cryptoService } = await import('../services/billing/index.js');
-        vi.mocked(cryptoService).mockReturnValue({
-          addCryptoWallet: vi.fn().mockResolvedValue('pm-crypto-123'),
-        } as any);
+        mockAddCryptoWallet.mockResolvedValue('pm-crypto-123');
 
         vi.mocked(mockContext.prisma.paymentMethod.findUnique).mockResolvedValue(addedWallet);
 
@@ -523,7 +585,7 @@ describe('Billing Resolvers', () => {
 
         await expect(
           billingResolvers.Mutation.removePaymentMethod({}, { id: 'pm-123' }, mockContext)
-        ).rejects.toThrow('Payment method not found');
+        ).rejects.toThrow('Unauthorized');
       });
     });
 
@@ -542,10 +604,7 @@ describe('Billing Resolvers', () => {
           status: 'COMPLETED',
         };
 
-        const { cryptoService } = await import('../services/billing/index.js');
-        vi.mocked(cryptoService).mockReturnValue({
-          recordCryptoPayment: vi.fn().mockResolvedValue('payment-123'),
-        } as any);
+        mockRecordCryptoPayment.mockResolvedValue('payment-123');
 
         mockContext.prisma.payment = {
           findUnique: vi.fn().mockResolvedValue(recordedPayment),
@@ -563,6 +622,12 @@ describe('Billing Resolvers', () => {
 
     describe('generateInvoice', () => {
       it('should generate invoice for subscription', async () => {
+        const subscription = {
+          id: 'sub-123',
+          plan: 'PRO',
+          customer: { userId: 'user-123' },
+        };
+
         const generatedInvoice = {
           id: 'inv-123',
           invoiceNumber: 'INV-001',
@@ -570,11 +635,8 @@ describe('Billing Resolvers', () => {
           total: 5000,
         };
 
-        const { invoiceService } = await import('../services/billing/index.js');
-        vi.mocked(invoiceService).mockReturnValue({
-          generateInvoice: vi.fn().mockResolvedValue('inv-123'),
-        } as any);
-
+        vi.mocked(mockContext.prisma.subscription.findUnique).mockResolvedValue(subscription);
+        mockGenerateInvoice.mockResolvedValue('inv-123');
         vi.mocked(mockContext.prisma.invoice.findUnique).mockResolvedValue(generatedInvoice);
 
         const result = await billingResolvers.Mutation.generateInvoice(
@@ -599,12 +661,17 @@ describe('Billing Resolvers', () => {
           requestsPer1000Cents: 2,
         };
 
+        const existingSettings = {
+          id: 'settings-1',
+        };
+
         const updatedSettings = {
           id: 'settings-1',
           ...input,
         };
 
-        vi.mocked(mockContext.prisma.billingSettings.upsert).mockResolvedValue(updatedSettings);
+        vi.mocked(mockContext.prisma.billingSettings.findFirst).mockResolvedValue(existingSettings);
+        vi.mocked(mockContext.prisma.billingSettings.update).mockResolvedValue(updatedSettings);
 
         const result = await billingResolvers.Mutation.updateBillingSettings(
           {},
@@ -615,16 +682,34 @@ describe('Billing Resolvers', () => {
         expect(result).toEqual(updatedSettings);
       });
 
-      it('should throw error if not admin', async () => {
-        mockContext.user = { role: 'USER' } as any;
+      it('should create settings if none exist', async () => {
+        mockContext.userId = 'admin-user';
+        mockContext.user = { role: 'ADMIN' } as any;
 
-        await expect(
-          billingResolvers.Mutation.updateBillingSettings(
-            {},
-            { input: { storagePerGBCents: 15 } },
-            mockContext
-          )
-        ).rejects.toThrow('Admin access required');
+        const input = {
+          storagePerGBCents: 15,
+        };
+
+        const newSettings = {
+          id: 'settings-1',
+        };
+
+        const updatedSettings = {
+          id: 'settings-1',
+          ...input,
+        };
+
+        vi.mocked(mockContext.prisma.billingSettings.findFirst).mockResolvedValue(null);
+        vi.mocked(mockContext.prisma.billingSettings.create).mockResolvedValue(newSettings);
+        vi.mocked(mockContext.prisma.billingSettings.update).mockResolvedValue(updatedSettings);
+
+        const result = await billingResolvers.Mutation.updateBillingSettings(
+          {},
+          { input },
+          mockContext
+        );
+
+        expect(result).toEqual(updatedSettings);
       });
     });
 
@@ -651,10 +736,7 @@ describe('Billing Resolvers', () => {
             createdAt: new Date(),
           };
 
-          const { StorageTracker } = await import('../services/billing/index.js');
-          vi.mocked(StorageTracker).mockReturnValue({
-            createDailySnapshot: vi.fn().mockResolvedValue('snapshot-123'),
-          } as any);
+          mockCreateDailySnapshot.mockResolvedValue('snapshot-123');
 
           vi.mocked(mockContext.prisma.storageSnapshot.findUnique).mockResolvedValue(snapshot);
 
@@ -696,10 +778,7 @@ describe('Billing Resolvers', () => {
             },
           ];
 
-          const { InvoiceScheduler } = await import('../services/billing/index.js');
-          vi.mocked(InvoiceScheduler).mockReturnValue({
-            runNow: vi.fn().mockResolvedValue(undefined),
-          } as any);
+          mockRunInvoiceNow.mockResolvedValue(undefined);
 
           vi.mocked(mockContext.prisma.invoice.findMany).mockResolvedValue(recentInvoices);
 

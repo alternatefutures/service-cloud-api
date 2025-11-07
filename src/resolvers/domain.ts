@@ -15,6 +15,41 @@ import {
   updateIpnsRecord
 } from '../services/dns';
 import { getSslCertificateStatus, renewSslCertificate as renewSsl } from '../jobs/sslRenewal';
+import { DomainUsageTracker } from '../services/billing/domainUsageTracker';
+import type { PrismaClient } from '@prisma/client';
+
+/**
+ * Track domain usage asynchronously without blocking the main operation
+ * Returns a promise that can be awaited if needed, but won't throw to parent
+ */
+async function trackDomainUsageAsync(
+  prisma: PrismaClient,
+  userId: string,
+  trackingFn: (tracker: DomainUsageTracker, customer: any, subscription: any) => Promise<void>
+): Promise<void> {
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { userId },
+      include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
+    });
+
+    if (!customer || customer.subscriptions.length === 0) {
+      // No active subscription, skip tracking
+      return;
+    }
+
+    const subscription = customer.subscriptions[0];
+    const domainUsageTracker = new DomainUsageTracker(prisma);
+
+    await trackingFn(domainUsageTracker, customer, subscription);
+  } catch (error) {
+    // Log error but don't propagate to avoid blocking domain operations
+    console.error('[Domain Usage Tracking]', error instanceof Error ? error.message : 'Unknown error', {
+      userId,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
 
 export const domainQueries = {
   /**
@@ -165,12 +200,26 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this site');
     }
 
-    return await createCustomDomain({
+    // Create domain
+    const domain = await createCustomDomain({
       hostname: input.hostname,
       siteId: input.siteId,
-      domainType: input.domainType as any,
+      domainType: input.domainType as 'WEB2' | 'ARNS' | 'ENS' | 'IPNS' | undefined,
       verificationMethod: input.verificationMethod
     });
+
+    // Track usage asynchronously (fire-and-forget) to avoid blocking domain creation
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackDomainCreation({
+        customerId: customer.id,
+        domainId: domain.id,
+        hostname: input.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+      });
+    }).catch(() => {}); // Fire and forget
+
+    return domain;
   },
 
   /**
@@ -192,7 +241,22 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this domain');
     }
 
-    return await verifyDomainOwnership(domainId);
+    const verificationResult = await verifyDomainOwnership(domainId);
+
+    // Track verification attempt asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackDomainVerification({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        verificationMethod: (domain.txtVerificationToken ? 'TXT' : domain.expectedCname ? 'CNAME' : 'A') as 'TXT' | 'CNAME' | 'A',
+        success: verificationResult,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+      });
+    }).catch(() => {}); // Fire and forget
+
+    return verificationResult;
   },
 
   /**
@@ -219,6 +283,18 @@ export const domainMutations = {
     }
 
     await provisionSslCertificate(domainId, email);
+
+    // Track SSL provisioning asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackSslProvisioning({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        isRenewal: false,
+      });
+    }).catch(() => {}); // Fire and forget
 
     // Return updated domain
     return await prisma.domain.findUnique({
@@ -440,6 +516,18 @@ export const domainMutations = {
     }
 
     await renewSsl(domainId);
+
+    // Track SSL renewal asynchronously
+    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
+      await tracker.trackSslProvisioning({
+        customerId: customer.id,
+        domainId,
+        hostname: domain.hostname,
+        periodStart: subscription.currentPeriodStart,
+        periodEnd: subscription.currentPeriodEnd,
+        isRenewal: true,
+      });
+    }).catch(() => {}); // Fire and forget
 
     return await prisma.domain.findUnique({ where: { id: domainId } });
   }

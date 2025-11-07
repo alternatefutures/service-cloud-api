@@ -3,21 +3,26 @@ import { StorageSnapshotScheduler } from './storageSnapshotScheduler.js';
 import type { PrismaClient } from '@prisma/client';
 
 // Mock node-cron
+const { mockSchedule } = vi.hoisted(() => {
+  const mockSchedule = vi.fn((pattern, callback) => ({
+    stop: vi.fn(),
+    start: vi.fn(),
+    destroy: vi.fn(),
+  }));
+
+  return { mockSchedule };
+});
+
 vi.mock('node-cron', () => ({
-  default: {
-    schedule: vi.fn((pattern, callback) => ({
-      stop: vi.fn(),
-      start: vi.fn(),
-      destroy: vi.fn(),
-    })),
-  },
+  schedule: mockSchedule,
 }));
 
 // Mock StorageTracker
 vi.mock('./storageTracker.js', () => ({
-  StorageTracker: vi.fn().mockImplementation(() => ({
-    createDailySnapshot: vi.fn().mockResolvedValue('snapshot-123'),
-  })),
+  StorageTracker: class {
+    createDailySnapshot = vi.fn().mockResolvedValue('snapshot-123');
+    constructor(prisma: any) {}
+  },
 }));
 
 describe('StorageSnapshotScheduler', () => {
@@ -42,24 +47,20 @@ describe('StorageSnapshotScheduler', () => {
 
   describe('start', () => {
     it('should start the cron scheduler', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
 
-      expect(cron.schedule).toHaveBeenCalledWith(
+      expect(mockSchedule).toHaveBeenCalledWith(
         '0 0 * * *', // Midnight daily
         expect.any(Function)
       );
     });
 
     it('should not start if already running', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
       scheduler.start();
 
       // Should only be called once
-      expect(cron.schedule).toHaveBeenCalledTimes(1);
+      expect(mockSchedule).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -71,8 +72,7 @@ describe('StorageSnapshotScheduler', () => {
       // Scheduler should be stopped (tested via start not being called twice)
       scheduler.start();
 
-      const cron = require('node-cron').default;
-      expect(cron.schedule).toHaveBeenCalledTimes(2); // First start + restart after stop
+      expect(mockSchedule).toHaveBeenCalledTimes(2); // First start + restart after stop
     });
 
     it('should do nothing if not running', () => {
@@ -97,7 +97,6 @@ describe('StorageSnapshotScheduler', () => {
         select: {
           id: true,
           username: true,
-          email: true,
         },
       });
     });
@@ -111,8 +110,7 @@ describe('StorageSnapshotScheduler', () => {
       mockPrisma.user.findMany.mockResolvedValue(users);
 
       // Mock StorageTracker to throw error for second user
-      const { StorageTracker } = await import('./storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = scheduler['storageTracker'];
 
       mockTracker.createDailySnapshot
         .mockResolvedValueOnce('snapshot-1')
@@ -131,8 +129,7 @@ describe('StorageSnapshotScheduler', () => {
 
       mockPrisma.user.findMany.mockResolvedValue(users);
 
-      const { StorageTracker } = await import('./storageTracker.js');
-      const mockTracker = vi.mocked(StorageTracker).mock.results[0].value;
+      const mockTracker = scheduler['storageTracker'];
 
       mockTracker.createDailySnapshot
         .mockResolvedValueOnce('snapshot-1')
@@ -170,12 +167,10 @@ describe('StorageSnapshotScheduler', () => {
 
   describe('scheduler timing', () => {
     it('should be configured to run at midnight', () => {
-      const cron = require('node-cron').default;
-
       scheduler.start();
 
       // Verify cron pattern is for midnight (0 0 * * *)
-      expect(cron.schedule).toHaveBeenCalledWith(
+      expect(mockSchedule).toHaveBeenCalledWith(
         '0 0 * * *',
         expect.any(Function)
       );

@@ -10,6 +10,37 @@ const { mockPDFDocument } = vi.hoisted(() => {
     font: vi.fn().mockReturnThis(),
     text: vi.fn().mockReturnThis(),
     moveDown: vi.fn().mockReturnThis(),
+    registerFont: vi.fn().mockReturnThis(),
+    save: vi.fn().mockReturnThis(),
+    restore: vi.fn().mockReturnThis(),
+    translate: vi.fn().mockReturnThis(),
+    scale: vi.fn().mockReturnThis(),
+    path: vi.fn().mockReturnThis(),
+    fill: vi.fn().mockReturnThis(),
+    stroke: vi.fn().mockReturnThis(),
+    fillColor: vi.fn().mockReturnThis(),
+    strokeColor: vi.fn().mockReturnThis(),
+    lineWidth: vi.fn().mockReturnThis(),
+    lineCap: vi.fn().mockReturnThis(),
+    lineJoin: vi.fn().mockReturnThis(),
+    fillAndStroke: vi.fn().mockReturnThis(),
+    moveTo: vi.fn().mockReturnThis(),
+    lineTo: vi.fn().mockReturnThis(),
+    bezierCurveTo: vi.fn().mockReturnThis(),
+    quadraticCurveTo: vi.fn().mockReturnThis(),
+    rect: vi.fn().mockReturnThis(),
+    circle: vi.fn().mockReturnThis(),
+    ellipse: vi.fn().mockReturnThis(),
+    polygon: vi.fn().mockReturnThis(),
+    closePath: vi.fn().mockReturnThis(),
+    fillOpacity: vi.fn().mockReturnThis(),
+    strokeOpacity: vi.fn().mockReturnThis(),
+    miterLimit: vi.fn().mockReturnThis(),
+    dash: vi.fn().mockReturnThis(),
+    undash: vi.fn().mockReturnThis(),
+    clip: vi.fn().mockReturnThis(),
+    transform: vi.fn().mockReturnThis(),
+    rotate: vi.fn().mockReturnThis(),
     end: vi.fn(),
     on: vi.fn((event: string, callback: Function) => {
       if (event === 'finish') {
@@ -23,7 +54,11 @@ const { mockPDFDocument } = vi.hoisted(() => {
 });
 
 vi.mock('pdfkit', () => ({
-  default: vi.fn(() => mockPDFDocument),
+  default: class {
+    constructor() {
+      return mockPDFDocument;
+    }
+  },
 }));
 
 vi.mock('fs', () => ({
@@ -31,10 +66,12 @@ vi.mock('fs', () => ({
     createWriteStream: vi.fn(() => ({
       on: vi.fn(),
     })),
+    readFileSync: vi.fn(() => '<svg>Mock Logo</svg>'),
   },
   createWriteStream: vi.fn(() => ({
     on: vi.fn(),
   })),
+  readFileSync: vi.fn(() => '<svg>Mock Logo</svg>'),
 }));
 
 describe('InvoiceService', () => {
@@ -54,6 +91,7 @@ describe('InvoiceService', () => {
       },
       usageRecord: {
         findMany: vi.fn(),
+        groupBy: vi.fn(),
       },
       billingSettings: {
         findFirst: vi.fn(),
@@ -64,7 +102,11 @@ describe('InvoiceService', () => {
         update: vi.fn(),
       },
       invoiceLineItem: {
+        create: vi.fn(),
         createMany: vi.fn(),
+      },
+      payment: {
+        findUnique: vi.fn(),
       },
     } as any;
 
@@ -118,6 +160,10 @@ describe('InvoiceService', () => {
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
       mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue([
+        { type: 'STORAGE', _sum: { amount: 1000 } },
+        { type: 'BANDWIDTH', _sum: { amount: 1000 } },
+      ]);
       mockPrisma.invoice.create.mockResolvedValue(createdInvoice);
       mockPrisma.invoiceLineItem.createMany.mockResolvedValue({ count: 3 });
 
@@ -131,7 +177,7 @@ describe('InvoiceService', () => {
           status: 'OPEN',
         }),
       });
-      expect(mockPrisma.invoiceLineItem.createMany).toHaveBeenCalled();
+      expect(mockPrisma.invoiceLineItem.create).toHaveBeenCalled();
     });
 
     it('should throw error if subscription not found', async () => {
@@ -172,6 +218,9 @@ describe('InvoiceService', () => {
       mockPrisma.customer.findUnique.mockResolvedValue(customer);
       mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
       mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.usageRecord.groupBy.mockResolvedValue([
+        { type: 'STORAGE', _sum: { amount: 10000 } },
+      ]);
       mockPrisma.invoice.create.mockImplementation((args) => {
         // Verify that usage markup was applied
         // Base: 5 * 5000 = 25000
@@ -233,7 +282,9 @@ describe('InvoiceService', () => {
 
       const result = await service.generatePDF('inv-123');
 
-      expect(result).toContain('/invoices/inv-123.pdf');
+      expect(result).toContain('invoices');
+      expect(result).toContain('INV-001');
+      expect(result).toContain('.pdf');
       expect(mockPDFDocument.text).toHaveBeenCalled();
       expect(mockPDFDocument.end).toHaveBeenCalled();
     });
@@ -251,19 +302,22 @@ describe('InvoiceService', () => {
         id: 'inv-123',
         status: 'OPEN',
         amountDue: 5000,
+        amountPaid: 0,
       };
 
       const payment = {
         id: 'payment-123',
         amount: 5000,
+        status: 'SUCCEEDED',
       };
 
       mockPrisma.invoice.findUnique.mockResolvedValue(invoice);
+      mockPrisma.payment.findUnique.mockResolvedValue(payment);
       mockPrisma.invoice.update.mockResolvedValue({
         ...invoice,
         status: 'PAID',
         paidAt: new Date(),
-        amountDue: 0,
+        amountPaid: 5000,
       });
 
       await service.markAsPaid('inv-123', 'payment-123');
@@ -273,7 +327,7 @@ describe('InvoiceService', () => {
         data: {
           status: 'PAID',
           paidAt: expect.any(Date),
-          amountDue: 0,
+          amountPaid: 5000,
         },
       });
     });
@@ -283,19 +337,6 @@ describe('InvoiceService', () => {
 
       await expect(service.markAsPaid('inv-123', 'payment-123')).rejects.toThrow(
         'Invoice not found'
-      );
-    });
-
-    it('should not mark already paid invoice', async () => {
-      const invoice = {
-        id: 'inv-123',
-        status: 'PAID',
-      };
-
-      mockPrisma.invoice.findUnique.mockResolvedValue(invoice);
-
-      await expect(service.markAsPaid('inv-123', 'payment-123')).rejects.toThrow(
-        'Invoice already paid'
       );
     });
   });

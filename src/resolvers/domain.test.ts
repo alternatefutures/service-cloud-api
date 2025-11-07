@@ -24,7 +24,15 @@ const mockContext: Context = {
     },
     site: {
       findUnique: vi.fn()
-    }
+    },
+    customer: {
+      findUnique: vi.fn()
+    },
+    $transaction: vi.fn(async (callback) => {
+      // Execute the callback with the mock prisma as the transaction
+      const result = await callback(mockContext.prisma);
+      return result;
+    })
   } as any
 };
 

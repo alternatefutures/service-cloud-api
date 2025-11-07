@@ -10,6 +10,7 @@ import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHe
 import { chatResolvers } from './chat.js';
 import { billingResolvers } from './billing.js';
 import { domainQueries, domainMutations } from './domain.js';
+import { authQueries, authMutations } from './auth.js';
 import type { Context } from './types.js';
 
 export type { Context };
@@ -262,6 +263,9 @@ export const resolvers = {
 
     // Billing queries (from billing resolvers)
     ...billingResolvers.Query,
+
+    // Auth queries (from auth resolvers)
+    ...authQueries,
   },
 
   Mutation: {
@@ -462,6 +466,9 @@ export const resolvers = {
 
     // Billing mutations (from billing resolvers)
     ...billingResolvers.Mutation,
+
+    // Auth mutations (from auth resolvers)
+    ...authMutations,
   },
 
   // Field resolvers

@@ -168,7 +168,7 @@ export async function getArnsRecord(arnsName: string, config: ArnsConfig): Promi
       include: { site: { include: { deployments: { take: 1, orderBy: { createdAt: 'desc' } } } } }
     });
 
-    if (!domain || !domain.arnsTransactionId) {
+    if (!domain || !domain.arnsTransactionId || !domain.arnsName) {
       return null;
     }
 

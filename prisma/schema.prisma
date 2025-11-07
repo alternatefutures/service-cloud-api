@@ -49,8 +49,10 @@ model PersonalAccessToken {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  // Performance indices
   @@index([userId])
-  @@index([token])
+  @@index([userId, createdAt(sort: Desc)]) // Efficient listing with sorting (most recent first)
+  @@index([expiresAt]) // For expired token cleanup job
 }
 
 // ============================================

@@ -392,6 +392,10 @@ export const billingResolvers = {
         throw new GraphQLError('Unauthorized');
       }
 
+      if (seats < 1) {
+        throw new GraphQLError('Seats must be at least 1');
+      }
+
       // Update seats
       return context.prisma.subscription.update({
         where: { id },

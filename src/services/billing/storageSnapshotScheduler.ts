@@ -5,7 +5,7 @@
  * Runs daily at midnight
  */
 
-import cron from 'node-cron';
+import * as cron from 'node-cron';
 import type { PrismaClient } from '@prisma/client';
 import { StorageTracker } from './storageTracker.js';
 
