@@ -1,10 +1,30 @@
 # AlternateFutures Backend - Deployment Guide
 
-Complete guide to deploying the AlternateFutures GraphQL backend and achieving full dogfooding.
+Complete guide to deploying the AlternateFutures GraphQL backend to decentralized infrastructure.
+
+**Recommended:** Deploy to Akash Network for 60-85% cost savings over traditional cloud providers.
+
+**Environment Variables:** Stored in GitHub Secrets for automated CI/CD deployments.
 
 ---
 
-## Phase 1: Initial Deployment to Railway ⭐
+## Deployment Options
+
+### Option 1: Akash Network (Recommended) ⭐
+
+Deploy to decentralized compute infrastructure.
+
+**Benefits:**
+- 60-85% cost savings (~$21-32/month vs $60-140/month)
+- Decentralized and censorship-resistant
+- Self-hosted IPFS included
+- Complete infrastructure sovereignty
+
+**See [AKASH_DEPLOYMENT.md](AKASH_DEPLOYMENT.md) for complete step-by-step instructions.**
+
+### Option 2: Railway (Backup Alternative)
+
+Traditional cloud deployment for rapid prototyping or as a backup option.
 
 ### Quick Start: Automated Deployment
 
@@ -107,7 +127,7 @@ The `railway.json` configuration automatically runs:
 
 ---
 
-## Phase 2: Configure DNS on Namecheap
+## DNS Configuration (All Deployment Options)
 
 ### Step 1: Login to Namecheap
 
@@ -115,15 +135,21 @@ The `railway.json` configuration automatically runs:
 2. Login to your account
 3. Go to Dashboard → Domain List → `alternatefutures.ai` → Manage
 
-### Step 2: Add CNAME Record
+### Step 2: Add DNS Record
 
 In **Advanced DNS** settings:
 
+**For Akash Network:**
+| Type  | Host | Value | TTL |
+|-------|------|-------|-----|
+| CNAME | api  | <your-akash-uri> | Automatic |
+
+**For Railway:**
 | Type  | Host | Value | TTL |
 |-------|------|-------|-----|
 | CNAME | api  | alternatefutures-backend-production.up.railway.app. | Automatic |
 
-**Important**: Add a trailing dot (`.`) at the end of the Railway URL
+**Important**: Add a trailing dot (`.`) at the end of the URL
 
 ### Step 3: Wait for DNS Propagation
 
@@ -142,7 +168,7 @@ dig api.alternatefutures.ai
 
 ---
 
-## Phase 3: Test the Backend
+## Testing the Backend
 
 ### Test 1: Health Check
 
@@ -208,9 +234,9 @@ af functions list
 
 ---
 
-## Phase 4: Dogfooding - Deploy Backend as AF Function 🚀
+## Advanced: Dogfooding - Deploy Backend as AF Function 🚀
 
-Once Phase 1-3 are working, let's eat our own dog food!
+Once your backend is deployed and working, you can deploy it as an Alternate Futures Function to achieve true self-hosting!
 
 ### Step 1: Package Backend for Deployment
 
@@ -345,7 +371,9 @@ cat /Users/wonderwomancode/Projects/fleek/cloud-cli/.env
 
 ---
 
-## Phase 5: Deploy to Akash Network with Self-Hosted IPFS ⭐
+## Akash Network Deployment (Detailed Guide) ⭐
+
+**For the most up-to-date and complete Akash deployment instructions, see [AKASH_DEPLOYMENT.md](AKASH_DEPLOYMENT.md).**
 
 Complete decentralization: deploy the backend, database, and IPFS node to Akash Network.
 

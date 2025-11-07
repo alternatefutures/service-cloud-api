@@ -1,8 +1,12 @@
-# AlternateFutures GraphQL Backend
+# Alternate Futures - GraphQL Backend
 
-GraphQL API server for the AlternateFutures platform - a serverless functions platform that runs on itself.
+**Decentralized serverless platform that runs on itself**
 
-## 🚀 Quick Start
+A GraphQL API server powering the Alternate Futures platform - serverless functions infrastructure built with GraphQL Yoga, Prisma, and PostgreSQL. Deploy your backend to distributed compute networks like Akash while managing everything through a unified API.
+
+---
+
+## Quick Start
 
 ```bash
 # Install dependencies
@@ -21,30 +25,41 @@ npm run db:seed
 npm run dev
 ```
 
-Server runs at: **http://localhost:4000/graphql** 🎉
+Server runs at: **http://localhost:4000/graphql**
 
-## 📋 Prerequisites
+## Prerequisites
 
 - Node.js 18+
-- PostgreSQL (local or Railway)
+- PostgreSQL (local or managed)
 - Redis (required for usage buffering)
 - pnpm (recommended)
 
-## 🌐 Deploy to Railway
+## Deployment
 
-See [../PLATFORM_SETUP.md](../PLATFORM_SETUP.md) for complete deployment guide.
+### Akash Network (Recommended)
 
-**Quick deploy:**
+Deploy to decentralized compute infrastructure for 60-85% cost savings.
+
+**Cost:** ~$18-27/month vs $50-130/month on traditional cloud
+**Guide:** See [AKASH_DEPLOYMENT.md](AKASH_DEPLOYMENT.md) for complete instructions
+
 ```bash
-railway login
-railway init
-railway add  # Select PostgreSQL
-railway service create alternatefutures-backend
-railway service alternatefutures-backend
-railway up
+# Build Docker image
+docker build -t alternatefutures/backend:latest .
+docker push alternatefutures/backend:latest
+
+# Deploy to Akash (see AKASH_DEPLOYMENT.md for detailed steps)
+akash tx deployment create deploy.yaml --from default
 ```
 
-## 🔴 Redis Setup
+**Environment Variables** are stored in **GitHub Secrets** for CI/CD deployment.
+
+### Railway (Backup Option)
+
+Traditional cloud deployment option available as backup.
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for Railway deployment instructions.
+
+## Redis Setup
 
 Redis is required for usage buffer aggregation (97% cost reduction on DB writes).
 
@@ -64,61 +79,31 @@ docker run -d -p 6379:6379 redis:alpine
 
 **Production Configuration:**
 
-For data integrity during deployments, enable persistence in your Redis config:
-
+Enable persistence for data integrity:
 ```bash
-# Option 1: RDB Snapshots (recommended)
+# RDB Snapshots (recommended)
 save 60 1  # Save every 60 seconds if 1+ keys changed
 
-# Option 2: AOF (Append-Only File) - more durable
+# AOF (Append-Only File) - more durable
 appendonly yes
 appendfsync everysec
 ```
 
 **Cloud Providers:**
-- **Railway**: Add Redis service via dashboard
-- **Upstash**: Serverless Redis with persistence
-- **Redis Cloud**: Managed Redis with automatic persistence
-- **AWS ElastiCache**: Configure snapshot retention
+- Akash Network: Include Redis in deploy.yaml
+- Railway: Add Redis service via dashboard
+- Upstash: Serverless Redis with persistence
+- AWS ElastiCache: Configure snapshot retention
 
-**Pre-Deployment Safety:**
-
-Before deployments or maintenance, manually flush the buffer:
-
-```graphql
-mutation {
-  flushUsageBuffer {
-    success
-    usersFlushed
-    duration
-    message
-  }
-}
-```
-
-Monitor buffer health:
-
-```graphql
-query {
-  usageBufferStats {
-    activeUsers
-    totalBandwidth
-    totalCompute
-    totalRequests
-    bufferHealthy
-  }
-}
-```
-
-## 🧪 Test Credentials
+## Test Credentials
 
 After seeding:
 - **Token**: `af_local_test_token_12345`
 - **Project ID**: `proj-1`
 
-## ⚙️ GitHub Actions & CI/CD
+## CI/CD & Automation
 
-This repository includes automated workflows for continuous integration and code review:
+This repository includes automated workflows for continuous integration:
 
 ### Automated Testing
 - **Runs on:** Pull requests and pushes to `main`, `staging`, `develop`
@@ -127,7 +112,7 @@ This repository includes automated workflows for continuous integration and code
 - **Build verification:** Ensures code compiles successfully
 
 ### Automated Enforcement
-- **Branch name validation:** Enforces `feature/ALT-###-description` or `feat/alt-###-description` format (case-insensitive)
+- **Branch name validation:** Enforces `feature/ALT-###-description` or `feat/alt-###-description` format
 - **PR title validation:** Requires Linear ticket number in PR title
 - **Status checks:** All checks must pass before merging
 
@@ -137,10 +122,8 @@ This repository includes automated workflows for continuous integration and code
 - Posts review comments directly on PRs
 - Identifies bugs, security issues, and suggests improvements
 
-### Setup Required
-To enable Claude Code Review, add `ANTHROPIC_API_KEY` to your repository secrets.
-
-See [.github/SETUP.md](.github/SETUP.md) for detailed configuration instructions.
+**Setup:** Add `ANTHROPIC_API_KEY` to your repository secrets.
+See [.github/SETUP.md](.github/SETUP.md) for configuration details.
 
 ### Branch Strategy
 - **`main`** - Production (protected)
@@ -148,22 +131,20 @@ See [.github/SETUP.md](.github/SETUP.md) for detailed configuration instructions
 - **`develop`** - Active development
 
 **Workflow:**
-- **Feature branches** → Merge into `develop`
-  - Naming: `feature/ALT-123-description` or `feat/alt-123-description` (based on Linear ticket)
-  - Example: `feature/ALT-456-add-webhook-support` or `feat/alt-456-add-webhook-support`
-- **Bug fixes** → Can merge directly into `staging`
-  - Naming: `fix/ALT-789-description` or `fix/alt-789-description`
-  - Example: `fix/ALT-123-auth-token-expiry`
-- **Hotfixes** → Merge directly into `main` (emergency only)
-  - Naming: `hotfix/ALT-999-description` or `hotfix/alt-999-description`
+- Feature branches → Merge into `develop`
+  - Naming: `feature/ALT-123-description` or `feat/alt-123-description`
+- Bug fixes → Can merge directly into `staging`
+  - Naming: `fix/ALT-789-description`
+- Hotfixes → Merge directly into `main` (emergency only)
+  - Naming: `hotfix/ALT-999-description`
 
-## 📚 API Documentation
+## API Documentation
 
 GraphQL Playground available at `/graphql`
 
 ### Core Features
 
-#### 🌐 Custom Domains & DNS
+#### Custom Domains & DNS
 Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 
 **Verification Methods:**
@@ -181,7 +162,7 @@ Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 - ENS (Ethereum Name System)
 - IPNS (IPFS Name System)
 
-#### 💳 Usage-Based Billing
+#### Usage-Based Billing
 - Real-time usage tracking (storage, bandwidth, compute)
 - Automatic invoice generation
 - Stripe integration
@@ -189,53 +170,40 @@ Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 - Branded invoice PDFs with company logo
 
 **Preview Invoice Template:**
-
-Generate a sample invoice PDF to preview the branding and layout:
-
 ```bash
 npm run generate:invoice
 ```
 
-This creates a test invoice with:
+Creates a sample invoice PDF with:
 - Alternate Futures logo and Instrument Sans typography
-- Sample customer data (Acme Corporation)
-- Example usage charges (bandwidth, compute, requests)
-- Professional styling matching the brand
-
-The PDF is saved to `/invoices` and opens automatically.
+- Sample customer data
+- Example usage charges
+- Professional styling
 
 **Payment Retries:**
 
-Failed payments are handled automatically via Stripe's Smart Retries feature. Configure in your Stripe Dashboard:
+Failed payments handled automatically via Stripe's Smart Retries.
+Configure in Stripe Dashboard: **Settings** → **Billing** → **Automatic collection**
 
-1. Go to **Settings** → **Billing** → **Automatic collection**
-2. Enable **Smart Retries** (recommended settings):
-   - First retry: 3 days after failure
-   - Second retry: 5 days after first retry
-   - Third retry: 7 days after second retry
-   - Final retry: 9 days after third retry
+Recommended retry schedule:
+- First retry: 3 days after failure
+- Second retry: 5 days after first retry
+- Third retry: 7 days after second retry
+- Final retry: 9 days after third retry
 
-Smart Retries automatically:
-- Retries payments at optimal times based on historical success patterns
-- Sends email notifications to customers before each retry
-- Updates your webhook with payment status changes
-- Marks subscriptions as `past_due` until payment succeeds
+All payment webhooks are handled via `/billing/webhook` endpoint.
 
-**Manual Retry:**
-
-For custom retry logic or manual intervention, use the Stripe API:
-
-```typescript
-// Retry a specific invoice
-await stripe.invoices.pay('inv_xxx');
-```
-
-All payment webhooks are automatically handled via `/billing/webhook` endpoint.
-
-#### 📦 Multi-Storage Support
+#### Multi-Storage Support
 - IPFS (self-hosted & Pinata)
 - Arweave permanent storage
 - Filecoin decentralized storage
+
+#### Personal Access Tokens (API Keys)
+- Secure token generation with rate limiting
+- 50 tokens per day limit per user
+- Maximum 500 active tokens per user
+- Automatic expired token cleanup
+- XSS prevention and input validation
 
 ### Example Mutations
 
@@ -279,53 +247,143 @@ mutation {
 }
 ```
 
-**Verify Domain:**
+**Create Personal Access Token:**
 ```graphql
 mutation {
-  verifyDomain(domainId: "domain-123")
-}
-```
-
-**Provision SSL:**
-```graphql
-mutation {
-  provisionSsl(
-    domainId: "domain-123"
-    email: "admin@example.com"
-  ) {
-    sslStatus
-    sslExpiresAt
+  createPersonalAccessToken(name: "My API Token") {
+    id
+    token
+    name
+    createdAt
   }
 }
 ```
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **GraphQL Yoga 5** - GraphQL server
 - **Prisma** - ORM
 - **PostgreSQL** - Database
+- **Redis** - Rate limiting and usage buffering
 - **TypeScript** - Language
+- **Vitest** - Testing framework
+- **Docker** - Containerization
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 src/
-├── schema/          # GraphQL schema
-├── resolvers/       # Resolvers
-├── auth/            # Authentication
-├── utils/           # Utilities
-└── index.ts         # Server entry
+├── schema/              # GraphQL schema
+├── resolvers/           # Resolvers
+│   ├── auth.ts         # Authentication
+│   ├── domain.ts       # Custom domains
+│   ├── billing.ts      # Stripe billing
+│   └── function.ts     # Functions management
+├── services/           # Business logic
+│   ├── auth/           # Token service, rate limiting
+│   ├── billing/        # Stripe integration
+│   ├── dns/            # Domain verification & SSL
+│   └── storage/        # IPFS, Arweave, Filecoin
+├── jobs/               # Background jobs
+│   ├── sslRenewal.ts  # SSL certificate renewal
+│   └── cleanupExpiredTokens.ts
+├── utils/              # Utilities
+└── index.ts            # Server entry
 
 prisma/
-└── schema.prisma    # Database schema
+└── schema.prisma       # Database schema
 ```
 
-## 🍽️ Dogfooding
+## Dogfooding
 
-This backend can be deployed as an AlternateFutures Function to run on itself!
+This backend can be deployed as an Alternate Futures Function to run on itself!
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for details.
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for details on self-hosting the platform.
 
-## 📝 License
+## Development
+
+### Code Generation
+
+Generate TypeScript types from GraphQL schema:
+```bash
+npm run generate:types
+
+# Watch mode
+npm run generate:types:watch
+```
+
+See [CODEGEN.md](CODEGEN.md) for details.
+
+### Testing
+
+```bash
+# Run all tests
+npm test
+
+# Run specific test suite
+npm test src/services/auth
+
+# Watch mode
+npm test -- --watch
+```
+
+### Database Migrations
+
+```bash
+# Push schema changes
+npm run db:push
+
+# Generate migration
+npm run db:migrate
+
+# Seed database
+npm run db:seed
+```
+
+## Related Repositories
+
+- **[CLI](https://github.com/alternatefutures/cloud-cli)** - Command-line interface
+- **[SDK](https://github.com/alternatefutures/cloud-sdk)** - Software development kit
+- **[App](https://github.com/alternatefutures/altfutures-app)** - Web application dashboard
+- **[Website](https://github.com/alternatefutures/home)** - Company website
+
+## Cost Comparison
+
+### Traditional Cloud (Railway)
+- Compute: $20/month
+- PostgreSQL: $10/month
+- Redis: $10/month
+- Pinata IPFS: $20-100/month
+- **Total**: $60-140/month
+
+### Decentralized (Akash Network)
+- Compute (API): ~$3-5/month
+- PostgreSQL: ~$5-7/month
+- Redis: ~$3-5/month
+- Self-hosted IPFS: ~$10-15/month
+- **Total**: $21-32/month
+
+**Savings**: 60-85% cost reduction
+
+## Security Features
+
+- **Rate Limiting**: Redis-based sliding window algorithm
+- **Input Validation**: XSS prevention, dangerous pattern detection
+- **Token Security**: Separated GraphQL types to prevent exposure
+- **Structured Logging**: Production-ready JSON logs for monitoring
+- **SSL/TLS**: Automatic certificate provisioning and renewal
+- **Database Transactions**: Race condition prevention
+- **Audit Logging**: Track all API key operations
+
+## License
 
 MIT
+
+---
+
+**Documentation:**
+- [Akash Deployment Guide](AKASH_DEPLOYMENT.md)
+- [General Deployment Guide](DEPLOYMENT_GUIDE.md)
+- [GraphQL Code Generation](CODEGEN.md)
+- [OpenRegistry Deployment](OPENREGISTRY_DEPLOYMENT.md)
+- [Decentralized Registry Architecture](DECENTRALIZED_REGISTRY_ARCHITECTURE.md)
