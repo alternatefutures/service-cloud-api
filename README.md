@@ -1,4 +1,8 @@
-# Alternate Futures - GraphQL Backend
+<div align="center">
+  <img src="./assets/hero-logo.svg" alt="Alternate Futures" width="600" />
+</div>
+
+# ✨ Alternate Futures - GraphQL Backend ✨
 
 **Decentralized serverless platform that runs on itself**
 
