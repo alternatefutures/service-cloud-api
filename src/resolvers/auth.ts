@@ -6,6 +6,7 @@
  */
 
 import { GraphQLError } from 'graphql';
+import jwt from 'jsonwebtoken';
 import type { Context } from './types.js';
 
 /**
@@ -25,9 +26,30 @@ function getAuthServiceUrl(): string {
 }
 
 /**
+ * Generate a short-lived JWT token for service-to-service authentication
+ * The auth service will validate this token to authenticate the backend
+ */
+function generateServiceToken(userId: string): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET not configured');
+  }
+
+  // Generate a JWT token with 5-minute expiry for service-to-service auth
+  return jwt.sign(
+    {
+      userId,
+      service: 'alternatefutures-backend',
+      type: 'service-to-service',
+    },
+    secret,
+    { expiresIn: '5m' }
+  );
+}
+
+/**
  * Make authenticated request to auth service
- * TODO: Implement proper service-to-service authentication
- * For now, this is a placeholder structure
+ * Uses JWT token for service-to-service authentication
  */
 async function authServiceRequest(
   endpoint: string,
@@ -35,22 +57,16 @@ async function authServiceRequest(
   userId: string
 ): Promise<Response> {
   const authServiceUrl = getAuthServiceUrl();
-  if (!authServiceUrl) {
-    throw new Error('AUTH_SERVICE_URL not configured');
-  }
 
-  // TODO: Add proper service-to-service authentication
-  // Options:
-  // 1. Generate JWT with userId and pass as Bearer token
-  // 2. Use internal service secret (X-Service-Secret + X-User-Id headers)
-  // For now, we'll need to implement this before enabling auth service proxy
+  // Generate JWT token for authentication
+  const token = generateServiceToken(userId);
 
   const response = await fetch(`${authServiceUrl}${endpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
       ...options.headers,
-      // TODO: Add authentication headers here
     },
   });
 
