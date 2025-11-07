@@ -124,16 +124,26 @@ describe('TokenService', () => {
 
   describe('Max Active Tokens', () => {
     it('should reject token creation after exceeding max active tokens', async () => {
-      // This test would be very slow with 500 tokens, so we'll just test the logic
-      // by mocking the count. In a real scenario, you'd need to create 500 tokens.
+      // This test would be very slow with 500 tokens, so we'll test the logic
+      // by mocking the transaction to simulate 500 existing tokens.
 
-      // Create a few tokens
+      // Create a few tokens first
       await tokenService.createToken(testUserId, 'Token 1');
       await tokenService.createToken(testUserId, 'Token 2');
 
-      // Mock the prisma count to simulate 500 existing tokens
-      const originalCount = prisma.personalAccessToken.count;
-      prisma.personalAccessToken.count = async () => 500;
+      // Mock $transaction to provide a transaction context with mocked count
+      const original$Transaction = prisma.$transaction;
+      prisma.$transaction = async (callback: any) => {
+        // Create a mock transaction context with count returning 500
+        const mockTx = {
+          ...prisma,
+          personalAccessToken: {
+            ...prisma.personalAccessToken,
+            count: async () => 500,
+          },
+        };
+        return callback(mockTx);
+      };
 
       // Should fail due to max active tokens
       await expect(tokenService.createToken(testUserId, 'Token 501')).rejects.toThrow(
@@ -148,8 +158,8 @@ describe('TokenService', () => {
         expect(error.code).toBe('MAX_TOKENS_EXCEEDED');
       }
 
-      // Restore original count
-      prisma.personalAccessToken.count = originalCount;
+      // Restore original $transaction
+      prisma.$transaction = original$Transaction;
     });
 
     it('should allow creating tokens when deleting brings count below max', async () => {
@@ -157,17 +167,26 @@ describe('TokenService', () => {
       const token1 = await tokenService.createToken(testUserId, 'Token 1');
       const token2 = await tokenService.createToken(testUserId, 'Token 2');
 
-      // Mock to simulate being at max
-      const originalCount = prisma.personalAccessToken.count;
-      prisma.personalAccessToken.count = async () => 500;
+      // Mock $transaction to simulate being at max
+      const original$Transaction = prisma.$transaction;
+      prisma.$transaction = async (callback: any) => {
+        const mockTx = {
+          ...prisma,
+          personalAccessToken: {
+            ...prisma.personalAccessToken,
+            count: async () => 500,
+          },
+        };
+        return callback(mockTx);
+      };
 
       // Should fail
       await expect(tokenService.createToken(testUserId, 'Token 3')).rejects.toThrow(
         /Maximum active API keys limit reached/
       );
 
-      // Restore count
-      prisma.personalAccessToken.count = originalCount;
+      // Restore $transaction
+      prisma.$transaction = original$Transaction;
 
       // Delete one token
       await tokenService.deleteToken(token1.id, testUserId);
