@@ -20,7 +20,23 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
   }
 
+  """
+  PersonalAccessToken type for listing tokens (token value excluded for security)
+  """
   type PersonalAccessToken {
+    id: ID!
+    name: String!
+    expiresAt: Date
+    lastUsedAt: Date
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  """
+  PersonalAccessTokenCreated type returned when creating a new token
+  Includes the token value which is only shown once during creation
+  """
+  type PersonalAccessTokenCreated {
     id: ID!
     name: String!
     token: String!
@@ -756,7 +772,7 @@ export const typeDefs = /* GraphQL */ `
 
   type Mutation {
     # Auth
-    createPersonalAccessToken(name: String!, expiresAt: Date): PersonalAccessToken!
+    createPersonalAccessToken(name: String!, expiresAt: Date): PersonalAccessTokenCreated!
     deletePersonalAccessToken(id: ID!): Boolean!
 
     # Projects
