@@ -6,6 +6,78 @@ export interface AuthContext {
   projectId?: string;
 }
 
+/**
+ * Validate token via auth service
+ */
+async function validateTokenViaAuthService(token: string): Promise<{ userId: string; tokenId: string } | null> {
+  const authServiceUrl = process.env.AUTH_SERVICE_URL;
+
+  if (!authServiceUrl) {
+    throw new Error('AUTH_SERVICE_URL not configured');
+  }
+
+  try {
+    const response = await fetch(`${authServiceUrl}/tokens/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ token }),
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        return null; // Invalid token
+      }
+      throw new Error(`Auth service error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.valid) {
+      return null;
+    }
+
+    return {
+      userId: data.userId,
+      tokenId: data.tokenId,
+    };
+  } catch (error) {
+    console.error('Auth service validation error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Validate token locally (fallback during migration)
+ */
+async function validateTokenLocally(token: string, prisma: PrismaClient): Promise<{ userId: string; tokenId: string } | null> {
+  try {
+    const pat = await prisma.personalAccessToken.findUnique({
+      where: { token },
+      include: { user: true },
+    });
+
+    if (!pat) {
+      return null;
+    }
+
+    // Update last used timestamp
+    await prisma.personalAccessToken.update({
+      where: { id: pat.id },
+      data: { lastUsedAt: new Date() },
+    });
+
+    return {
+      userId: pat.userId,
+      tokenId: pat.id,
+    };
+  } catch (error) {
+    console.error('Local token validation error:', error);
+    throw error;
+  }
+}
+
 export async function getAuthContext(
   request: Request,
   prisma: PrismaClient
@@ -22,27 +94,34 @@ export async function getAuthContext(
     : authHeader;
 
   try {
-    // Look up personal access token
-    const pat = await prisma.personalAccessToken.findUnique({
-      where: { token },
-      include: { user: true },
-    });
+    let validationResult: { userId: string; tokenId: string } | null = null;
 
-    if (!pat) {
-      return {};
+    // Check if auth service is configured
+    const useAuthService = !!process.env.AUTH_SERVICE_URL;
+
+    if (useAuthService) {
+      try {
+        // Try auth service first
+        validationResult = await validateTokenViaAuthService(token);
+      } catch (error) {
+        console.error('Auth service unavailable, falling back to local validation:', error);
+        // Fall back to local validation if auth service is unavailable
+        validationResult = await validateTokenLocally(token, prisma);
+      }
+    } else {
+      // Use local validation if auth service is not configured
+      validationResult = await validateTokenLocally(token, prisma);
     }
 
-    // Update last used timestamp
-    await prisma.personalAccessToken.update({
-      where: { id: pat.id },
-      data: { lastUsedAt: new Date() },
-    });
+    if (!validationResult) {
+      return {};
+    }
 
     // Get project ID from X-Project-Id header (optional)
     const projectId = request.headers.get('x-project-id') || undefined;
 
     return {
-      userId: pat.userId,
+      userId: validationResult.userId,
       projectId,
     };
   } catch (error) {
