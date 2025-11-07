@@ -35,8 +35,9 @@ Server runs at: **http://localhost:4000/graphql**
 
 - Node.js 18+
 - PostgreSQL (local or managed)
-- Redis (required for usage buffering)
+- Redis (required for usage buffering and auth service)
 - pnpm (recommended)
+- **Auth Service** (required for authentication) - See [alternatefutures-auth](https://github.com/alternatefutures/alternatefutures-auth)
 
 ## Deployment
 
@@ -203,11 +204,13 @@ All payment webhooks are handled via `/billing/webhook` endpoint.
 - Filecoin decentralized storage
 
 #### Personal Access Tokens (API Keys)
+**Note:** PAT management has been migrated to the dedicated auth service.
 - Secure token generation with rate limiting
 - 50 tokens per day limit per user
 - Maximum 500 active tokens per user
-- Automatic expired token cleanup
+- Automatic expired token cleanup (handled by auth service)
 - XSS prevention and input validation
+- **Required:** Set `AUTH_SERVICE_URL` in `.env` to connect to the auth service
 
 ### Example Mutations
 
@@ -279,18 +282,16 @@ mutation {
 src/
 ├── schema/              # GraphQL schema
 ├── resolvers/           # Resolvers
-│   ├── auth.ts         # Authentication
+│   ├── auth.ts         # Authentication (proxies to auth service)
 │   ├── domain.ts       # Custom domains
 │   ├── billing.ts      # Stripe billing
 │   └── function.ts     # Functions management
 ├── services/           # Business logic
-│   ├── auth/           # Token service, rate limiting
 │   ├── billing/        # Stripe integration
 │   ├── dns/            # Domain verification & SSL
 │   └── storage/        # IPFS, Arweave, Filecoin
 ├── jobs/               # Background jobs
-│   ├── sslRenewal.ts  # SSL certificate renewal
-│   └── cleanupExpiredTokens.ts
+│   └── sslRenewal.ts   # SSL certificate renewal
 ├── utils/              # Utilities
 └── index.ts            # Server entry
 
@@ -325,7 +326,7 @@ See [CODEGEN.md](CODEGEN.md) for details.
 npm test
 
 # Run specific test suite
-npm test src/services/auth
+npm test src/services/billing
 
 # Watch mode
 npm test -- --watch

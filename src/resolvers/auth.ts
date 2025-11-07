@@ -2,18 +2,59 @@
  * Authentication Resolvers
  *
  * GraphQL resolvers for Personal Access Token management
+ * All PAT operations now proxy to the auth service
  */
 
 import { GraphQLError } from 'graphql';
-import { TokenService } from '../services/auth/index.js';
 import type { Context } from './types.js';
 
 /**
- * Custom error interface for token service errors
+ * Get auth service URL from environment
+ * Throws an error if not configured
  */
-interface TokenServiceError extends Error {
-  code?: 'RATE_LIMIT_EXCEEDED' | 'MAX_TOKENS_EXCEEDED' | 'UNAUTHORIZED';
-  resetAt?: Date;
+function getAuthServiceUrl(): string {
+  const url = process.env.AUTH_SERVICE_URL;
+  if (!url) {
+    throw new GraphQLError('Auth service not configured', {
+      extensions: {
+        code: 'AUTH_SERVICE_NOT_CONFIGURED',
+      },
+    });
+  }
+  return url;
+}
+
+/**
+ * Make authenticated request to auth service
+ * TODO: Implement proper service-to-service authentication
+ * For now, this is a placeholder structure
+ */
+async function authServiceRequest(
+  endpoint: string,
+  options: RequestInit,
+  userId: string
+): Promise<Response> {
+  const authServiceUrl = getAuthServiceUrl();
+  if (!authServiceUrl) {
+    throw new Error('AUTH_SERVICE_URL not configured');
+  }
+
+  // TODO: Add proper service-to-service authentication
+  // Options:
+  // 1. Generate JWT with userId and pass as Bearer token
+  // 2. Use internal service secret (X-Service-Secret + X-User-Id headers)
+  // For now, we'll need to implement this before enabling auth service proxy
+
+  const response = await fetch(`${authServiceUrl}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+      // TODO: Add authentication headers here
+    },
+  });
+
+  return response;
 }
 
 /**
@@ -63,8 +104,22 @@ export const authQueries = {
       throw new GraphQLError('Not authenticated');
     }
 
-    const tokenService = new TokenService(context.prisma);
-    return tokenService.listTokens(context.userId);
+    const authServiceUrl = getAuthServiceUrl();
+
+    const response = await authServiceRequest('/tokens', {
+      method: 'GET',
+    }, context.userId);
+
+    if (!response.ok) {
+      throw new GraphQLError('Failed to list tokens', {
+        extensions: {
+          code: 'AUTH_SERVICE_ERROR',
+        },
+      });
+    }
+
+    const data = await response.json();
+    return data.tokens;
   },
 
   /**
@@ -75,8 +130,30 @@ export const authQueries = {
       throw new GraphQLError('Not authenticated');
     }
 
-    const tokenService = new TokenService(context.prisma);
-    return tokenService.getRemainingLimit(context.userId);
+    const authServiceUrl = getAuthServiceUrl();
+
+    const response = await authServiceRequest('/tokens/limits', {
+      method: 'GET',
+    }, context.userId);
+
+    if (!response.ok) {
+      throw new GraphQLError('Failed to get rate limits', {
+        extensions: {
+          code: 'AUTH_SERVICE_ERROR',
+        },
+      });
+    }
+
+    const data = await response.json();
+
+    // Transform response to match GraphQL schema
+    return {
+      remaining: data.rateLimit.remaining,
+      limit: data.rateLimit.limit,
+      resetAt: new Date(data.rateLimit.resetAt),
+      activeTokens: data.tokenLimit.active,
+      maxActiveTokens: data.tokenLimit.max,
+    };
   },
 };
 
@@ -98,6 +175,7 @@ export const authMutations = {
     validateTokenName(name);
 
     let expirationDate: Date | undefined;
+    let expirationTimestamp: number | undefined;
     if (expiresAt) {
       try {
         expirationDate = new Date(expiresAt);
@@ -105,49 +183,51 @@ export const authMutations = {
           throw new Error('Invalid date');
         }
         validateExpiresAt(expirationDate);
+        expirationTimestamp = expirationDate.getTime();
       } catch (err) {
         throw new GraphQLError('Invalid expiration date format');
       }
     }
 
-    const tokenService = new TokenService(context.prisma);
+    const authServiceUrl = getAuthServiceUrl();
 
-    try {
-      const token = await tokenService.createToken(
-        context.userId,
+    const response = await authServiceRequest('/tokens', {
+      method: 'POST',
+      body: JSON.stringify({
         name,
-        expirationDate
-      );
+        expiresAt: expirationTimestamp,
+      }),
+    }, context.userId);
 
-      return token;
-    } catch (error) {
-      const tokenError = error as TokenServiceError;
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
 
-      if (tokenError.code === 'RATE_LIMIT_EXCEEDED') {
-        throw new GraphQLError(tokenError.message, {
+      if (response.status === 429) {
+        throw new GraphQLError(errorData.error || 'Rate limit exceeded', {
           extensions: {
             code: 'RATE_LIMIT_EXCEEDED',
-            // Don't expose exact resetAt to prevent timing attacks
             resetAt: undefined,
           },
         });
       }
 
-      if (tokenError.code === 'MAX_TOKENS_EXCEEDED') {
-        throw new GraphQLError(tokenError.message, {
+      if (errorData.code === 'MAX_TOKENS_EXCEEDED') {
+        throw new GraphQLError(errorData.error || 'Maximum tokens exceeded', {
           extensions: {
             code: 'MAX_TOKENS_EXCEEDED',
           },
         });
       }
 
-      // Don't expose internal error details
       throw new GraphQLError('Failed to create token', {
         extensions: {
-          code: 'INTERNAL_SERVER_ERROR',
+          code: 'AUTH_SERVICE_ERROR',
         },
       });
     }
+
+    const data = await response.json();
+    return data.token;
   },
 
   /**
@@ -162,15 +242,22 @@ export const authMutations = {
       throw new GraphQLError('Not authenticated');
     }
 
-    const tokenService = new TokenService(context.prisma);
+    const authServiceUrl = getAuthServiceUrl();
 
-    try {
-      return await tokenService.deleteToken(id, context.userId);
-    } catch (error) {
-      const tokenError = error as TokenServiceError;
+    const response = await authServiceRequest(`/tokens/${id}`, {
+      method: 'DELETE',
+    }, context.userId);
 
-      // Don't expose internal error details
-      if (tokenError.code === 'UNAUTHORIZED') {
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new GraphQLError('Token not found', {
+          extensions: {
+            code: 'NOT_FOUND',
+          },
+        });
+      }
+
+      if (response.status === 403) {
         throw new GraphQLError('Not authorized to delete this token', {
           extensions: {
             code: 'UNAUTHORIZED',
@@ -180,10 +267,13 @@ export const authMutations = {
 
       throw new GraphQLError('Failed to delete token', {
         extensions: {
-          code: 'INTERNAL_SERVER_ERROR',
+          code: 'AUTH_SERVICE_ERROR',
         },
       });
     }
+
+    const data = await response.json();
+    return data.success;
   },
 };
 
