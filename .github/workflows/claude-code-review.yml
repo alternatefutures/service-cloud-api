@@ -51,7 +51,7 @@ jobs:
             Provide constructive feedback with specific suggestions for improvement.
             If everything looks good, provide a summary of what was reviewed.
           claude_args: |
-            --max-turns 15
+            --max-turns 20
             --model claude-sonnet-4-5-20250929
           track_progress: true
 
@@ -76,6 +76,6 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
           claude_args: |
-            --max-turns 15
+            --max-turns 20
             --model claude-sonnet-4-5-20250929
           track_progress: true
