@@ -170,11 +170,14 @@ COPY personal_access_token FROM '/tmp/pats.csv' CSV HEADER;
 
 #### 3.2. Backwards compatibility period
 
-Maintain both systems running in parallel for 1-2 weeks:
-- Backend validates tokens locally (old PATs)
-- Backend also accepts tokens from auth service (new PATs)
-- Gradually migrate users to new PATs
-- Deprecate old PAT system
+**Pre-Launch Simplified Approach:**
+Since the product hasn't launched, we can skip the parallel run:
+- Deploy auth service with empty PAT table
+- Set AUTH_SERVICE_URL in backend environment
+- Users create new PATs via auth service from day one
+- Old PAT system can be removed immediately after migration
+
+**Note:** The dual-mode middleware still provides safety during deployment in case auth service has issues.
 
 ### Phase 4: Remove Old Auth Code
 
@@ -287,13 +290,19 @@ If issues arise during migration:
 
 ## Timeline
 
-- **Week 1:** Copy PAT functionality to auth service
-- **Week 2:** Add API endpoints and tests
-- **Week 3:** Update backend to call auth service
-- **Week 4:** Deploy to staging and test
-- **Week 5-6:** Parallel run with monitoring
-- **Week 7:** Remove old auth code
-- **Week 8:** Production deployment
+**Original Estimate (Zero-Downtime):** 8 weeks
+**Accelerated Timeline (Pre-Launch):** 2-3 days
+
+Since the product hasn't launched yet, we can skip the parallel run period:
+
+- **Day 1:** ✅ Copy PAT functionality to auth service (COMPLETE)
+- **Day 1:** ✅ Add API endpoints and tests (COMPLETE)
+- **Day 2:** 🔄 Update backend to call auth service (IN PROGRESS)
+- **Day 2:** Update GraphQL resolvers to proxy to auth service
+- **Day 3:** Deploy both services, migrate data, remove old code
+- **Day 3:** Test end-to-end and verify all functionality
+
+**Note:** The dual-mode middleware provides resilience even though we don't need zero-downtime. If auth service is temporarily unavailable, requests can still be processed via local fallback.
 
 ## Success Metrics
 
