@@ -204,7 +204,7 @@ export const domainMutations = {
     const domain = await createCustomDomain({
       hostname: input.hostname,
       siteId: input.siteId,
-      domainType: input.domainType as any,
+      domainType: input.domainType as 'WEB2' | 'ARNS' | 'ENS' | 'IPNS' | undefined,
       verificationMethod: input.verificationMethod
     });
 

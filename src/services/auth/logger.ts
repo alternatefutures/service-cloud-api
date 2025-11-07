@@ -33,6 +33,11 @@ export interface LogEntry {
   };
 }
 
+// Extended Error interface with optional code property
+interface ErrorWithCode extends Error {
+  code?: string;
+}
+
 class Logger {
   private service: string;
   private minLevel: LogLevel;
@@ -59,11 +64,12 @@ class Logger {
     };
 
     if (error) {
+      const errorWithCode = error as ErrorWithCode;
       entry.error = {
         name: error.name,
         message: error.message,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
-        code: (error as any).code,
+        code: errorWithCode.code,
       };
     }
 

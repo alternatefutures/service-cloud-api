@@ -13,6 +13,20 @@ import { tokenServiceLogger } from './logger.js';
 const TOKEN_PREFIX = 'af';
 const TOKEN_LENGTH = 32; // Length of the random part
 
+// Error interfaces
+interface RateLimitError extends Error {
+  code: string;
+  resetAt: Date;
+}
+
+interface TokenCollisionError extends Error {
+  retry: boolean;
+}
+
+interface TokenLimitError extends Error {
+  code: string;
+}
+
 export class TokenService {
   private prisma: PrismaClient;
 
@@ -180,9 +194,9 @@ export class TokenService {
       const error = new Error(
         `Rate limit exceeded. You can only create ${TokenService.RATE_LIMIT} API keys per day. ` +
         `Limit resets at approximately ${resetHour.toISOString()}`
-      ) as Error & { code: string; resetAt: Date };
+      ) as RateLimitError;
       error.code = 'RATE_LIMIT_EXCEEDED';
-      (error as any).resetAt = resetHour; // Rounded timestamp
+      error.resetAt = resetHour; // Rounded timestamp
       throw error;
     }
 
@@ -201,7 +215,7 @@ export class TokenService {
           const error = new Error(
             `Maximum active API keys limit reached. You can have up to ${TokenService.MAX_ACTIVE_TOKENS} active keys. ` +
             `Please delete unused keys before creating new ones.`
-          ) as Error & { code: string };
+          ) as TokenLimitError;
           error.code = 'MAX_TOKENS_EXCEEDED';
           throw error;
         }
@@ -213,8 +227,8 @@ export class TokenService {
 
         if (existing) {
           // Token collision detected - signal retry
-          const retryError = new Error('TOKEN_COLLISION') as Error & { retry: boolean };
-          (retryError as any).retry = true;
+          const retryError = new Error('TOKEN_COLLISION') as TokenCollisionError;
+          retryError.retry = true;
           throw retryError;
         }
 
