@@ -25,8 +25,81 @@ export class TokenService {
   // Max retries for token generation
   private static readonly MAX_RETRIES = 5;
 
+  // Token name validation constraints
+  private static readonly MIN_NAME_LENGTH = 1;
+  private static readonly MAX_NAME_LENGTH = 100;
+  private static readonly VALID_NAME_PATTERN = /^[a-zA-Z0-9\s\-_\.]+$/;
+
   constructor(prisma: PrismaClient) {
     this.prisma = prisma;
+  }
+
+  /**
+   * Validate token name for security and correctness
+   * Prevents XSS, injection attacks, and ensures reasonable constraints
+   */
+  private validateTokenName(name: string): void {
+    // Check for null/undefined
+    if (name === null || name === undefined) {
+      const error = new Error('Token name is required') as Error & { code: string };
+      error.code = 'INVALID_TOKEN_NAME';
+      throw error;
+    }
+
+    // Trim whitespace
+    const trimmedName = name.trim();
+
+    // Check for empty or whitespace-only names
+    if (trimmedName.length === 0) {
+      const error = new Error('Token name cannot be empty or whitespace only') as Error & { code: string };
+      error.code = 'INVALID_TOKEN_NAME';
+      throw error;
+    }
+
+    // Check length constraints
+    if (trimmedName.length < TokenService.MIN_NAME_LENGTH) {
+      const error = new Error(
+        `Token name must be at least ${TokenService.MIN_NAME_LENGTH} character(s)`
+      ) as Error & { code: string };
+      error.code = 'INVALID_TOKEN_NAME';
+      throw error;
+    }
+
+    if (trimmedName.length > TokenService.MAX_NAME_LENGTH) {
+      const error = new Error(
+        `Token name must not exceed ${TokenService.MAX_NAME_LENGTH} characters`
+      ) as Error & { code: string };
+      error.code = 'INVALID_TOKEN_NAME';
+      throw error;
+    }
+
+    // Check for invalid characters (prevents XSS and injection attacks)
+    if (!TokenService.VALID_NAME_PATTERN.test(trimmedName)) {
+      const error = new Error(
+        'Token name contains invalid characters. Only alphanumeric characters, spaces, hyphens, underscores, and dots are allowed'
+      ) as Error & { code: string };
+      error.code = 'INVALID_TOKEN_NAME';
+      throw error;
+    }
+
+    // Check for dangerous patterns (additional XSS prevention)
+    const dangerousPatterns = [
+      /<script/i,
+      /<iframe/i,
+      /javascript:/i,
+      /on\w+=/i, // Event handlers like onclick=
+      /data:text\/html/i,
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(trimmedName)) {
+        const error = new Error(
+          'Token name contains potentially dangerous content'
+        ) as Error & { code: string };
+        error.code = 'INVALID_TOKEN_NAME';
+        throw error;
+      }
+    }
   }
 
   /**
@@ -60,7 +133,13 @@ export class TokenService {
     expiresAt: Date | null;
     createdAt: Date;
   }> {
-    return this.createTokenWithRetries(userId, name, expiresAt, 0);
+    // Validate token name first (before any rate limiting or database operations)
+    this.validateTokenName(name);
+
+    // Trim name for storage consistency
+    const trimmedName = name.trim();
+
+    return this.createTokenWithRetries(userId, trimmedName, expiresAt, 0);
   }
 
   /**
