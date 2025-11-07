@@ -6,6 +6,7 @@
  */
 
 import Redis from 'ioredis';
+import { rateLimiterLogger } from './logger.js';
 
 export class RateLimiter {
   private redis: Redis;
@@ -57,11 +58,11 @@ export class RateLimiter {
     });
 
     this.redis.on('error', (err) => {
-      console.error('[RateLimiter] Redis connection error:', err);
+      rateLimiterLogger.error('Redis connection error', {}, err);
     });
 
     this.redis.on('connect', () => {
-      console.log('[RateLimiter] Connected to Redis');
+      rateLimiterLogger.info('Connected to Redis');
     });
   }
 
@@ -104,7 +105,7 @@ export class RateLimiter {
         resetAt: new Date(resetAtMs),
       };
     } catch (error) {
-      console.error('[RateLimiter] Error checking limit:', error);
+      rateLimiterLogger.error('Error checking rate limit', { key, limit, windowSeconds }, error as Error);
       // On Redis errors, fail open to prevent blocking legitimate requests
       return {
         allowed: true,

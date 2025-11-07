@@ -8,6 +8,7 @@
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { rateLimiter } from './rateLimiter.js';
+import { tokenServiceLogger } from './logger.js';
 
 const TOKEN_PREFIX = 'af';
 const TOKEN_LENGTH = 32; // Length of the random part
