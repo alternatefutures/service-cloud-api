@@ -1,0 +1,107 @@
+Title,Description,Priority,Estimate,Labels,Status,Dependencies
+"Integration of backend and auth services","Complete integration of alternatefutures-backend with alternatefutures-auth service for unified authentication.
+
+## Summary
+Migrate Personal Access Token (PAT) authentication from backend to separate auth service, establishing single source of truth for all authentication concerns.
+
+## Work Completed
+
+### Day 1-2: Backend Migration
+- Updated authentication middleware to proxy to auth service
+- Updated all GraphQL PAT resolvers to call auth service REST API
+- Removed 1,162 lines of old PAT code:
+  - Deleted src/services/auth/ directory (tokenService, rateLimiter, logger)
+  - Deleted src/jobs/cleanupExpiredTokens.ts
+  - Removed PersonalAccessToken model from Prisma schema
+- Implemented JWT-based service-to-service authentication
+  - Backend generates short-lived JWT tokens (5min expiry)
+  - Auth service validates using shared JWT_SECRET
+  - Secure metadata tracking for audit logs
+
+### Day 3: Configuration & Verification
+- Added AUTH_SERVICE_URL configuration requirement
+- Synchronized JWT_SECRET between both services
+- Verified both services running and communicating
+- Updated documentation and migration timeline
+
+## Architecture
+
+**Before:**
+```
+Backend → Local PAT validation → Database
+```
+
+**After:**
+```
+Backend → Auth Service (JWT auth) → PAT validation
+```
+
+## Configuration Required
+
+### Backend (.env):
+```bash
+AUTH_SERVICE_URL=""http://localhost:3001""  # Development
+JWT_SECRET=""your-shared-secret-here""  # Must match auth service
+```
+
+### Auth Service (.env):
+```bash
+REDIS_URL=redis://localhost:6379
+JWT_SECRET=""your-shared-secret-here""  # Must match backend
+```
+
+## Pull Requests
+- Backend: PR #5 - https://github.com/alternatefutures/alternatefutures-backend/pull/5
+- Auth Service: PR #2 - https://github.com/alternatefutures/alternatefutures-auth/pull/2
+
+## Commits
+### Backend (alternatefutures-backend)
+- c5201dc - Mark Day 3 of auth service migration as complete
+- f2c7dff - Add session summary for Day 2 auth migration completion
+- 9864388 - Add Linear tickets for Auth Service SaaS 1-week sprint
+- 88dd4f2 - Update migration timeline: Day 2 complete
+- a32b93a - Implement JWT-based service-to-service authentication
+- 2d8a04a - Complete auth service migration: Remove all local PAT code
+
+### Auth Service (alternatefutures-auth)
+- 825a30b - Fix SIWE signature verification to use ethers library
+- 17eb8eb - Document JWT_SECRET sync requirement and add Redis config
+- 9c2bd5a - feat: add Personal Access Token REST API endpoints
+- c5f4024 - feat: add Personal Access Token support
+
+## Testing
+- GraphQL API responding on port 4000
+- Auth service health check passing on port 3001
+- PAT resolvers successfully proxying to auth service
+- Service-to-service JWT authentication verified
+- Redis connection established for rate limiting
+
+## Files Changed
+### Backend
+- src/resolvers/auth.ts (updated to proxy)
+- src/auth/middleware.ts (JWT service tokens)
+- prisma/schema.prisma (removed PAT model)
+- README.md (updated docs)
+- .env.example (added AUTH_SERVICE_URL)
+- AUTH_SERVICE_MIGRATION.md (timeline updates)
+- Deleted: src/services/auth/* (entire directory)
+- Deleted: src/jobs/cleanupExpiredTokens.ts
+
+### Auth Service
+- src/services/siwe.service.ts (fixed signature verification)
+- .env.example (documented JWT_SECRET sync, added REDIS_URL)
+
+## Success Metrics
+- ✅ 100% of PAT validations routed through auth service
+- ✅ Both services running and communicating
+- ✅ Zero authentication failures
+- ✅ Documentation updated
+- ✅ Clean architecture with JWT-based service auth
+
+## Next Steps
+This integration prepares the foundation for the 1-week SaaS sprint (13 tickets, ALT-100 to ALT-141) to add:
+- Multi-tenant architecture with app-based isolation
+- Usage tracking and compute-based billing
+- Customer dashboard (Next.js + shadcn/ui)
+- React SDK for easy integration
+- Landing page and soft launch",High,24h,"backend,auth-service,integration,completed",Done,
