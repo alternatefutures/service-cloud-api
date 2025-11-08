@@ -48,35 +48,6 @@ async function validateTokenViaAuthService(token: string): Promise<{ userId: str
   }
 }
 
-/**
- * Validate token locally (fallback during migration)
- */
-async function validateTokenLocally(token: string, prisma: PrismaClient): Promise<{ userId: string; tokenId: string } | null> {
-  try {
-    const pat = await prisma.personalAccessToken.findUnique({
-      where: { token },
-      include: { user: true },
-    });
-
-    if (!pat) {
-      return null;
-    }
-
-    // Update last used timestamp
-    await prisma.personalAccessToken.update({
-      where: { id: pat.id },
-      data: { lastUsedAt: new Date() },
-    });
-
-    return {
-      userId: pat.userId,
-      tokenId: pat.id,
-    };
-  } catch (error) {
-    console.error('Local token validation error:', error);
-    throw error;
-  }
-}
 
 export async function getAuthContext(
   request: Request,
@@ -94,24 +65,8 @@ export async function getAuthContext(
     : authHeader;
 
   try {
-    let validationResult: { userId: string; tokenId: string } | null = null;
-
-    // Check if auth service is configured
-    const useAuthService = !!process.env.AUTH_SERVICE_URL;
-
-    if (useAuthService) {
-      try {
-        // Try auth service first
-        validationResult = await validateTokenViaAuthService(token);
-      } catch (error) {
-        console.error('Auth service unavailable, falling back to local validation:', error);
-        // Fall back to local validation if auth service is unavailable
-        validationResult = await validateTokenLocally(token, prisma);
-      }
-    } else {
-      // Use local validation if auth service is not configured
-      validationResult = await validateTokenLocally(token, prisma);
-    }
+    // Validate token via auth service
+    const validationResult = await validateTokenViaAuthService(token);
 
     if (!validationResult) {
       return {};
