@@ -212,6 +212,35 @@ All payment webhooks are handled via `/billing/webhook` endpoint.
 - XSS prevention and input validation
 - **Required:** Set `AUTH_SERVICE_URL` in `.env` to connect to the auth service
 
+#### Native Routing/Proxy System
+Built-in request routing and proxying without external packages.
+- Path-based routing with wildcard support
+- API gateway patterns
+- Multi-backend service routing
+- Automatic request proxying
+- Route caching with configurable TTL
+- Comprehensive error handling
+
+**Configuration:**
+```graphql
+mutation CreateGateway {
+  createAFFunction(
+    name: "API Gateway"
+    routes: {
+      "/api/users/*": "https://users-service.com"
+      "/api/products/*": "https://products-service.com"
+      "/*": "https://default.com"
+    }
+  ) {
+    id
+    invokeUrl
+    routes
+  }
+}
+```
+
+See [docs/route-configuration.md](docs/route-configuration.md) for complete routing documentation.
+
 ### Example Mutations
 
 **Create Function:**
@@ -392,3 +421,8 @@ MIT
 - [GraphQL Code Generation](CODEGEN.md)
 - [OpenRegistry Deployment](OPENREGISTRY_DEPLOYMENT.md)
 - [Decentralized Registry Architecture](DECENTRALIZED_REGISTRY_ARCHITECTURE.md)
+
+**Routing System Documentation:**
+- [Route Configuration API](docs/route-configuration.md) - Configure route mappings and validation
+- [Runtime Routing Implementation](docs/runtime-routing-implementation.md) - Core routing architecture and usage
+- [Runtime Integration Guide](docs/runtime-integration.md) - Integrating routing into function runtime
