@@ -54,7 +54,7 @@ services:
           readOnly: false
 
   api:
-    image: alternatefutures/backend:latest
+    image: ghcr.io/alternatefutures/service-cloud-api:latest
     env:
       # Database
       - DATABASE_URL=postgresql://postgres:your_secure_password_here_change_this@postgres:5432/alternatefutures

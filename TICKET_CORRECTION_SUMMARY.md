@@ -9,11 +9,11 @@ The integration work for backend/auth services was accidentally attached to tick
 **ALT-92** has been updated to reflect the actual work completed:
 
 - **New Title:** "Integration of backend and auth services"
-- **New Description:** Complete integration of alternatefutures-backend with alternatefutures-auth service
+- **New Description:** Complete integration of backend with auth service
 - **Status:** Contains all the integration work documentation
 - **PRs Linked:**
-  - Backend: https://github.com/alternatefutures/alternatefutures-backend/pull/5
-  - Auth Service: https://github.com/alternatefutures/alternatefutures-auth/pull/2
+  - Backend: https://github.com/alternatefutures/backend/pull/5
+  - Auth Service: https://github.com/alternatefutures/auth/pull/2
 
 **View ticket:** https://linear.app/alternate-futures/issue/ALT-92
 
@@ -43,7 +43,7 @@ The integration work for backend/auth services was accidentally attached to tick
 **Title:** Integration of backend and auth services
 
 **Summary:**
-- Complete integration of alternatefutures-backend with alternatefutures-auth service
+- Complete integration of backend with auth service
 - 3-day migration timeline completed
 - Removed 1,162 lines of old PAT code
 - Implemented JWT-based service-to-service authentication

@@ -2,13 +2,13 @@
 
 ## Overview
 
-Migrate Personal Access Token (PAT) authentication from `alternatefutures-backend` to `alternatefutures-auth` to establish a single source of truth for all authentication concerns.
+Migrate Personal Access Token (PAT) authentication from `backend` to `auth` to establish a single source of truth for all authentication concerns.
 
 ## Current Architecture
 
 ```
 ┌─────────────────────────────────────┐
-│   alternatefutures-backend          │
+│   backend                            │
 │                                      │
 │   • Personal Access Tokens (PATs)   │
 │   • Token validation                │
@@ -22,7 +22,7 @@ Migrate Personal Access Token (PAT) authentication from `alternatefutures-backen
 
 ```
 ┌──────────────────────────────────────────────┐
-│           alternatefutures-auth              │
+│           auth                               │
 │                                               │
 │   • User Authentication (Email, SMS, Web3)   │
 │   • JWT Sessions                             │
@@ -33,7 +33,7 @@ Migrate Personal Access Token (PAT) authentication from `alternatefutures-backen
 └──────────────────────────────────────────────┘
                        ↓ (validates tokens)
 ┌──────────────────────────────────────────────┐
-│        alternatefutures-backend              │
+│        backend                               │
 │                                               │
 │   • GraphQL API                              │
 │   • Business logic                           │
@@ -45,7 +45,7 @@ Migrate Personal Access Token (PAT) authentication from `alternatefutures-backen
 
 ### Phase 1: Prepare Auth Service
 
-#### 1.1. Copy PAT functionality to alternatefutures-auth
+#### 1.1. Copy PAT functionality to auth
 
 **Files to copy/adapt:**
 - `src/services/auth/tokenService.ts` → Copy token generation, validation, cleanup
@@ -211,7 +211,7 @@ type Mutation {
 
 ## Implementation Checklist
 
-### Auth Service (alternatefutures-auth)
+### Auth Service (service-auth)
 
 - [ ] Add PersonalAccessToken model to Prisma schema
 - [ ] Copy token service with generation/validation logic
@@ -224,7 +224,7 @@ type Mutation {
 - [ ] Update README with PAT documentation
 - [ ] Deploy auth service to staging
 
-### Backend (alternatefutures-backend)
+### Backend (service-cloud-api)
 
 - [ ] Add AUTH_SERVICE_URL environment variable
 - [ ] Update auth middleware to call auth service
@@ -317,7 +317,7 @@ Since the product hasn't launched yet, we can skip the parallel run period:
 
 ## Dependencies
 
-- **alternatefutures-auth:** Must be deployed and accessible
+- **service-auth:** Must be deployed and accessible
 - **Redis:** Required for rate limiting
 - **Database:** Auth service needs its own database
 

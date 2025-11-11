@@ -4,17 +4,17 @@
 
 ## Summary
 
-Complete integration of `alternatefutures-backend` with `alternatefutures-auth` service for unified authentication management.
+Complete integration of `backend` with `auth` service for unified authentication management.
 
 ## Pull Requests
 
 ### Backend Integration
-- **PR:** https://github.com/alternatefutures/alternatefutures-backend/pull/5
+- **PR:** https://github.com/alternatefutures/backend/pull/5
 - **Title:** Should be "Integration of backend and auth services"
 - **Branch:** `feature/alt-92-migrate-auth-to-service`
 
 ### Auth Service Implementation
-- **PR:** https://github.com/alternatefutures/alternatefutures-auth/pull/2
+- **PR:** https://github.com/alternatefutures/auth/pull/2
 - **Title:** Should be "Integration of backend and auth services - Auth service implementation"
 - **Branch:** `feature/alt-92-personal-access-tokens`
 
@@ -94,7 +94,7 @@ PORT=3001
 
 ## Files Changed
 
-### Backend Repository (`alternatefutures-backend`)
+### Backend Repository (`backend`)
 
 #### Modified Files
 - `src/resolvers/auth.ts` - Updated to proxy all PAT operations to auth service
