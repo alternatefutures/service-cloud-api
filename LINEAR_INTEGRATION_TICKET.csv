@@ -51,11 +51,11 @@ JWT_SECRET=""your-shared-secret-here""  # Must match backend
 ```
 
 ## Pull Requests
-- Backend: PR #5 - https://github.com/alternatefutures/alternatefutures-backend/pull/5
-- Auth Service: PR #2 - https://github.com/alternatefutures/alternatefutures-auth/pull/2
+- Backend: PR #5 - https://github.com/alternatefutures/service-cloud-api/pull/5
+- Auth Service: PR #2 - https://github.com/alternatefutures/service-auth/pull/2
 
 ## Commits
-### Backend (alternatefutures-backend)
+### Backend (service-cloud-api)
 - c5201dc - Mark Day 3 of auth service migration as complete
 - f2c7dff - Add session summary for Day 2 auth migration completion
 - 9864388 - Add Linear tickets for Auth Service SaaS 1-week sprint

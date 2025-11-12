@@ -37,7 +37,7 @@ Server runs at: **http://localhost:4000/graphql**
 - PostgreSQL (local or managed)
 - Redis (required for usage buffering and auth service)
 - pnpm (recommended)
-- **Auth Service** (required for authentication) - See [alternatefutures-auth](https://github.com/alternatefutures/alternatefutures-auth)
+- **Auth Service** (required for authentication) - See [service-auth](https://github.com/alternatefutures/service-auth)
 
 ## Deployment
 
@@ -50,8 +50,8 @@ Deploy to decentralized compute infrastructure for 60-85% cost savings.
 
 ```bash
 # Build Docker image
-docker build -t alternatefutures/backend:latest .
-docker push alternatefutures/backend:latest
+docker build -t ghcr.io/alternatefutures/service-cloud-api:latest .
+docker push ghcr.io/alternatefutures/service-cloud-api:latest
 
 # Deploy to Akash (see AKASH_DEPLOYMENT.md for detailed steps)
 akash tx deployment create deploy.yaml --from default
@@ -376,10 +376,10 @@ npm run db:seed
 
 ## Related Repositories
 
-- **[CLI](https://github.com/alternatefutures/cloud-cli)** - Command-line interface
-- **[SDK](https://github.com/alternatefutures/cloud-sdk)** - Software development kit
-- **[App](https://github.com/alternatefutures/altfutures-app)** - Web application dashboard
-- **[Website](https://github.com/alternatefutures/home)** - Company website
+- **[CLI](https://github.com/alternatefutures/package-cloud-cli)** - Command-line interface
+- **[SDK](https://github.com/alternatefutures/package-cloud-sdk)** - Software development kit
+- **[App](https://github.com/alternatefutures/web-app.alternatefutures.ai)** - Web application dashboard
+- **[Website](https://github.com/alternatefutures/web-alternatefutures.ai)** - Company website
 
 ## Cost Comparison
 
