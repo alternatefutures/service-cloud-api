@@ -246,7 +246,7 @@ See [docs/route-configuration.md](docs/route-configuration.md) for complete rout
 **Create Function:**
 ```graphql
 mutation {
-  createFleekFunction(name: "my-api") {
+  createAFFunction(name: "my-api") {
     id
     name
     invokeUrl
@@ -257,7 +257,7 @@ mutation {
 **Deploy Function:**
 ```graphql
 mutation {
-  deployFleekFunction(
+  deployAFFunction(
     functionId: "clxxx"
     cid: "QmXXX"
   ) {
