@@ -1,0 +1,242 @@
+Title,Description,Priority,Estimate,Labels,Status,Dependencies
+"ALT-100: Add App/Customer model to database schema","Add multi-tenant support with App model for customer isolation.
+
+Security Libraries:
+- nanoid (v5.0.0) - Secure ID generation
+
+Acceptance Criteria:
+- Install nanoid: npm install nanoid
+- Add apps table to db/schema.sql
+- Add app_id column to users, sessions, personal_access_tokens
+- Add unique constraints: (app_id, email), (app_id, phone), (app_id, wallet_address)
+- Create db.service methods: createApp(), getAppByAppId(), updateApp(), deleteApp()
+- Generate app credentials using nanoid
+- Use bcrypt to hash app_secret before storing
+
+Technical Notes:
+- app_id format: app_live_${nanoid(24)}
+- app_secret format: sk_live_${nanoid(32)}
+- Set up CASCADE delete for tenant isolation",High,8h,"backend,database,day1",Todo,
+"ALT-101: Implement API key authentication middleware","Create middleware for app authentication using app_id + app_secret.
+
+Security Libraries:
+- bcrypt (v5.1.1) - Already installed, industry standard
+
+Acceptance Criteria:
+- Create src/middleware/appAuth.ts
+- Extract credentials from headers: x-app-id and x-app-secret
+- Verify using bcrypt constant-time comparison
+- Cache app lookups in Redis (5 min TTL)
+- Add rate limiting: 1000 req/min per app
+- Return proper errors (401, 403, 429)
+- Write unit tests and integration tests
+
+Security:
+- Use constant-time comparison to prevent timing attacks
+- Log all failed authentication attempts",High,6h,"backend,security,day1",Todo,ALT-100
+"ALT-102: Update all endpoints for multi-tenant isolation","Ensure complete tenant isolation - App A cannot access App B's data.
+
+Acceptance Criteria:
+- Apply appAuth middleware to all customer-facing routes
+- Update all endpoints to filter by app_id
+- Update all db.service methods to require app_id parameter
+- Security test checklist:
+  * App A cannot list App B's users
+  * App A cannot create users for App B
+  * App A cannot access App B's sessions
+  * App A cannot list/delete App B's tokens
+- Write integration tests for tenant isolation
+
+Routes to update:
+- /auth/email/* - Create users with app_id
+- /auth/sms/* - Create users with app_id
+- /auth/wallet/* - Create users with app_id
+- /auth/oauth/* - Create users with app_id
+- /account/* - Filter by app_id
+- /tokens/* - Filter by app_id",High,10h,"backend,security,day2",Todo,"ALT-100,ALT-101"
+"ALT-103: Create admin endpoints for app management","Admin-only endpoints to create and manage customer apps.
+
+Acceptance Criteria:
+- Create src/routes/admin/apps.ts
+- Add admin auth middleware (JWT-based, internal only)
+- Implement endpoints:
+  * POST /admin/apps - Create app (return secret once)
+  * GET /admin/apps - List all apps
+  * GET /admin/apps/:id - Get app details
+  * PUT /admin/apps/:id - Update settings
+  * DELETE /admin/apps/:id - Delete app
+- Return app_secret only on creation
+- Hash secret with bcrypt before storing
+- Add audit logging
+- Write API tests",Medium,4h,"backend,admin,day2",Todo,ALT-100
+"ALT-110: Implement compute usage tracking","Track compute time per request for cost-based billing.
+
+Security Libraries:
+- ioredis (v5.8.2) - Already installed, industry standard
+
+Acceptance Criteria:
+- Add usage_records table to schema
+- Create middleware to track request timing
+- Calculate cost: (compute_ms / 1000) * (memory_mb / 1024) * 0.0000166667 * 1.5
+- Buffer usage in Redis (flush every 60s)
+- Batch insert to database
+- Add getUsageByApp(appId, startDate, endDate) method
+- Write tests
+
+Performance:
+- Use Redis list for buffering: usage:buffer:{appId}
+- Flush when buffer reaches 1000 items or every 60 seconds",High,8h,"backend,billing,day3",Todo,ALT-101
+"ALT-111: Add usage reporting endpoint","Endpoint for apps to view their compute usage and costs.
+
+Acceptance Criteria:
+- Create GET /apps/usage endpoint (requires appAuth)
+- Query params: startDate, endDate
+- Return aggregated usage with breakdown by endpoint
+- Include: totalRequests, totalComputeMs, baseCost, markup, totalCost
+- Cache results in Redis (5 min TTL)
+- Write API tests
+
+Response Format:
+{
+  ""period"": {...},
+  ""summary"": {
+    ""totalRequests"": 1250000,
+    ""baseCost"": 10.42,
+    ""markup"": 5.21,
+    ""totalCost"": 15.63
+  },
+  ""breakdown"": [...]
+}",Medium,4h,"backend,api,day3",Todo,ALT-110
+"ALT-120: Create Next.js dashboard app","Bootstrap customer-facing dashboard.
+
+Libraries:
+- Next.js 15 (App Router)
+- Tailwind CSS
+- shadcn/ui
+- React Query (TanStack Query)
+
+Acceptance Criteria:
+- Initialize: npx create-next-app@latest dashboard
+- Install: @tanstack/react-query, shadcn-ui components
+- Set up auth (dogfood your own auth service!)
+- Create layout with sidebar nav
+- Add dark mode (system preference)
+- Configure environment variables
+- Deploy to Vercel
+
+Routes:
+- / - Dashboard home
+- /apps - App list
+- /apps/new - Create app
+- /apps/[id] - App details
+- /settings - Account settings",High,6h,"frontend,day4",Todo,
+"ALT-121: Build app management UI","UI for creating and managing apps.
+
+Acceptance Criteria:
+- App List Page (/apps): Grid of app cards with create button
+- Create App Flow: Modal with form, success modal showing credentials ONCE
+- App Details Page: Overview, settings, delete confirmation
+- Copy buttons for app_id and app_secret
+- Download as .env file button
+- Warning: Save your secret now. You won't see it again!
+- Add loading skeletons and error toasts (sonner)
+
+Security:
+- Show app_secret only once on creation
+- Require confirmation for app deletion",High,10h,"frontend,day4",Todo,"ALT-120,ALT-103"
+"ALT-122: Build usage dashboard","Show compute usage and costs with charts.
+
+Libraries:
+- Recharts (for charts)
+
+Acceptance Criteria:
+- Install: npm install recharts
+- Usage Page (/apps/[id]/usage)
+- Date range selector (last 7/30 days)
+- Summary cards: Total Requests, Compute Time, Total Cost, Avg Response Time
+- Charts: Requests over time, Cost over time, Top endpoints
+- Export to CSV button
+- Poll for updates every 30 seconds
+- Responsive design
+
+Visual Design:
+- Clean, minimal dashboard
+- Clear cost breakdown
+- Interactive charts with tooltips",High,8h,"frontend,day5",Todo,"ALT-120,ALT-111"
+"ALT-130: Create React SDK (MVP)","React SDK for easy auth integration.
+
+Libraries (Already Audited):
+- ethers (v6.15.0) - Already in package.json
+- @solana/web3.js (v1.98.4) - Already in package.json
+
+Acceptance Criteria:
+- Create @alternatefutures/auth-react package
+- Export components: AlternateFuturesAuthProvider
+- Export hooks: useLogin(), useUser(), useLogout(), useWallet()
+- Support all auth methods: email, social, wallet, SMS
+- Handle token refresh automatically
+- Add TypeScript types
+- Write README with examples
+- Publish to npm
+
+Example Usage:
+<AlternateFuturesAuthProvider appId=""app_live_xxx"">
+  <MyApp />
+</AlternateFuturesAuthProvider>",High,12h,"sdk,react,day6",Todo,ALT-102
+"ALT-131: Write basic SDK documentation","Quick start guide for React SDK.
+
+Acceptance Criteria:
+- Create docs/ folder in dashboard repo
+- Write QUICKSTART.md with installation, setup, examples
+- Add code examples with syntax highlighting
+- Login example
+- Wallet connection example
+- Add troubleshooting section
+- Host on Vercel as /docs
+
+Content:
+- Installation steps
+- Basic setup (5 lines of code)
+- Login flows for all methods
+- Common issues and solutions",High,4h,"docs,day6",Todo,ALT-130
+"ALT-140: Build landing page","Simple landing page for auth.alternatefutures.ai
+
+Acceptance Criteria:
+- Single-page site with sections: Hero, Pricing, Features, CTA
+- Hero: Authentication for Web3, priced like serverless
+- Pricing: Interactive calculator (X requests = $Y)
+- Features: Email, Social, Web3 wallet auth
+- Show code example in hero
+- Mobile responsive
+- Fast (Lighthouse score > 90)
+- Deploy to Vercel
+
+Copy:
+- Headline: Pay per request. No monthly fees.
+- Subhead: From email to Web3 in one SDK
+- Pricing: 1M requests = $15 (vs $99/mo elsewhere)",High,8h,"frontend,marketing,day7",Todo,
+"ALT-141: Launch checklist","Pre-launch verification and soft launch.
+
+Pre-Launch Checks:
+- Auth service deployed and healthy
+- Dashboard deployed
+- SDK published to npm
+- Docs accessible
+- Billing integration tested
+- Create 3 test apps and verify isolation
+
+Launch:
+- Tweet announcement
+- Post on Show HN (Hacker News)
+- Share in Web3 Discord servers
+- Email beta waitlist (if any)
+
+Monitoring:
+- Set up error tracking (Sentry)
+- Set up analytics (PostHog)
+- Monitor first signups
+
+Success Metrics:
+- 5-10 signups from soft launch
+- All systems operational
+- Zero security issues",High,4h,"launch,day7",Todo,"ALT-100,ALT-101,ALT-102,ALT-110,ALT-120,ALT-130,ALT-140"

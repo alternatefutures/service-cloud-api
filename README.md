@@ -2,7 +2,7 @@
   <img src="./assets/hero-logo.svg" alt="Alternate Futures" width="600" />
 </div>
 
-# ✨ Alternate Futures - GraphQL Backend ✨
+# ✨ GraphQL API Backend ✨
 
 **Decentralized serverless platform that runs on itself**
 
@@ -35,8 +35,9 @@ Server runs at: **http://localhost:4000/graphql**
 
 - Node.js 18+
 - PostgreSQL (local or managed)
-- Redis (required for usage buffering)
+- Redis (required for usage buffering and auth service)
 - pnpm (recommended)
+- **Auth Service** (required for authentication) - See [service-auth](https://github.com/alternatefutures/service-auth)
 
 ## Deployment
 
@@ -49,8 +50,8 @@ Deploy to decentralized compute infrastructure for 60-85% cost savings.
 
 ```bash
 # Build Docker image
-docker build -t alternatefutures/backend:latest .
-docker push alternatefutures/backend:latest
+docker build -t ghcr.io/alternatefutures/service-cloud-api:latest .
+docker push ghcr.io/alternatefutures/service-cloud-api:latest
 
 # Deploy to Akash (see AKASH_DEPLOYMENT.md for detailed steps)
 akash tx deployment create deploy.yaml --from default
@@ -203,11 +204,42 @@ All payment webhooks are handled via `/billing/webhook` endpoint.
 - Filecoin decentralized storage
 
 #### Personal Access Tokens (API Keys)
+**Note:** PAT management has been migrated to the dedicated auth service.
 - Secure token generation with rate limiting
 - 50 tokens per day limit per user
 - Maximum 500 active tokens per user
-- Automatic expired token cleanup
+- Automatic expired token cleanup (handled by auth service)
 - XSS prevention and input validation
+- **Required:** Set `AUTH_SERVICE_URL` in `.env` to connect to the auth service
+
+#### Native Routing/Proxy System
+Built-in request routing and proxying without external packages.
+- Path-based routing with wildcard support
+- API gateway patterns
+- Multi-backend service routing
+- Automatic request proxying
+- Route caching with configurable TTL
+- Comprehensive error handling
+
+**Configuration:**
+```graphql
+mutation CreateGateway {
+  createAFFunction(
+    name: "API Gateway"
+    routes: {
+      "/api/users/*": "https://users-service.com"
+      "/api/products/*": "https://products-service.com"
+      "/*": "https://default.com"
+    }
+  ) {
+    id
+    invokeUrl
+    routes
+  }
+}
+```
+
+See [docs/route-configuration.md](docs/route-configuration.md) for complete routing documentation.
 
 ### Example Mutations
 
@@ -279,18 +311,16 @@ mutation {
 src/
 ├── schema/              # GraphQL schema
 ├── resolvers/           # Resolvers
-│   ├── auth.ts         # Authentication
+│   ├── auth.ts         # Authentication (proxies to auth service)
 │   ├── domain.ts       # Custom domains
 │   ├── billing.ts      # Stripe billing
 │   └── function.ts     # Functions management
 ├── services/           # Business logic
-│   ├── auth/           # Token service, rate limiting
 │   ├── billing/        # Stripe integration
 │   ├── dns/            # Domain verification & SSL
 │   └── storage/        # IPFS, Arweave, Filecoin
 ├── jobs/               # Background jobs
-│   ├── sslRenewal.ts  # SSL certificate renewal
-│   └── cleanupExpiredTokens.ts
+│   └── sslRenewal.ts   # SSL certificate renewal
 ├── utils/              # Utilities
 └── index.ts            # Server entry
 
@@ -325,7 +355,7 @@ See [CODEGEN.md](CODEGEN.md) for details.
 npm test
 
 # Run specific test suite
-npm test src/services/auth
+npm test src/services/billing
 
 # Watch mode
 npm test -- --watch
@@ -346,10 +376,10 @@ npm run db:seed
 
 ## Related Repositories
 
-- **[CLI](https://github.com/alternatefutures/cloud-cli)** - Command-line interface
-- **[SDK](https://github.com/alternatefutures/cloud-sdk)** - Software development kit
-- **[App](https://github.com/alternatefutures/altfutures-app)** - Web application dashboard
-- **[Website](https://github.com/alternatefutures/home)** - Company website
+- **[CLI](https://github.com/alternatefutures/package-cloud-cli)** - Command-line interface
+- **[SDK](https://github.com/alternatefutures/package-cloud-sdk)** - Software development kit
+- **[App](https://github.com/alternatefutures/web-app.alternatefutures.ai)** - Web application dashboard
+- **[Website](https://github.com/alternatefutures/web-alternatefutures.ai)** - Company website
 
 ## Cost Comparison
 
@@ -391,3 +421,8 @@ MIT
 - [GraphQL Code Generation](CODEGEN.md)
 - [OpenRegistry Deployment](OPENREGISTRY_DEPLOYMENT.md)
 - [Decentralized Registry Architecture](DECENTRALIZED_REGISTRY_ARCHITECTURE.md)
+
+**Routing System Documentation:**
+- [Route Configuration API](docs/route-configuration.md) - Configure route mappings and validation
+- [Runtime Routing Implementation](docs/runtime-routing-implementation.md) - Core routing architecture and usage
+- [Runtime Integration Guide](docs/runtime-integration.md) - Integrating routing into function runtime

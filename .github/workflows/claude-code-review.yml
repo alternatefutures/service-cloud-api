@@ -76,6 +76,6 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           trigger_phrase: "@claude"
           claude_args: |
-            --max-turns 20
+            --max-turns 30
             --model claude-sonnet-4-5-20250929
           track_progress: true

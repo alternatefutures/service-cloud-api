@@ -19,7 +19,6 @@ model User {
   walletAddress String?  @unique
 
   projects              Project[]
-  personalAccessTokens  PersonalAccessToken[]
   agents                Agent[]
   chats                 Chat[]
   messages              Message[]
@@ -33,26 +32,6 @@ model User {
   @@index([email])
   @@index([username])
   @@index([walletAddress])
-}
-
-model PersonalAccessToken {
-  id         String    @id @default(cuid())
-  name       String
-  token      String    @unique
-
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  expiresAt  DateTime?
-  lastUsedAt DateTime?
-
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
-  // Performance indices
-  @@index([userId])
-  @@index([userId, createdAt(sort: Desc)]) // Efficient listing with sorting (most recent first)
-  @@index([expiresAt]) // For expired token cleanup job
 }
 
 // ============================================
