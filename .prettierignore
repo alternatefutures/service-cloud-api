@@ -1,0 +1,24 @@
+node_modules
+dist
+build
+coverage
+.next
+.cache
+
+# Generated files
+package-lock.json
+*.log
+
+# Prisma
+prisma/migrations
+
+# Docker
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github
+
+# Config files
+*.min.js
+*.min.css

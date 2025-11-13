@@ -1,0 +1,108 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.pnpm-debug.log*
+
+# Testing
+coverage/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+**/__tests__/
+**/__mocks__/
+.nyc_output/
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.*
+
+# Build outputs (will be rebuilt in container)
+dist/
+build/
+*.tsbuildinfo
+
+# Development files
+.git/
+.gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.gitlab-ci.yml
+.travis.yml
+azure-pipelines.yml
+.circleci/
+
+# Logs
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+lib-cov/
+
+# Prisma
+prisma/migrations/
+*.db
+*.db-journal
+
+# Scripts (deployment specific)
+scripts/
+deploy-railway.sh
+deploy.yaml
+railway.json
+
+# TypeScript
+tsconfig.json
+tsconfig.*.json
+
+# Testing & Quality
+.eslintrc*
+.prettierrc*
+.editorconfig
+vitest.config.*
+jest.config.*
+codegen.ts
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Security
+.npmrc
+.yarnrc
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+.Trash-*
