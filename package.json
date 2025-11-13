@@ -91,11 +91,7 @@
     "elliptic": "^6.6.1",
     "secp256k1": "^5.0.1",
     "parse-duration": "^2.1.3",
-    "@dha-team/arbundles": {
-      "@ethersproject/providers": {
-        "ws": "^8.18.0"
-      }
-    },
+    "ws": "^8.18.3",
     "ipfs-core-utils": {
       "nanoid": "^3.3.7"
     },
