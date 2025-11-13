@@ -92,11 +92,6 @@
     "secp256k1": "^5.0.1",
     "parse-duration": "^2.1.3",
     "ws": "^8.18.3",
-    "ipfs-core-utils": {
-      "nanoid": "^3.3.7"
-    },
-    "ipfs-core-types": {
-      "nanoid": "^3.3.7"
-    }
+    "nanoid": "^5.0.9"
   }
 }
