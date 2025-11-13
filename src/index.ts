@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { createYoga } from 'graphql-yoga'
+import { createYoga, useGraphQLValidation } from 'graphql-yoga'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { PrismaClient } from '@prisma/client'
@@ -53,12 +53,16 @@ const yoga = createYoga({
   graphqlEndpoint: '/graphql',
   landingPage: true,
   maskedErrors: process.env.NODE_ENV === 'production',
-  validationRules: [
-    depthLimit(MAX_DEPTH),
-    createComplexityLimitRule(MAX_COMPLEXITY, {
-      scalarCost: 1,
-      objectCost: 2,
-      listFactor: 10,
+  plugins: [
+    useGraphQLValidation({
+      validationRules: [
+        depthLimit(MAX_DEPTH),
+        createComplexityLimitRule(MAX_COMPLEXITY, {
+          scalarCost: 1,
+          objectCost: 2,
+          listFactor: 10,
+        }),
+      ],
     }),
   ],
 })

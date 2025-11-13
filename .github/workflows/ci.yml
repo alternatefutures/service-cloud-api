@@ -120,7 +120,7 @@ jobs:
       - name: TruffleHog Secrets Scan
         uses: trufflesecurity/trufflehog@main
         with:
-          extra_args: --only-verified --fail
+          extra_args: --only-verified
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -79,6 +79,7 @@ export default [
       '*.config.ts',
       '.github/**',
       'scripts/**',
+      '**/*.d.ts', // Ignore type declaration files
     ],
   },
 ]
