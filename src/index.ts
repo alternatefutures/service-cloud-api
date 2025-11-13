@@ -1,5 +1,6 @@
 import 'dotenv/config'
-import { createYoga, useGraphQLValidation } from 'graphql-yoga'
+import { createYoga } from 'graphql-yoga'
+import type { Plugin } from 'graphql-yoga'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { PrismaClient } from '@prisma/client'
@@ -37,6 +38,22 @@ const schema = makeExecutableSchema({
 const MAX_DEPTH = 10
 const MAX_COMPLEXITY = 1000
 
+// Custom plugin to add validation rules for depth and complexity limits
+const useValidationRules = (): Plugin => {
+  return {
+    onValidate({ addValidationRule }) {
+      addValidationRule(depthLimit(MAX_DEPTH))
+      addValidationRule(
+        createComplexityLimitRule(MAX_COMPLEXITY, {
+          scalarCost: 1,
+          objectCost: 2,
+          listFactor: 10,
+        })
+      )
+    },
+  }
+}
+
 const yoga = createYoga({
   schema,
   context: async ({ request }) => {
@@ -53,18 +70,7 @@ const yoga = createYoga({
   graphqlEndpoint: '/graphql',
   landingPage: true,
   maskedErrors: process.env.NODE_ENV === 'production',
-  plugins: [
-    useGraphQLValidation({
-      validationRules: [
-        depthLimit(MAX_DEPTH),
-        createComplexityLimitRule(MAX_COMPLEXITY, {
-          scalarCost: 1,
-          objectCost: 2,
-          listFactor: 10,
-        }),
-      ],
-    }),
-  ],
+  plugins: [useValidationRules()],
 })
 
 // Apply security headers middleware
