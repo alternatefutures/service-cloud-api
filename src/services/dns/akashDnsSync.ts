@@ -186,7 +186,7 @@ export class AkashDNSSync {
       return false
     }
 
-    const subdomainMap = isTestnet
+    const subdomainMap: Record<string, string> = isTestnet
       ? { api: 'api-test', 'yb-node-1': 'yb-test', ipfs: 'ipfs-test' }
       : { api: 'api', 'yb-node-1': 'yb', ipfs: 'ipfs' }
 

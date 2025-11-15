@@ -65,7 +65,8 @@ export class UsageBuffer {
           data: {
             userId,
             type,
-            metadata,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            metadata: metadata as any,
             createdAt: new Date(),
           },
         })

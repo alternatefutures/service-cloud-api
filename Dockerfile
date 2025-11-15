@@ -1,11 +1,16 @@
 # Dockerfile for Alternate Futures Backend (Multi-stage, Akash-optimized)
+# Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies
-FROM node:25-alpine AS deps
+FROM node:25-slim AS deps
 WORKDIR /app
 
 # Install system dependencies
-RUN apk add --no-cache libc6-compat openssl
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy package files
 COPY package*.json ./
@@ -15,11 +20,15 @@ COPY prisma ./prisma/
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:25-alpine AS builder
+FROM node:25-slim AS builder
 WORKDIR /app
 
 # Install system dependencies
-RUN apk add --no-cache libc6-compat openssl
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
@@ -30,25 +39,28 @@ COPY package*.json ./
 COPY tsconfig.json ./
 COPY src ./src
 
-# Generate Prisma client
+# Generate Prisma client with binary engine (instead of WASM)
+ENV PRISMA_CLIENT_ENGINE_TYPE=binary
 RUN npx prisma generate
 
 # Build the application
 RUN npm run build
 
 # Stage 3: Production Runner
-FROM node:25-alpine AS runner
+FROM node:25-slim AS runner
 WORKDIR /app
 
 # Install required system dependencies for production
-RUN apk add --no-cache \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     openssl \
-    libc6-compat \
-    dumb-init
+    ca-certificates \
+    dumb-init && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+RUN groupadd -g 1001 nodejs && \
+    useradd -r -u 1001 -g nodejs nodejs
 
 # Copy package files for production install
 COPY package*.json ./

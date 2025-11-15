@@ -14,3 +14,9 @@ export type {
   DNSUpdateResult,
   DNSHealthCheck,
 } from './types.js'
+
+// Domain service functions
+export * from './domainService.js'
+export * from './arnsIntegration.js'
+export * from './ensIntegration.js'
+export * from './ipnsIntegration.js'
