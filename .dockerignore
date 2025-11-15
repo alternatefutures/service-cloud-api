@@ -3,7 +3,6 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-package-lock.json
 .pnpm-debug.log*
 
 # Testing
@@ -72,9 +71,9 @@ deploy-railway.sh
 deploy.yaml
 railway.json
 
-# TypeScript
-tsconfig.json
-tsconfig.*.json
+# TypeScript (keep tsconfig.json for build, exclude test configs)
+tsconfig.test.json
+tsconfig.*.test.json
 
 # Testing & Quality
 .eslintrc*

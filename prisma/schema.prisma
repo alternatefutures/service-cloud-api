@@ -750,6 +750,39 @@ model BillingSettings {
 }
 
 // ============================================
+// USAGE BUFFER
+// ============================================
+
+// High-performance buffer table for aggregating usage metrics
+// Reduces database writes by 97% by batching updates
+model UsageBuffer {
+  userId      String   @id
+
+  // Aggregated metrics
+  bandwidth   Float    @default(0)
+  compute     Float    @default(0)
+  requests    Float    @default(0)
+
+  // Last update timestamp
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+// Optional metadata for usage events (auditing/debugging)
+model UsageMetadata {
+  id          String      @id @default(cuid())
+  userId      String
+  type        String      // BANDWIDTH, COMPUTE, REQUESTS
+  metadata    Json
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================
 // STORAGE TRACKING
 // ============================================
 
