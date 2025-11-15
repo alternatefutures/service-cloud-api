@@ -1,7 +1,7 @@
 # Dockerfile for Alternate Futures Backend (Multi-stage, Akash-optimized)
 
 # Stage 1: Dependencies
-FROM node:20-alpine AS deps
+FROM node:25-alpine AS deps
 WORKDIR /app
 
 # Install system dependencies
@@ -15,7 +15,7 @@ COPY prisma ./prisma/
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:20-alpine AS builder
+FROM node:25-alpine AS builder
 WORKDIR /app
 
 # Install system dependencies
@@ -37,7 +37,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # Stage 3: Production Runner
-FROM node:20-alpine AS runner
+FROM node:25-alpine AS runner
 WORKDIR /app
 
 # Install required system dependencies for production
