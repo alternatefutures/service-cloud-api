@@ -17,7 +17,7 @@ services:
       - "--daemon=false"
     env:
       - YSQL_USER=yugabyte
-      - YSQL_PASSWORD=TESTNET_PASSWORD_CHANGE_ME
+      - YSQL_PASSWORD=BbNB9snW285W7zIS7qX0+5ZbCWAzk1tdowzKv9dEpSU=
       - YSQL_DB=alternatefutures
     expose:
       - port: 5433
@@ -58,7 +58,7 @@ services:
       - "--daemon=false"
     env:
       - YSQL_USER=yugabyte
-      - YSQL_PASSWORD=TESTNET_PASSWORD_CHANGE_ME
+      - YSQL_PASSWORD=BbNB9snW285W7zIS7qX0+5ZbCWAzk1tdowzKv9dEpSU=
       - YSQL_DB=alternatefutures
     expose:
       - port: 5433
@@ -93,7 +93,7 @@ services:
       - "--daemon=false"
     env:
       - YSQL_USER=yugabyte
-      - YSQL_PASSWORD=TESTNET_PASSWORD_CHANGE_ME
+      - YSQL_PASSWORD=BbNB9snW285W7zIS7qX0+5ZbCWAzk1tdowzKv9dEpSU=
       - YSQL_DB=alternatefutures
     expose:
       - port: 5433
@@ -148,10 +148,10 @@ services:
   api:
     image: ghcr.io/alternatefutures/service-cloud-api:latest
     env:
-      - DATABASE_URL=postgresql://yugabyte:TESTNET_PASSWORD_CHANGE_ME@yb-node-1:5433/alternatefutures
+      - DATABASE_URL=postgresql://yugabyte:BbNB9snW285W7zIS7qX0+5ZbCWAzk1tdowzKv9dEpSU=@yb-node-1:5433/alternatefutures
       - NODE_ENV=production
       - PORT=4000
-      - JWT_SECRET=TESTNET_JWT_SECRET_CHANGE_ME
+      - JWT_SECRET=78LyP5bLyk94mGVid3P2RKucRE8vJRQAe6Tyjqqsba/H+zHKpE4IAulU+PodgDAOLCHqLsSfSUnlShtq4yu/aQ==
       - RESEND_API_KEY=your_resend_api_key
       - IPFS_API_URL=http://ipfs:5001
       - IPFS_GATEWAY_URL=https://ipfs-test.alternatefutures.ai
