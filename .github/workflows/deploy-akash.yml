@@ -1,0 +1,216 @@
+name: Deploy to Akash Network
+
+on:
+  # Automatically deploy to mainnet when pushing to main branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy-mainnet.yaml'
+      - '.github/workflows/deploy-akash.yml'
+
+  # Manual deployment trigger with environment selection
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      sdl_file:
+        description: 'SDL file to deploy'
+        required: true
+        default: 'deploy-mainnet.yaml'
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Use production environment for main branch, or user-selected for manual dispatch
+    environment: ${{ github.event_name == 'push' && 'production' || inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Akash CLI
+        run: |
+          cd /tmp
+          curl -sfL "https://github.com/akash-network/node/releases/download/v1.0.2/akash_1.0.2_linux_amd64.zip" -o akash.zip
+          unzip akash.zip
+          sudo mv akash /usr/local/bin/
+          chmod +x /usr/local/bin/akash
+          akash version
+
+      - name: Setup Akash wallet
+        env:
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+        run: |
+          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test
+          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test)
+          echo "AKASH_ADDRESS=$AKASH_ADDRESS" >> $GITHUB_ENV
+          echo "Wallet address: $AKASH_ADDRESS"
+
+      - name: Check wallet balance
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+        run: |
+          akash query bank balances ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE
+
+      - name: Substitute secrets in SDL
+        env:
+          YUGABYTE_PASSWORD: ${{ secrets.YUGABYTE_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TURBO_WALLET_KEY: ${{ secrets.TURBO_WALLET_KEY }}
+          LIGHTHOUSE_API_KEY: ${{ secrets.LIGHTHOUSE_API_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SDL_FILE: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}
+        run: |
+          cp $SDL_FILE deploy-final.yaml
+
+          # Substitute secrets
+          sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
+          sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
+          sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
+          sed -i "s|your_turbo_wallet_key|${TURBO_WALLET_KEY:-placeholder}|g" deploy-final.yaml
+          sed -i "s|your_lighthouse_api_key|${LIGHTHOUSE_API_KEY:-placeholder}|g" deploy-final.yaml
+          sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+
+          echo "SDL prepared with secrets"
+
+      - name: Verify certificate
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
+          if [ "$CERT_COUNT" -eq "0" ]; then
+            echo "No certificate found, creating one..."
+            akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --gas-prices 0.025uakt --gas auto --gas-adjustment 1.5 -y
+            sleep 10
+            akash tx cert publish client --from $AKASH_KEY_NAME --keyring-backend test --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --gas-prices 0.025uakt --gas auto --gas-adjustment 1.5 -y
+            sleep 10
+          else
+            echo "Certificate already exists"
+          fi
+
+      - name: Create deployment
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_GAS: auto
+          AKASH_GAS_ADJUSTMENT: 1.5
+          AKASH_GAS_PRICES: 0.025uakt
+        run: |
+          TX_OUTPUT=$(akash tx deployment create deploy-final.yaml \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas $AKASH_GAS \
+            --gas-adjustment $AKASH_GAS_ADJUSTMENT \
+            --gas-prices $AKASH_GAS_PRICES \
+            -y \
+            --output json)
+
+          echo "$TX_OUTPUT"
+          TX_HASH=$(echo "$TX_OUTPUT" | jq -r '.txhash')
+          echo "DEPLOYMENT_TX=$TX_HASH" >> $GITHUB_ENV
+          echo "Deployment transaction: $TX_HASH"
+
+          sleep 10
+
+      - name: Get deployment DSEQ
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+        run: |
+          DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[0].deployment.deployment_id.dseq')
+          echo "DSEQ=$DSEQ" >> $GITHUB_ENV
+          echo "Deployment DSEQ: $DSEQ"
+
+      - name: Wait for bids
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+        run: |
+          echo "Waiting for provider bids (max 5 minutes)..."
+          for i in {1..30}; do
+            BID_COUNT=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq '.bids | length')
+            echo "Attempt $i/30: $BID_COUNT bids received"
+
+            if [ "$BID_COUNT" -gt "0" ]; then
+              echo "Bids received!"
+              break
+            fi
+
+            sleep 10
+          done
+
+      - name: List and accept best bid
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          # Get all bids
+          BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
+          echo "Bids:"
+          echo "$BIDS" | jq '.bids[] | {provider: .bid.bid_id.provider, price: .bid.price.amount}'
+
+          # Accept the lowest bid
+          PROVIDER=$(echo "$BIDS" | jq -r '.bids | sort_by(.bid.price.amount | tonumber) | .[0].bid.bid_id.provider')
+          echo "Accepting bid from provider: $PROVIDER"
+
+          akash tx market lease create \
+            --dseq ${{ env.DSEQ }} \
+            --provider $PROVIDER \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            --gas-prices 0.025uakt \
+            -y
+
+      - name: Get lease status and service URIs
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+        run: |
+          sleep 20
+          echo "=== Lease Status ==="
+          akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE
+
+          echo ""
+          echo "=== Service URIs ==="
+          PROVIDER=$(akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq -r '.leases[0].lease.lease_id.provider')
+          akash provider lease-status --dseq ${{ env.DSEQ }} --provider $PROVIDER --node $AKASH_NODE --from deploy --keyring-backend test || true
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event_name == 'push' && 'production' || inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SDL File**: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Wallet**: ${{ env.AKASH_ADDRESS }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **DSEQ**: ${{ env.DSEQ }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Transaction**: ${{ env.DEPLOYMENT_TX }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Configure DNS for your domains" >> $GITHUB_STEP_SUMMARY
+          echo "2. Monitor deployment health" >> $GITHUB_STEP_SUMMARY
+          echo "3. Check service logs" >> $GITHUB_STEP_SUMMARY
