@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alternate Futures - System Status</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 3rem;
+      font-size: 0.9rem;
+    }
+    .service {
+      background: #1a1a1a;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      border: 1px solid #2a2a2a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .service-info h3 {
+      font-size: 1.1rem;
+      margin-bottom: 0.5rem;
+    }
+    .service-info p {
+      color: #888;
+      font-size: 0.85rem;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    .status.operational .status-indicator {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+    .status.degraded .status-indicator {
+      background: #f59e0b;
+      box-shadow: 0 0 10px #f59e0b;
+    }
+    .status.down .status-indicator {
+      background: #ef4444;
+      box-shadow: 0 0 10px #ef4444;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .footer {
+      margin-top: 3rem;
+      text-align: center;
+      color: #666;
+      font-size: 0.85rem;
+    }
+    .footer a {
+      color: #667eea;
+      text-decoration: none;
+    }
+    .last-updated {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 2rem;
+      text-align: center;
+      color: #888;
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>System Status</h1>
+    <p class="subtitle">Real-time monitoring of Alternate Futures infrastructure</p>
+
+    <div class="last-updated">
+      Last updated: <span id="last-updated">Loading...</span>
+    </div>
+
+    <div id="services">
+      <!-- Services will be loaded here -->
+    </div>
+
+    <div class="footer">
+      <p>Powered by DePIN • Status page hosted on <a href="https://arweave.org" target="_blank">Arweave</a></p>
+      <p>Metrics stored on <a href="https://ipfs.io" target="_blank">IPFS</a> • Infrastructure on <a href="https://akash.network" target="_blank">Akash Network</a></p>
+    </div>
+  </div>
+
+  <script>
+    // Fetch status from IPFS
+    const STATUS_CID = 'YOUR_IPFS_CID_HERE'; // Update this via CI/CD
+
+    async function loadStatus() {
+      try {
+        // Fetch from your IPFS gateway
+        const response = await fetch(`https://ipfs.alternatefutures.ai/ipfs/${STATUS_CID}`);
+        const data = await response.json();
+
+        document.getElementById('last-updated').textContent =
+          new Date(data.timestamp).toLocaleString();
+
+        const servicesHTML = data.services.map(service => `
+          <div class="service">
+            <div class="service-info">
+              <h3>${service.name}</h3>
+              <p>${service.description}</p>
+            </div>
+            <div class="status ${service.status}">
+              <div class="status-indicator"></div>
+              ${service.status.charAt(0).toUpperCase() + service.status.slice(1)}
+            </div>
+          </div>
+        `).join('');
+
+        document.getElementById('services').innerHTML = servicesHTML;
+      } catch (error) {
+        console.error('Failed to load status:', error);
+        document.getElementById('services').innerHTML = `
+          <div class="service">
+            <div class="service-info">
+              <h3>Unable to load status</h3>
+              <p>Please try again later</p>
+            </div>
+            <div class="status down">
+              <div class="status-indicator"></div>
+              Error
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    loadStatus();
+    // Refresh every 30 seconds
+    setInterval(loadStatus, 30000);
+  </script>
+</body>
+</html>
