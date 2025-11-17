@@ -49,7 +49,7 @@ Add these secrets (click "Add secret" for each):
 
 4. **`RESEND_API_KEY`** - Email service (https://resend.com)
 5. **`ARWEAVE_WALLET`** - Arweave uploads (https://turbo.ardrive.io)
-6. **`LIGHTHOUSE_API_KEY`** - Filecoin storage (https://files.lighthouse.storage)
+6. **`FILECOIN_WALLET_KEY`** - Filecoin storage wallet (direct integration, no third party)
 7. **`SENTRY_DSN`** - Error tracking (https://sentry.io)
 
 ### 3. Verify Wallet Balance

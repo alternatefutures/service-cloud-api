@@ -194,8 +194,11 @@ services:
       # Storage - Arweave (Optional)
       - ARWEAVE_WALLET=your_arweave_wallet
 
-      # Storage - Filecoin
-      - LIGHTHOUSE_API_KEY=your_lighthouse_api_key
+      # Storage - Filecoin (Direct Integration)
+      # Option 1: Run Lotus node (add service above)
+      # Option 2: Use public RPC (configure in code)
+      - FILECOIN_RPC_URL=https://api.node.glif.io/rpc/v0
+      - FILECOIN_WALLET_KEY=your_filecoin_wallet_key
 
       # Optional: Analytics
       - SENTRY_DSN=your_sentry_dsn

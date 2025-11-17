@@ -49,9 +49,10 @@ API key for Resend email service
 Arweave wallet key for permanent storage (works with Turbo SDK)
 - Get from: https://turbo.ardrive.io/
 
-#### 6. `LIGHTHOUSE_API_KEY` (Optional)
-Lighthouse Storage API key for Filecoin
-- Get from: https://files.lighthouse.storage/
+#### 6. `FILECOIN_WALLET_KEY` (Optional)
+Filecoin wallet key for direct storage deal creation (no third-party service)
+- Create Filecoin wallet and export private key
+- Uses public RPC: https://api.node.glif.io/rpc/v0
 
 #### 7. `SENTRY_DSN` (Optional)
 Sentry DSN for error tracking
