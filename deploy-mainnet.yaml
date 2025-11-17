@@ -192,7 +192,7 @@ services:
       - IPFS_GATEWAY_URL=https://ipfs.alternatefutures.ai
 
       # Storage - Arweave (Optional)
-      - TURBO_WALLET_KEY=your_turbo_wallet_key
+      - ARWEAVE_WALLET=your_arweave_wallet
 
       # Storage - Filecoin
       - LIGHTHOUSE_API_KEY=your_lighthouse_api_key

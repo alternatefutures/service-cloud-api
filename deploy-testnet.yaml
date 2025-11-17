@@ -181,7 +181,8 @@ profiles:
         memory:
           size: 2Gi   # Reduced from 4Gi
         storage:
-          size: 20Gi  # Reduced from 50Gi
+          - name: data
+            size: 20Gi  # Reduced from 50Gi
 
     yb-node-2:
       resources:
@@ -190,7 +191,8 @@ profiles:
         memory:
           size: 2Gi
         storage:
-          size: 20Gi
+          - name: data
+            size: 20Gi
 
     yb-node-3:
       resources:
@@ -199,7 +201,8 @@ profiles:
         memory:
           size: 2Gi
         storage:
-          size: 20Gi
+          - name: data
+            size: 20Gi
 
     api:
       resources:
@@ -208,7 +211,7 @@ profiles:
         memory:
           size: 512Mi # Reduced from 1Gi
         storage:
-          size: 512Mi
+          - size: 512Mi
 
     ipfs:
       resources:
@@ -217,27 +220,28 @@ profiles:
         memory:
           size: 2Gi   # Reduced from 4Gi
         storage:
-          size: 20Gi  # Reduced from 100Gi
+          - name: data
+            size: 20Gi  # Reduced from 100Gi
 
   placement:
     dcloud:
       pricing:
-        # Lower bids for testnet
+        # Higher bids for testnet (2x increase from previous attempt)
         yb-node-1:
           denom: uakt
-          amount: 500   # Reduced from 2000
+          amount: 2500
         yb-node-2:
           denom: uakt
-          amount: 500
+          amount: 2500
         yb-node-3:
           denom: uakt
-          amount: 500
+          amount: 2500
         api:
           denom: uakt
-          amount: 250   # Reduced from 1000
+          amount: 1500
         ipfs:
           denom: uakt
-          amount: 500   # Reduced from 2000
+          amount: 2500
 
 deployment:
   yb-node-1:

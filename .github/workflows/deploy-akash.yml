@@ -68,7 +68,7 @@ jobs:
           YUGABYTE_PASSWORD: ${{ secrets.YUGABYTE_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          TURBO_WALLET_KEY: ${{ secrets.TURBO_WALLET_KEY }}
+          ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
           LIGHTHOUSE_API_KEY: ${{ secrets.LIGHTHOUSE_API_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SDL_FILE: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}
@@ -79,7 +79,7 @@ jobs:
           sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
           sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
           sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
-          sed -i "s|your_turbo_wallet_key|${TURBO_WALLET_KEY:-placeholder}|g" deploy-final.yaml
+          sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
           sed -i "s|your_lighthouse_api_key|${LIGHTHOUSE_API_KEY:-placeholder}|g" deploy-final.yaml
           sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
 

@@ -45,8 +45,8 @@ Example: `tlSnxQz/SiMLTAEGvFT0qxVYCie71gsNDIDwZgLoMg4=`
 API key for Resend email service
 - Get from: https://resend.com/api-keys
 
-#### 5. `TURBO_WALLET_KEY` (Optional)
-Arweave Turbo wallet key for permanent storage
+#### 5. `ARWEAVE_WALLET` (Optional)
+Arweave wallet key for permanent storage (works with Turbo SDK)
 - Get from: https://turbo.ardrive.io/
 
 #### 6. `LIGHTHOUSE_API_KEY` (Optional)

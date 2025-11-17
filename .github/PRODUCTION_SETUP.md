@@ -48,7 +48,7 @@ Add these secrets (click "Add secret" for each):
 #### Optional Secrets (add as needed):
 
 4. **`RESEND_API_KEY`** - Email service (https://resend.com)
-5. **`TURBO_WALLET_KEY`** - Arweave uploads (https://turbo.ardrive.io)
+5. **`ARWEAVE_WALLET`** - Arweave uploads (https://turbo.ardrive.io)
 6. **`LIGHTHOUSE_API_KEY`** - Filecoin storage (https://files.lighthouse.storage)
 7. **`SENTRY_DSN`** - Error tracking (https://sentry.io)
 
