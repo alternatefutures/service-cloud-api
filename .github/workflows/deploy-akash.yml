@@ -319,26 +319,50 @@ jobs:
           echo "Fetching service URIs from provider..."
           CERT_PATH="$HOME/.akash/certs"
 
-          # Try to get lease status via provider API
-          LEASE_STATUS=$(curl -sk \
-            --cert "$CERT_PATH/client.crt" \
-            --key "$CERT_PATH/client.key" \
-            "https://$PROVIDER_HOST:8443/lease/${{ env.DSEQ }}/1/1/status" 2>/dev/null || echo "")
-
-          if [ -n "$LEASE_STATUS" ]; then
-            echo "$LEASE_STATUS" | jq '.'
-
-            # Extract and display service URIs
-            echo ""
-            echo "=== Service Endpoints ==="
-            echo "$LEASE_STATUS" | jq -r '.services // {} | to_entries[] | "Service: \(.key)\n  URIs: \(.value.uris // [])\n"'
-            echo "$LEASE_STATUS" | jq -r '.forwarded_ports // {} | to_entries[] | "Service: \(.key)\n  Host: \(.value[0].host // "N/A")\n  Port: \(.value[0].port // "N/A")\n  External Port: \(.value[0].externalPort // "N/A")\n"'
+          # Check if certificates exist
+          echo "Checking for certificates..."
+          if [ -d "$CERT_PATH" ]; then
+            echo "Certificate directory exists"
+            ls -la "$CERT_PATH"
           else
-            echo "Note: Could not fetch lease status from provider API"
-            echo "This is expected if certificate authentication is not set up"
-            echo ""
-            echo "Service endpoints will be available once the deployment is fully active."
-            echo "You can check the provider's status page or use 'akash query' commands to get service information."
+            echo "Certificate directory not found at $CERT_PATH"
+          fi
+
+          # Only try to query if we have both provider host and certificates
+          if [ -n "$PROVIDER_HOST" ] && [ "$PROVIDER_HOST" != "null" ] && [ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]; then
+            echo "Querying provider API at: https://$PROVIDER_HOST/lease/${{ env.DSEQ }}/1/1/status"
+
+            # Try to get lease status via provider API with timeout
+            LEASE_STATUS=$(curl -sk --max-time 10 \
+              --cert "$CERT_PATH/client.crt" \
+              --key "$CERT_PATH/client.key" \
+              "https://$PROVIDER_HOST/lease/${{ env.DSEQ }}/1/1/status" 2>&1)
+
+            CURL_EXIT=$?
+
+            if [ $CURL_EXIT -eq 0 ] && [ -n "$LEASE_STATUS" ] && echo "$LEASE_STATUS" | jq -e '.' >/dev/null 2>&1; then
+              echo "Successfully retrieved lease status!"
+              echo "$LEASE_STATUS" | jq '.'
+
+              # Extract and display service URIs
+              echo ""
+              echo "=== Service Endpoints ==="
+              echo "$LEASE_STATUS" | jq -r '.services // {} | to_entries[] | "Service: \(.key)\n  URIs: \(.value.uris // [])\n"'
+              echo "$LEASE_STATUS" | jq -r '.forwarded_ports // {} | to_entries[] | "Service: \(.key)\n  Host: \(.value[0].host // "N/A")\n  Port: \(.value[0].port // "N/A")\n  External Port: \(.value[0].externalPort // "N/A")\n"'
+            else
+              echo "Could not fetch lease status from provider API (exit code: $CURL_EXIT)"
+              echo "Response: $LEASE_STATUS"
+              echo ""
+              echo "You can access the provider's web interface at: https://$PROVIDER_HOST"
+              echo "Or check the lease status page: https://$PROVIDER_HOST/lease/${{ env.DSEQ }}/1/1/status"
+            fi
+          else
+            echo "Skipping provider API query (missing certificates or provider host)"
+            if [ -n "$PROVIDER_HOST" ] && [ "$PROVIDER_HOST" != "null" ]; then
+              echo ""
+              echo "Provider web interface: https://$PROVIDER_HOST"
+              echo "Lease status (requires auth): https://$PROVIDER_HOST/lease/${{ env.DSEQ }}/1/1/status"
+            fi
           fi
 
       - name: Setup Node.js for DNS sync
