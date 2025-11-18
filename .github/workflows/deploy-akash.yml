@@ -25,6 +25,12 @@ on:
         default: 'deploy-mainnet.yaml'
         type: string
 
+# Prevent multiple deployments from running simultaneously
+# Cancel in-progress runs when a new deployment is triggered
+concurrency:
+  group: akash-production-deployment
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
