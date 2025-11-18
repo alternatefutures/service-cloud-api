@@ -302,6 +302,7 @@ jobs:
           npm install
 
       - name: Sync DNS records
+        continue-on-error: true
         env:
           OPENPROVIDER_USERNAME: ${{ secrets.OPENPROVIDER_USERNAME }}
           OPENPROVIDER_PASSWORD: ${{ secrets.OPENPROVIDER_PASSWORD }}
@@ -310,6 +311,11 @@ jobs:
           AKASH_CHAIN_ID: akashnet-2
         run: |
           echo "Syncing DNS for deployment ${{ env.DSEQ }} on provider ${{ env.PROVIDER }}"
+          if [ -z "${{ env.PROVIDER }}" ] || [ "${{ env.PROVIDER }}" == "null" ]; then
+            echo "Warning: Provider address not available, skipping DNS sync"
+            echo "You can manually configure DNS using the deployment info from the logs above"
+            exit 0
+          fi
           tsx scripts/sync-dns.ts ${{ env.DSEQ }} ${{ env.PROVIDER }}
 
       - name: Deployment summary
