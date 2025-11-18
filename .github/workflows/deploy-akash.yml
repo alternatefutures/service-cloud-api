@@ -147,13 +147,43 @@ jobs:
           echo "DEPLOYMENT_TX=$TX_HASH" >> $GITHUB_ENV
           echo "Deployment transaction: $TX_HASH"
 
-          sleep 10
+          # Wait for transaction to be committed and indexed
+          echo "Waiting for transaction to be committed..."
+          sleep 15
 
       - name: Get deployment DSEQ
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
         run: |
-          DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[0].deployment.deployment_id.dseq')
+          # Query the transaction to get the DSEQ from events
+          echo "Querying transaction ${{ env.DEPLOYMENT_TX }} for DSEQ..."
+          TX_RESULT=$(akash query tx ${{ env.DEPLOYMENT_TX }} --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --output json)
+
+          # Extract DSEQ from transaction events
+          # The deployment creation emits an event with the DSEQ
+          DSEQ=$(echo "$TX_RESULT" | jq -r '.events[] | select(.type=="akash.v1") | .attributes[] | select(.key=="dseq") | .value')
+
+          # Fallback: try getting from logs
+          if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
+            echo "Trying to extract DSEQ from logs..."
+            DSEQ=$(echo "$TX_RESULT" | jq -r '.logs[0].events[] | select(.type=="message") | .attributes[] | select(.key=="dseq") | .value')
+          fi
+
+          # Final fallback: query deployment list
+          if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
+            echo "Querying deployment list..."
+            sleep 10
+            DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[0].deployment.deployment_id.dseq')
+          fi
+
+          if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
+            echo "Error: Could not extract DSEQ from transaction or deployment list"
+            echo "Transaction result:"
+            echo "$TX_RESULT" | jq '.'
+            exit 1
+          fi
+
           echo "DSEQ=$DSEQ" >> $GITHUB_ENV
           echo "Deployment DSEQ: $DSEQ"
 
