@@ -168,6 +168,46 @@ services:
           mount: /data/ipfs
           readOnly: false
 
+  # Authentication Service
+  # Handles user authentication, JWT tokens, magic links
+  auth:
+    image: ghcr.io/alternatefutures/service-auth:latest
+    env:
+      # Database - YugabyteDB (PostgreSQL-compatible on port 5433)
+      # Can connect to any of the 3 nodes (automatic failover)
+      - DATABASE_URL=postgresql://yugabyte:your_secure_password_here_change_this@yb-node-1:5433/alternatefutures
+
+      # App Config
+      - NODE_ENV=production
+      - PORT=3000
+
+      # JWT Secret (CHANGE THIS! Must match API service)
+      - JWT_SECRET=your_jwt_secret_min_32_chars_please_change_this_in_production
+
+      # Email (Resend) - for magic links
+      - RESEND_API_KEY=your_resend_api_key
+
+      # Frontend URL - for redirects after auth
+      - FRONTEND_URL=https://alternatefutures.ai
+
+    expose:
+      # Internal port for API service
+      - port: 3000
+        as: 3000
+        to:
+          - service: api
+      # Public HTTPS endpoint (optional - for direct OAuth/magic link access)
+      - port: 3000
+        as: 80
+        to:
+          - global: true
+        accept:
+          - auth.alternatefutures.ai
+    depends_on:
+      - yb-node-1
+      - yb-node-2
+      - yb-node-3
+
   # GraphQL API Service
   # Connects to YugabyteDB (PostgreSQL-compatible) and IPFS
   api:
@@ -183,6 +223,9 @@ services:
 
       # JWT Secret (CHANGE THIS!)
       - JWT_SECRET=your_jwt_secret_min_32_chars_please_change_this_in_production
+
+      # Authentication Service
+      - AUTH_SERVICE_URL=http://auth:3000
 
       # Email (Resend)
       - RESEND_API_KEY=your_resend_api_key
@@ -215,6 +258,7 @@ services:
       - yb-node-2
       - yb-node-3
       - ipfs
+      - auth
 
 profiles:
   compute:
@@ -253,6 +297,16 @@ profiles:
           - name: data
             size: 50Gi
 
+    # Auth Service
+    auth:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          size: 256Mi
+
     # API Service
     api:
       resources:
@@ -277,7 +331,7 @@ profiles:
   placement:
     dcloud:
       pricing:
-        # Mainnet-optimized pricing (~250 uakt/block = 108 AKT/month = $65/month)
+        # Mainnet-optimized pricing (~270 uakt/block with auth = 116 AKT/month = $70/month)
         # Conservative bids to ensure provider acceptance
         yb-node-1:
           denom: uakt
@@ -288,6 +342,9 @@ profiles:
         yb-node-3:
           denom: uakt
           amount: 50
+        auth:
+          denom: uakt
+          amount: 20
         api:
           denom: uakt
           amount: 30
@@ -309,6 +366,11 @@ deployment:
   yb-node-3:
     dcloud:
       profile: yb-node-3
+      count: 1
+
+  auth:
+    dcloud:
+      profile: auth
       count: 1
 
   api:
