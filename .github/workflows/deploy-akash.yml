@@ -239,12 +239,41 @@ jobs:
         run: |
           # Get all bids
           BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
-          echo "Bids:"
-          echo "$BIDS" | jq '.bids[] | {provider: .bid.bid_id.provider, price: .bid.price.amount}'
 
-          # Accept the lowest bid
-          PROVIDER=$(echo "$BIDS" | jq -r '.bids | sort_by(.bid.price.amount | tonumber) | .[0].bid.bid_id.provider')
-          echo "Accepting bid from provider: $PROVIDER"
+          echo "=== Debug: Full bid structure ==="
+          echo "$BIDS" | jq '.bids[0]' || echo "No bids found"
+
+          echo ""
+          echo "=== Bid summary ==="
+          # Try to show provider and price from each bid
+          echo "$BIDS" | jq -r '.bids[] | "\(.bid.bid_id.provider // "MISSING") - \(.bid.price.amount) uakt"' || true
+
+          # Find the lowest bid and extract provider
+          # Sort by price and get the first (lowest) bid
+          LOWEST_BID=$(echo "$BIDS" | jq '.bids | sort_by(.bid.price.amount | tonumber) | .[0]')
+
+          # Try multiple methods to extract provider
+          PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.bid_id.provider // empty' 2>/dev/null)
+
+          if [ -z "$PROVIDER" ]; then
+            # Try alternative path
+            PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid_id.provider // empty' 2>/dev/null)
+          fi
+
+          if [ -z "$PROVIDER" ]; then
+            # Try top-level
+            PROVIDER=$(echo "$LOWEST_BID" | jq -r '.provider // empty' 2>/dev/null)
+          fi
+
+          if [ -z "$PROVIDER" ]; then
+            echo "Error: Could not extract provider address"
+            echo "Lowest bid structure:"
+            echo "$LOWEST_BID" | jq '.'
+            exit 1
+          fi
+
+          PRICE=$(echo "$LOWEST_BID" | jq -r '.bid.price.amount')
+          echo "Accepting bid from provider: $PROVIDER (Price: $PRICE uakt)"
 
           akash tx market lease create \
             --dseq ${{ env.DSEQ }} \
