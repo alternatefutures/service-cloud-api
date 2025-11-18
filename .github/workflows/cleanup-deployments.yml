@@ -67,14 +67,19 @@ jobs:
             exit 0
           fi
 
+          # Debug: Show deployment structure
+          echo "First deployment structure:"
+          echo "$DEPLOYMENTS" | jq '.deployments[0]'
+
           # Determine which deployments to close
           if [ "$MODE" == "keep-latest" ]; then
-            LATEST_DSEQ=$(echo "$DEPLOYMENTS" | jq -r '.deployments | sort_by(.deployment.deployment_id.dseq | tonumber) | .[-1].deployment.deployment_id.dseq')
+            # Filter out null DSEQs and sort by DSEQ number
+            LATEST_DSEQ=$(echo "$DEPLOYMENTS" | jq -r '.deployments | map(select(.deployment.deployment_id.dseq != null)) | sort_by(.deployment.deployment_id.dseq | tonumber) | .[-1].deployment.deployment_id.dseq')
             echo "Keeping latest deployment: $LATEST_DSEQ"
-            DSEQS_TO_CLOSE=$(echo "$DEPLOYMENTS" | jq -r ".deployments[] | select(.deployment.deployment_id.dseq != \"$LATEST_DSEQ\") | .deployment.deployment_id.dseq")
+            DSEQS_TO_CLOSE=$(echo "$DEPLOYMENTS" | jq -r ".deployments[] | select(.deployment.deployment_id.dseq != null and .deployment.deployment_id.dseq != \"$LATEST_DSEQ\") | .deployment.deployment_id.dseq")
           else
             echo "Closing ALL deployments"
-            DSEQS_TO_CLOSE=$(echo "$DEPLOYMENTS" | jq -r '.deployments[].deployment.deployment_id.dseq')
+            DSEQS_TO_CLOSE=$(echo "$DEPLOYMENTS" | jq -r '.deployments[] | select(.deployment.deployment_id.dseq != null) | .deployment.deployment_id.dseq')
           fi
 
           # Close deployments
