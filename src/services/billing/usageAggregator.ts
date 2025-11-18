@@ -13,20 +13,20 @@
  * Cost savings: $565/month → $70/month for 10K users
  */
 
-import * as cron from 'node-cron';
-import type { PrismaClient } from '@prisma/client';
-import { UsageBuffer } from './usageBuffer.js';
+import * as cron from 'node-cron'
+import type { PrismaClient } from '@prisma/client'
+import { UsageBuffer } from './usageBuffer.js'
 
 export class UsageAggregator {
-  private cronJob: cron.ScheduledTask | null = null;
-  private usageBuffer: UsageBuffer;
-  private isProcessing = false;
+  private cronJob: cron.ScheduledTask | null = null
+  private usageBuffer: UsageBuffer
+  private isProcessing = false
 
   constructor(
     private prisma: PrismaClient,
     usageBuffer?: UsageBuffer
   ) {
-    this.usageBuffer = usageBuffer || new UsageBuffer();
+    this.usageBuffer = usageBuffer || new UsageBuffer()
   }
 
   /**
@@ -35,16 +35,18 @@ export class UsageAggregator {
    */
   start() {
     if (this.cronJob) {
-      console.log('[UsageAggregator] Already running');
-      return;
+      console.log('[UsageAggregator] Already running')
+      return
     }
 
     // Run every minute (at second 0)
     this.cronJob = cron.schedule('* * * * *', async () => {
-      await this.flush();
-    });
+      await this.flush()
+    })
 
-    console.log('[UsageAggregator] Started - flushes buffered usage every minute');
+    console.log(
+      '[UsageAggregator] Started - flushes buffered usage every minute'
+    )
   }
 
   /**
@@ -52,9 +54,9 @@ export class UsageAggregator {
    */
   stop() {
     if (this.cronJob) {
-      this.cronJob.stop();
-      this.cronJob = null;
-      console.log('[UsageAggregator] Stopped');
+      this.cronJob.stop()
+      this.cronJob = null
+      console.log('[UsageAggregator] Stopped')
     }
   }
 
@@ -64,30 +66,32 @@ export class UsageAggregator {
    */
   private async flush() {
     if (this.isProcessing) {
-      console.log('[UsageAggregator] Previous flush still processing, skipping...');
-      return;
+      console.log(
+        '[UsageAggregator] Previous flush still processing, skipping...'
+      )
+      return
     }
 
-    this.isProcessing = true;
-    const startTime = Date.now();
+    this.isProcessing = true
+    const startTime = Date.now()
 
     try {
       // Get all buffered usage from Redis
-      const bufferedUsage = await this.usageBuffer.getAllBufferedUsage();
+      const bufferedUsage = await this.usageBuffer.getAllBufferedUsage()
 
       if (bufferedUsage.size === 0) {
-        console.log('[UsageAggregator] No buffered usage to flush');
-        this.isProcessing = false;
-        return;
+        console.log('[UsageAggregator] No buffered usage to flush')
+        this.isProcessing = false
+        return
       }
 
       console.log(
         `[UsageAggregator] Flushing usage for ${bufferedUsage.size} users...`
-      );
+      )
 
-      let successCount = 0;
-      let errorCount = 0;
-      const timestamp = new Date();
+      let successCount = 0
+      let errorCount = 0
+      const timestamp = new Date()
 
       // Process each user's buffered usage
       for (const [userId, metrics] of bufferedUsage.entries()) {
@@ -102,31 +106,33 @@ export class UsageAggregator {
                 take: 1,
               },
             },
-          });
+          })
 
           if (!customer) {
-            console.warn(`[UsageAggregator] Customer not found for user ${userId}`);
-            errorCount++;
-            continue;
+            console.warn(
+              `[UsageAggregator] Customer not found for user ${userId}`
+            )
+            errorCount++
+            continue
           }
 
           // Get billing period from active subscription
-          const subscription = customer.subscriptions[0];
-          const periodStart = subscription?.currentPeriodStart || timestamp;
+          const subscription = customer.subscriptions[0]
+          const periodStart = subscription?.currentPeriodStart || timestamp
           const periodEnd =
             subscription?.currentPeriodEnd ||
-            new Date(timestamp.getTime() + 30 * 24 * 60 * 60 * 1000);
+            new Date(timestamp.getTime() + 30 * 24 * 60 * 60 * 1000)
 
           // Get pricing from billing settings
-          const settings = await this.prisma.billingSettings.findFirst();
+          const settings = await this.prisma.billingSettings.findFirst()
 
           // Create usage records for each metric type
-          const usageRecords = [];
+          const usageRecords = []
 
           if (metrics.bandwidth > 0) {
             const amount = settings?.bandwidthPerGBCents
               ? Math.ceil(metrics.bandwidth * settings.bandwidthPerGBCents)
-              : undefined;
+              : undefined
 
             usageRecords.push({
               customerId: customer.id,
@@ -140,13 +146,13 @@ export class UsageAggregator {
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
-            });
+            })
           }
 
           if (metrics.compute > 0) {
             const amount = settings?.computePerHourCents
               ? Math.ceil(metrics.compute * settings.computePerHourCents)
-              : undefined;
+              : undefined
 
             usageRecords.push({
               customerId: customer.id,
@@ -160,13 +166,15 @@ export class UsageAggregator {
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
-            });
+            })
           }
 
           if (metrics.requests > 0) {
             const amount = settings?.requestsPer1000Cents
-              ? Math.ceil((metrics.requests / 1000) * settings.requestsPer1000Cents)
-              : undefined;
+              ? Math.ceil(
+                  (metrics.requests / 1000) * settings.requestsPer1000Cents
+                )
+              : undefined
 
             usageRecords.push({
               customerId: customer.id,
@@ -180,45 +188,45 @@ export class UsageAggregator {
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
-            });
+            })
           }
 
           // Batch insert all usage records for this user
           if (usageRecords.length > 0) {
             await this.prisma.usageRecord.createMany({
               data: usageRecords,
-            });
+            })
           }
 
           // Clear this user's buffer in Redis
-          await this.usageBuffer.clearUser(userId);
+          await this.usageBuffer.clearUser(userId)
 
-          successCount++;
+          successCount++
         } catch (error) {
           console.error(
             `[UsageAggregator] Failed to flush usage for user ${userId}:`,
             error
-          );
-          errorCount++;
+          )
+          errorCount++
           // Continue processing other users even if one fails
         }
       }
 
-      const duration = Date.now() - startTime;
+      const duration = Date.now() - startTime
       console.log(
         `[UsageAggregator] Completed: ${successCount} users flushed, ${errorCount} failed (${duration}ms)`
-      );
+      )
 
       // Log stats for monitoring
       if (duration > 5000) {
         console.warn(
           `[UsageAggregator] Flush took ${duration}ms - consider optimizing or scaling`
-        );
+        )
       }
     } catch (error) {
-      console.error('[UsageAggregator] Error during flush:', error);
+      console.error('[UsageAggregator] Error during flush:', error)
     } finally {
-      this.isProcessing = false;
+      this.isProcessing = false
     }
   }
 
@@ -226,49 +234,51 @@ export class UsageAggregator {
    * Manual flush trigger (for testing or maintenance)
    */
   async runNow() {
-    console.log('[UsageAggregator] Manual flush triggered');
-    await this.flush();
+    console.log('[UsageAggregator] Manual flush triggered')
+    await this.flush()
   }
 
   /**
    * Get aggregator status
    */
   getStatus(): {
-    isRunning: boolean;
-    isProcessing: boolean;
+    isRunning: boolean
+    isProcessing: boolean
   } {
     return {
       isRunning: this.cronJob !== null,
       isProcessing: this.isProcessing,
-    };
+    }
   }
 
   /**
    * Graceful shutdown
    */
   async shutdown() {
-    console.log('[UsageAggregator] Shutting down...');
+    console.log('[UsageAggregator] Shutting down...')
 
     // Stop accepting new flush jobs
-    this.stop();
+    this.stop()
 
     // Wait for current flush to complete (max 60 seconds for large batches)
-    const maxWait = 60000;
-    const checkInterval = 100;
-    let waited = 0;
+    const maxWait = 60000
+    const checkInterval = 100
+    let waited = 0
 
     while (this.isProcessing && waited < maxWait) {
-      await new Promise((resolve) => setTimeout(resolve, checkInterval));
-      waited += checkInterval;
+      await new Promise(resolve => setTimeout(resolve, checkInterval))
+      waited += checkInterval
     }
 
     if (this.isProcessing) {
-      console.warn('[UsageAggregator] Shutdown timeout - flush may be incomplete');
+      console.warn(
+        '[UsageAggregator] Shutdown timeout - flush may be incomplete'
+      )
     }
 
     // Disconnect from Redis
-    await this.usageBuffer.disconnect();
+    await this.usageBuffer.disconnect()
 
-    console.log('[UsageAggregator] Shutdown complete');
+    console.log('[UsageAggregator] Shutdown complete')
   }
 }

@@ -48,6 +48,7 @@ Migrate Personal Access Token (PAT) authentication from `backend` to `auth` to e
 #### 1.1. Copy PAT functionality to auth
 
 **Files to copy/adapt:**
+
 - `src/services/auth/tokenService.ts` → Copy token generation, validation, cleanup
 - `src/services/auth/rateLimiter.ts` → Copy rate limiting logic
 - `src/services/auth/logger.ts` → Copy structured logging
@@ -56,6 +57,7 @@ Migrate Personal Access Token (PAT) authentication from `backend` to `auth` to e
 #### 1.2. Add PAT database schema to auth service
 
 **Prisma schema additions:**
+
 ```prisma
 model PersonalAccessToken {
   id         String    @id @default(cuid())
@@ -77,6 +79,7 @@ model PersonalAccessToken {
 #### 1.3. Add PAT API endpoints to auth service
 
 **New REST endpoints:**
+
 ```
 POST   /api/tokens              # Create new PAT
 GET    /api/tokens              # List user's PATs
@@ -88,6 +91,7 @@ GET    /api/tokens/limits       # Get rate limits
 #### 1.4. Add environment variables
 
 **Auth service `.env`:**
+
 ```bash
 # Redis for rate limiting
 REDIS_URL=redis://localhost:6379
@@ -104,21 +108,23 @@ JWT_SECRET=...
 #### 2.1. Update authentication middleware
 
 **Current (`src/auth/middleware.ts`):**
+
 ```typescript
 // Validates PATs directly from database
 const pat = await prisma.personalAccessToken.findUnique({
   where: { token },
-});
+})
 ```
 
 **New (calls auth service):**
+
 ```typescript
 // Validates PATs via auth service API
 const response = await fetch(`${AUTH_SERVICE_URL}/api/tokens/validate`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ token }),
-});
+})
 ```
 
 #### 2.2. Update GraphQL resolvers
@@ -131,16 +137,17 @@ const response = await fetch(`${AUTH_SERVICE_URL}/api/tokens/validate`, {
 const response = await fetch(`${AUTH_SERVICE_URL}/api/tokens`, {
   method: 'POST',
   headers: {
-    'Authorization': `Bearer ${userJwt}`,
-    'Content-Type': 'application/json'
+    Authorization: `Bearer ${userJwt}`,
+    'Content-Type': 'application/json',
   },
-  body: JSON.stringify({ name, expiresAt })
-});
+  body: JSON.stringify({ name, expiresAt }),
+})
 ```
 
 #### 2.3. Environment variables
 
 **Backend `.env`:**
+
 ```bash
 # Auth Service URL
 AUTH_SERVICE_URL=http://localhost:3001  # Dev
@@ -155,11 +162,13 @@ AUTH_SERVICE_SECRET=...
 #### 3.1. Data migration strategy
 
 **Option A: Fresh start (recommended for development)**
+
 - Deploy auth service with empty PAT table
 - Users create new PATs via auth service
 - Deprecate old PATs in backend
 
 **Option B: Migrate existing data**
+
 ```sql
 -- Export from backend
 COPY personal_access_token TO '/tmp/pats.csv' CSV HEADER;
@@ -172,6 +181,7 @@ COPY personal_access_token FROM '/tmp/pats.csv' CSV HEADER;
 
 **Pre-Launch Simplified Approach:**
 Since the product hasn't launched, we can skip the parallel run:
+
 - Deploy auth service with empty PAT table
 - Set AUTH_SERVICE_URL in backend environment
 - Users create new PATs via auth service from day one
@@ -184,6 +194,7 @@ Since the product hasn't launched, we can skip the parallel run:
 After migration is complete and stable:
 
 **Files to remove from backend:**
+
 - `src/services/auth/tokenService.ts`
 - `src/services/auth/rateLimiter.ts`
 - `src/services/auth/logger.ts`
@@ -192,6 +203,7 @@ After migration is complete and stable:
 - Tests: `src/services/auth/*.test.ts`
 
 **Database schema changes:**
+
 ```prisma
 // Remove from backend schema
 model PersonalAccessToken {
@@ -200,11 +212,15 @@ model PersonalAccessToken {
 ```
 
 **GraphQL schema changes:**
+
 ```graphql
 # Update mutations to note they proxy to auth service
 type Mutation {
   # Proxies to auth service
-  createPersonalAccessToken(name: String!, expiresAt: Date): PersonalAccessTokenCreated!
+  createPersonalAccessToken(
+    name: String!
+    expiresAt: Date
+  ): PersonalAccessTokenCreated!
   deletePersonalAccessToken(id: ID!): Boolean!
 }
 ```
@@ -259,15 +275,18 @@ If issues arise during migration:
 ## Testing Strategy
 
 ### Unit Tests
+
 - Auth service: Test PAT creation, validation, rate limiting
 - Backend: Test middleware with mocked auth service responses
 
 ### Integration Tests
+
 - End-to-end: CLI → Backend → Auth Service
 - Token validation flow
 - Rate limiting across service boundary
 
 ### Load Tests
+
 - Auth service under load (1000 req/s)
 - Latency impact of service-to-service calls
 - Redis performance for rate limiting
@@ -275,16 +294,19 @@ If issues arise during migration:
 ## Performance Considerations
 
 ### Latency
+
 - **Before:** Local DB query (~5-10ms)
 - **After:** HTTP call to auth service (~20-50ms)
 - **Mitigation:** Cache validated tokens (5-minute TTL)
 
 ### Availability
+
 - Auth service becomes critical dependency
 - **Mitigation:** Implement circuit breaker pattern
 - **Mitigation:** Local token cache for graceful degradation
 
 ### Cost
+
 - Additional service to deploy (~$5-10/month)
 - Redis for rate limiting (~$5/month)
 

@@ -98,7 +98,7 @@ Validate system can run continuously for 72+ hours without issues, ensuring long
 - [ ] Memory avg: \_\_\_\_%
 - [ ] Disk usage: \_\_\_\_%
 - [ ] Critical errors: \_\_\_
-- [ ] Notes: ********\_********
+- [ ] Notes: **\*\*\*\***\_**\*\*\*\***
 
 ## Success Metrics
 

@@ -4,22 +4,22 @@
  * Handles cryptocurrency payment processing for multiple blockchains
  */
 
-import { ethers } from 'ethers';
-import { Connection, PublicKey } from '@solana/web3.js';
-import type { PrismaClient } from '@prisma/client';
+import { ethers } from 'ethers'
+import { Connection, PublicKey } from '@solana/web3.js'
+import type { PrismaClient } from '@prisma/client'
 
 export class CryptoService {
-  private ethProvider: ethers.JsonRpcProvider;
-  private solConnection: Connection;
+  private ethProvider: ethers.JsonRpcProvider
+  private solConnection: Connection
 
   constructor(private prisma: PrismaClient) {
     // Initialize providers
     this.ethProvider = new ethers.JsonRpcProvider(
       process.env.ETH_RPC_URL || 'https://mainnet.infura.io/v3/your-project-id'
-    );
+    )
     this.solConnection = new Connection(
       process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
-    );
+    )
   }
 
   /**
@@ -32,21 +32,21 @@ export class CryptoService {
   ): Promise<string> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     // Verify wallet address format
     try {
       if (blockchain === 'ethereum') {
-        ethers.getAddress(walletAddress); // Validates Ethereum address
+        ethers.getAddress(walletAddress) // Validates Ethereum address
       } else if (blockchain === 'solana') {
-        new PublicKey(walletAddress); // Validates Solana address
+        new PublicKey(walletAddress) // Validates Solana address
       }
     } catch (error) {
-      throw new Error('Invalid wallet address format');
+      throw new Error('Invalid wallet address format')
     }
 
     // Create payment method record
@@ -57,9 +57,9 @@ export class CryptoService {
         walletAddress,
         blockchain,
       },
-    });
+    })
 
-    return paymentMethod.id;
+    return paymentMethod.id
   }
 
   /**
@@ -73,15 +73,23 @@ export class CryptoService {
   ): Promise<boolean> {
     try {
       if (blockchain === 'ethereum') {
-        return await this.verifyEthereumTransaction(txHash, expectedAmount, recipientAddress);
+        return await this.verifyEthereumTransaction(
+          txHash,
+          expectedAmount,
+          recipientAddress
+        )
       } else if (blockchain === 'solana') {
-        return await this.verifySolanaTransaction(txHash, expectedAmount, recipientAddress);
+        return await this.verifySolanaTransaction(
+          txHash,
+          expectedAmount,
+          recipientAddress
+        )
       }
       // Add support for Arweave, Filecoin as needed
-      return false;
+      return false
     } catch (error) {
-      console.error('Transaction verification failed:', error);
-      return false;
+      console.error('Transaction verification failed:', error)
+      return false
     }
   }
 
@@ -93,20 +101,20 @@ export class CryptoService {
     expectedAmount: number,
     recipientAddress: string
   ): Promise<boolean> {
-    const tx = await this.ethProvider.getTransaction(txHash);
-    if (!tx) return false;
+    const tx = await this.ethProvider.getTransaction(txHash)
+    if (!tx) return false
 
-    const receipt = await this.ethProvider.getTransactionReceipt(txHash);
-    if (!receipt || receipt.status !== 1) return false; // Not successful
+    const receipt = await this.ethProvider.getTransactionReceipt(txHash)
+    if (!receipt || receipt.status !== 1) return false // Not successful
 
     // Verify recipient and amount
-    const valueInEth = Number(ethers.formatEther(tx.value));
-    const expectedInEth = expectedAmount / 1e18; // Convert from wei
+    const valueInEth = Number(ethers.formatEther(tx.value))
+    const expectedInEth = expectedAmount / 1e18 // Convert from wei
 
     return (
       tx.to?.toLowerCase() === recipientAddress.toLowerCase() &&
       Math.abs(valueInEth - expectedInEth) < 0.0001 // Allow small rounding differences
-    );
+    )
   }
 
   /**
@@ -119,24 +127,24 @@ export class CryptoService {
   ): Promise<boolean> {
     const tx = await this.solConnection.getTransaction(txHash, {
       maxSupportedTransactionVersion: 0,
-    });
+    })
 
-    if (!tx || !tx.meta) return false;
+    if (!tx || !tx.meta) return false
 
     // Verify transaction succeeded
-    if (tx.meta.err) return false;
+    if (tx.meta.err) return false
 
     // Check recipient and amount in transaction
     // This is simplified - in production, you'd parse the transaction more carefully
-    const recipientPubkey = new PublicKey(recipientAddress);
+    const recipientPubkey = new PublicKey(recipientAddress)
     const accountIndex = tx.transaction.message.staticAccountKeys.findIndex(
-      (key) => key.equals(recipientPubkey)
-    );
+      key => key.equals(recipientPubkey)
+    )
 
-    if (accountIndex === -1) return false;
+    if (accountIndex === -1) return false
 
     // Verify amount (simplified - would need to check actual transfer amount)
-    return true;
+    return true
   }
 
   /**
@@ -151,10 +159,10 @@ export class CryptoService {
   ): Promise<string> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     // Find payment method for this blockchain
@@ -164,7 +172,7 @@ export class CryptoService {
         blockchain,
         type: 'CRYPTO_WALLET',
       },
-    });
+    })
 
     // Create payment record
     const payment = await this.prisma.payment.create({
@@ -178,13 +186,13 @@ export class CryptoService {
         currency: blockchain.toUpperCase(),
         status: 'PROCESSING',
       },
-    });
+    })
 
     // Verify transaction in background
     // In production, you'd use a queue/worker for this
-    this.verifyAndUpdatePayment(payment.id, txHash, blockchain, amount);
+    this.verifyAndUpdatePayment(payment.id, txHash, blockchain, amount)
 
-    return payment.id;
+    return payment.id
   }
 
   /**
@@ -197,8 +205,14 @@ export class CryptoService {
     amount: number
   ): Promise<void> {
     try {
-      const recipientAddress = process.env[`${blockchain.toUpperCase()}_WALLET_ADDRESS`] || '';
-      const verified = await this.verifyTransaction(txHash, blockchain, amount, recipientAddress);
+      const recipientAddress =
+        process.env[`${blockchain.toUpperCase()}_WALLET_ADDRESS`] || ''
+      const verified = await this.verifyTransaction(
+        txHash,
+        blockchain,
+        amount,
+        recipientAddress
+      )
 
       await this.prisma.payment.update({
         where: { id: paymentId },
@@ -206,14 +220,14 @@ export class CryptoService {
           status: verified ? 'SUCCEEDED' : 'FAILED',
           failureMessage: verified ? null : 'Transaction verification failed',
         },
-      });
+      })
 
       // If verified and linked to invoice, mark invoice as paid
       if (verified) {
         const payment = await this.prisma.payment.findUnique({
           where: { id: paymentId },
           include: { invoice: true },
-        });
+        })
 
         if (payment?.invoice) {
           await this.prisma.invoice.update({
@@ -223,18 +237,18 @@ export class CryptoService {
               amountPaid: payment.invoice.amountPaid + amount,
               paidAt: new Date(),
             },
-          });
+          })
         }
       }
     } catch (error) {
-      console.error('Payment verification failed:', error);
+      console.error('Payment verification failed:', error)
       await this.prisma.payment.update({
         where: { id: paymentId },
         data: {
           status: 'FAILED',
           failureMessage: 'Verification error',
         },
-      });
+      })
     }
   }
 }

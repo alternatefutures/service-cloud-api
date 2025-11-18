@@ -6,14 +6,14 @@
  * we only track pin/unpin events, not size changes
  */
 
-import type { PrismaClient } from '@prisma/client';
-import { UsageService } from './usageService.js';
+import type { PrismaClient } from '@prisma/client'
+import { UsageService } from './usageService.js'
 
 export class StorageTracker {
-  private usageService: UsageService;
+  private usageService: UsageService
 
   constructor(private prisma: PrismaClient) {
-    this.usageService = new UsageService(prisma);
+    this.usageService = new UsageService(prisma)
   }
 
   /**
@@ -34,11 +34,11 @@ export class StorageTracker {
         cid,
         unpinnedAt: null,
       },
-    });
+    })
 
     if (existing) {
       // Already pinned, don't double-count
-      return existing.id;
+      return existing.id
     }
 
     // Record the pin
@@ -51,13 +51,13 @@ export class StorageTracker {
         mimeType,
         metadata,
       },
-    });
+    })
 
     // Record usage for billing
     await this.usageService.recordUsage(
       userId,
       'STORAGE',
-      sizeBytes / (1024 ** 3), // Convert to GB
+      sizeBytes / 1024 ** 3, // Convert to GB
       'GB',
       'IPFS',
       cid,
@@ -67,9 +67,9 @@ export class StorageTracker {
         filename,
         sizeBytes,
       }
-    );
+    )
 
-    return pin.id;
+    return pin.id
   }
 
   /**
@@ -83,24 +83,24 @@ export class StorageTracker {
         cid,
         unpinnedAt: null,
       },
-    });
+    })
 
     if (!pin) {
       // Not currently pinned, nothing to do
-      return false;
+      return false
     }
 
     // Mark as unpinned
     await this.prisma.pinnedContent.update({
       where: { id: pin.id },
       data: { unpinnedAt: new Date() },
-    });
+    })
 
     // Record negative usage to deduct from billing
     await this.usageService.recordUsage(
       userId,
       'STORAGE',
-      -Number(pin.sizeBytes) / (1024 ** 3), // Negative to deduct
+      -Number(pin.sizeBytes) / 1024 ** 3, // Negative to deduct
       'GB',
       'IPFS',
       cid,
@@ -109,9 +109,9 @@ export class StorageTracker {
         cid,
         sizeBytes: Number(pin.sizeBytes),
       }
-    );
+    )
 
-    return true;
+    return true
   }
 
   /**
@@ -126,9 +126,9 @@ export class StorageTracker {
       _sum: {
         sizeBytes: true,
       },
-    });
+    })
 
-    return result._sum.sizeBytes || BigInt(0);
+    return result._sum.sizeBytes || BigInt(0)
   }
 
   /**
@@ -140,7 +140,7 @@ export class StorageTracker {
         userId,
         unpinnedAt: null,
       },
-    });
+    })
   }
 
   /**
@@ -156,7 +156,7 @@ export class StorageTracker {
         pinnedAt: 'desc',
       },
       take: limit,
-    });
+    })
   }
 
   /**
@@ -178,30 +178,30 @@ export class StorageTracker {
           { unpinnedAt: { gte: periodStart } }, // Unpinned during period
         ],
       },
-    });
+    })
 
     // Calculate total GB-hours
-    let totalGBHours = 0;
+    let totalGBHours = 0
     const periodHours =
-      (periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60);
+      (periodEnd.getTime() - periodStart.getTime()) / (1000 * 60 * 60)
 
     for (const pin of pins) {
       // Determine actual start and end times within the period
-      const start = pin.pinnedAt > periodStart ? pin.pinnedAt : periodStart;
+      const start = pin.pinnedAt > periodStart ? pin.pinnedAt : periodStart
       const end =
         pin.unpinnedAt && pin.unpinnedAt < periodEnd
           ? pin.unpinnedAt
-          : periodEnd;
+          : periodEnd
 
       // Calculate hours this pin was active
-      const hoursStored = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-      const sizeGB = Number(pin.sizeBytes) / (1024 ** 3);
+      const hoursStored = (end.getTime() - start.getTime()) / (1000 * 60 * 60)
+      const sizeGB = Number(pin.sizeBytes) / 1024 ** 3
 
-      totalGBHours += sizeGB * hoursStored;
+      totalGBHours += sizeGB * hoursStored
     }
 
     // Return average GB stored during period
-    return totalGBHours / periodHours;
+    return totalGBHours / periodHours
   }
 
   /**
@@ -209,12 +209,12 @@ export class StorageTracker {
    * Should be called by scheduler once per day
    */
   async createDailySnapshot(userId: string, date?: Date): Promise<string> {
-    const snapshotDate = date || new Date();
+    const snapshotDate = date || new Date()
     // Set to midnight
-    snapshotDate.setHours(0, 0, 0, 0);
+    snapshotDate.setHours(0, 0, 0, 0)
 
-    const totalBytes = await this.getCurrentStorage(userId);
-    const pinCount = await this.getPinCount(userId);
+    const totalBytes = await this.getCurrentStorage(userId)
+    const pinCount = await this.getPinCount(userId)
 
     const snapshot = await this.prisma.storageSnapshot.upsert({
       where: {
@@ -233,19 +233,15 @@ export class StorageTracker {
         totalBytes,
         pinCount,
       },
-    });
+    })
 
-    return snapshot.id;
+    return snapshot.id
   }
 
   /**
    * Get storage snapshots for a period (for analytics)
    */
-  async getSnapshots(
-    userId: string,
-    startDate: Date,
-    endDate: Date
-  ) {
+  async getSnapshots(userId: string, startDate: Date, endDate: Date) {
     return this.prisma.storageSnapshot.findMany({
       where: {
         userId,
@@ -257,6 +253,6 @@ export class StorageTracker {
       orderBy: {
         date: 'asc',
       },
-    });
+    })
   }
 }

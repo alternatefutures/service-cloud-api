@@ -66,16 +66,16 @@ Edit `deploy-registry.yaml` and replace:
 
 ```yaml
 # Database password
-POSTGRES_PASSWORD: "your-secure-database-password"
-OPEN_REGISTRY_DB_PASSWORD: "your-secure-database-password"
+POSTGRES_PASSWORD: 'your-secure-database-password'
+OPEN_REGISTRY_DB_PASSWORD: 'your-secure-database-password'
 
 # JWT signing secret (min 32 chars)
-OPEN_REGISTRY_SIGNING_SECRET: "your-jwt-secret-at-least-32-characters-long"
+OPEN_REGISTRY_SIGNING_SECRET: 'your-jwt-secret-at-least-32-characters-long'
 
 # Filebase credentials
-OPEN_REGISTRY_DFS_FILEBASE_ACCESS_KEY: "your-filebase-access-key"
-OPEN_REGISTRY_DFS_FILEBASE_SECRET_KEY: "your-filebase-secret-key"
-OPEN_REGISTRY_DFS_FILEBASE_BUCKET_NAME: "alternatefutures-registry"
+OPEN_REGISTRY_DFS_FILEBASE_ACCESS_KEY: 'your-filebase-access-key'
+OPEN_REGISTRY_DFS_FILEBASE_SECRET_KEY: 'your-filebase-secret-key'
+OPEN_REGISTRY_DFS_FILEBASE_BUCKET_NAME: 'alternatefutures-registry'
 ```
 
 ### Step 2: Deploy to Akash
@@ -113,6 +113,7 @@ registry.alternatefutures.ai -> <akash-provider-ip>
 ```
 
 Using Namecheap:
+
 1. Log into Namecheap
 2. Domain List → Manage → Advanced DNS
 3. Add A Record:
@@ -170,22 +171,22 @@ Add registry management commands to Alternate Futures CLI:
 
 ```typescript
 // src/commands/registry/login.ts
-import { Command } from 'commander';
+import { Command } from 'commander'
 
 export const loginCommand = new Command('login')
   .description('Login to Alternate Futures Registry')
   .action(async () => {
-    const registryUrl = 'registry.alternatefutures.ai';
+    const registryUrl = 'registry.alternatefutures.ai'
     // Implement OAuth or token-based login
     // Store credentials securely
-  });
+  })
 ```
 
 ### 2. Image Push Command
 
 ```typescript
 // src/commands/registry/push.ts
-import { Command } from 'commander';
+import { Command } from 'commander'
 
 export const pushCommand = new Command('push')
   .argument('<image>', 'Docker image to push')
@@ -193,7 +194,7 @@ export const pushCommand = new Command('push')
   .action(async (image: string) => {
     // Tag and push to registry
     // Leverages IPFS storage via Filebase
-  });
+  })
 ```
 
 ### 3. User Registry Access
@@ -203,11 +204,15 @@ Enable users to use the registry in their deployments:
 ```typescript
 // src/commands/sites/deploy.ts
 export const deployCommand = new Command('deploy')
-  .option('--registry <url>', 'Use custom registry', 'registry.alternatefutures.ai')
-  .action(async (options) => {
+  .option(
+    '--registry <url>',
+    'Use custom registry',
+    'registry.alternatefutures.ai'
+  )
+  .action(async options => {
     // Allow users to specify container images from the registry
     // Automatically use alternatefutures registry by default
-  });
+  })
 ```
 
 ## Integration with App Frontend
@@ -273,8 +278,8 @@ Add registry health to your status page:
 
 ```typescript
 // Add to /home/src/app/status/page.tsx
-const registryHealth = await fetch('https://registry.alternatefutures.ai/v2/');
-const registryStatus = registryHealth.ok ? 'healthy' : 'unhealthy';
+const registryHealth = await fetch('https://registry.alternatefutures.ai/v2/')
+const registryStatus = registryHealth.ok ? 'healthy' : 'unhealthy'
 ```
 
 ## Cost Estimates
@@ -296,6 +301,7 @@ Compare to Docker Hub Teams: $7/user/month
 ## Troubleshooting
 
 ### Registry not accessible
+
 ```bash
 # Check deployment status
 akash provider lease-status
@@ -305,11 +311,13 @@ akash provider lease-logs --follow
 ```
 
 ### Images not uploading to IPFS
+
 - Verify Filebase credentials
 - Check bucket exists and is accessible
 - Ensure S3 endpoint is correct
 
 ### Database connection errors
+
 - Verify PostgreSQL service is running
 - Check password matches in both services
 - Ensure network connectivity between services

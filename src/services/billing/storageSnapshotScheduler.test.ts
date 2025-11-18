@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { StorageSnapshotScheduler } from './storageSnapshotScheduler.js';
-import type { PrismaClient } from '@prisma/client';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { StorageSnapshotScheduler } from './storageSnapshotScheduler.js'
+import type { PrismaClient } from '@prisma/client'
 
 // Mock node-cron
 const { mockSchedule } = vi.hoisted(() => {
@@ -8,78 +8,78 @@ const { mockSchedule } = vi.hoisted(() => {
     stop: vi.fn(),
     start: vi.fn(),
     destroy: vi.fn(),
-  }));
+  }))
 
-  return { mockSchedule };
-});
+  return { mockSchedule }
+})
 
 vi.mock('node-cron', () => ({
   schedule: mockSchedule,
-}));
+}))
 
 // Mock StorageTracker
 vi.mock('./storageTracker.js', () => ({
   StorageTracker: class {
-    createDailySnapshot = vi.fn().mockResolvedValue('snapshot-123');
+    createDailySnapshot = vi.fn().mockResolvedValue('snapshot-123')
     constructor(prisma: any) {}
   },
-}));
+}))
 
 describe('StorageSnapshotScheduler', () => {
-  let scheduler: StorageSnapshotScheduler;
-  let mockPrisma: any;
+  let scheduler: StorageSnapshotScheduler
+  let mockPrisma: any
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.clearAllMocks()
 
     mockPrisma = {
       user: {
         findMany: vi.fn(),
       },
-    } as any;
+    } as any
 
-    scheduler = new StorageSnapshotScheduler(mockPrisma as PrismaClient);
-  });
+    scheduler = new StorageSnapshotScheduler(mockPrisma as PrismaClient)
+  })
 
   afterEach(() => {
-    scheduler.stop();
-  });
+    scheduler.stop()
+  })
 
   describe('start', () => {
     it('should start the cron scheduler', () => {
-      scheduler.start();
+      scheduler.start()
 
       expect(mockSchedule).toHaveBeenCalledWith(
         '0 0 * * *', // Midnight daily
         expect.any(Function)
-      );
-    });
+      )
+    })
 
     it('should not start if already running', () => {
-      scheduler.start();
-      scheduler.start();
+      scheduler.start()
+      scheduler.start()
 
       // Should only be called once
-      expect(mockSchedule).toHaveBeenCalledTimes(1);
-    });
-  });
+      expect(mockSchedule).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('stop', () => {
     it('should stop the scheduler', () => {
-      scheduler.start();
-      scheduler.stop();
+      scheduler.start()
+      scheduler.stop()
 
       // Scheduler should be stopped (tested via start not being called twice)
-      scheduler.start();
+      scheduler.start()
 
-      expect(mockSchedule).toHaveBeenCalledTimes(2); // First start + restart after stop
-    });
+      expect(mockSchedule).toHaveBeenCalledTimes(2) // First start + restart after stop
+    })
 
     it('should do nothing if not running', () => {
-      scheduler.stop(); // Should not throw
-      expect(true).toBe(true);
-    });
-  });
+      scheduler.stop() // Should not throw
+      expect(true).toBe(true)
+    })
+  })
 
   describe('createSnapshots', () => {
     it('should create snapshots for all users', async () => {
@@ -87,113 +87,113 @@ describe('StorageSnapshotScheduler', () => {
         { id: 'user-1', username: 'alice', email: 'alice@example.com' },
         { id: 'user-2', username: 'bob', email: 'bob@example.com' },
         { id: 'user-3', username: 'charlie', email: 'charlie@example.com' },
-      ];
+      ]
 
-      mockPrisma.user.findMany.mockResolvedValue(users);
+      mockPrisma.user.findMany.mockResolvedValue(users)
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       expect(mockPrisma.user.findMany).toHaveBeenCalledWith({
         select: {
           id: true,
           username: true,
         },
-      });
-    });
+      })
+    })
 
     it('should handle errors gracefully', async () => {
       const users = [
         { id: 'user-1', username: 'alice' },
         { id: 'user-2', username: 'bob' },
-      ];
+      ]
 
-      mockPrisma.user.findMany.mockResolvedValue(users);
+      mockPrisma.user.findMany.mockResolvedValue(users)
 
       // Mock StorageTracker to throw error for second user
-      const mockTracker = scheduler['storageTracker'];
+      const mockTracker = scheduler['storageTracker']
 
       mockTracker.createDailySnapshot
         .mockResolvedValueOnce('snapshot-1')
-        .mockRejectedValueOnce(new Error('Database error'));
+        .mockRejectedValueOnce(new Error('Database error'))
 
       // Should not throw, but log errors
-      await expect(scheduler.runNow()).resolves.not.toThrow();
-    });
+      await expect(scheduler.runNow()).resolves.not.toThrow()
+    })
 
     it('should continue processing if one snapshot fails', async () => {
       const users = [
         { id: 'user-1', username: 'alice' },
         { id: 'user-2', username: 'bob' },
         { id: 'user-3', username: 'charlie' },
-      ];
+      ]
 
-      mockPrisma.user.findMany.mockResolvedValue(users);
+      mockPrisma.user.findMany.mockResolvedValue(users)
 
-      const mockTracker = scheduler['storageTracker'];
+      const mockTracker = scheduler['storageTracker']
 
       mockTracker.createDailySnapshot
         .mockResolvedValueOnce('snapshot-1')
         .mockRejectedValueOnce(new Error('Fail'))
-        .mockResolvedValueOnce('snapshot-3');
+        .mockResolvedValueOnce('snapshot-3')
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       // All three users should be attempted
-      expect(mockTracker.createDailySnapshot).toHaveBeenCalledTimes(3);
-    });
-  });
+      expect(mockTracker.createDailySnapshot).toHaveBeenCalledTimes(3)
+    })
+  })
 
   describe('runNow', () => {
     it('should trigger snapshot creation immediately', async () => {
-      const users = [
-        { id: 'user-1', username: 'alice' },
-      ];
+      const users = [{ id: 'user-1', username: 'alice' }]
 
-      mockPrisma.user.findMany.mockResolvedValue(users);
+      mockPrisma.user.findMany.mockResolvedValue(users)
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      expect(mockPrisma.user.findMany).toHaveBeenCalled();
-    });
+      expect(mockPrisma.user.findMany).toHaveBeenCalled()
+    })
 
     it('should work with no users', async () => {
-      mockPrisma.user.findMany.mockResolvedValue([]);
+      mockPrisma.user.findMany.mockResolvedValue([])
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      expect(mockPrisma.user.findMany).toHaveBeenCalled();
-    });
-  });
+      expect(mockPrisma.user.findMany).toHaveBeenCalled()
+    })
+  })
 
   describe('scheduler timing', () => {
     it('should be configured to run at midnight', () => {
-      scheduler.start();
+      scheduler.start()
 
       // Verify cron pattern is for midnight (0 0 * * *)
       expect(mockSchedule).toHaveBeenCalledWith(
         '0 0 * * *',
         expect.any(Function)
-      );
-    });
-  });
+      )
+    })
+  })
 
   describe('error handling', () => {
     it('should handle database errors when fetching users', async () => {
-      mockPrisma.user.findMany.mockRejectedValue(new Error('Database connection failed'));
+      mockPrisma.user.findMany.mockRejectedValue(
+        new Error('Database connection failed')
+      )
 
-      await expect(scheduler.runNow()).resolves.not.toThrow();
-    });
+      await expect(scheduler.runNow()).resolves.not.toThrow()
+    })
 
     it('should log errors but continue operation', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      mockPrisma.user.findMany.mockRejectedValue(new Error('Test error'));
+      mockPrisma.user.findMany.mockRejectedValue(new Error('Test error'))
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      expect(consoleSpy).toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalled()
 
-      consoleSpy.mockRestore();
-    });
-  });
-});
+      consoleSpy.mockRestore()
+    })
+  })
+})

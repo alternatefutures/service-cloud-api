@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { InvoiceService } from './invoiceService.js';
-import type { PrismaClient } from '@prisma/client';
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { InvoiceService } from './invoiceService.js'
+import type { PrismaClient } from '@prisma/client'
 
 // Mock PDFKit
 const { mockPDFDocument } = vi.hoisted(() => {
@@ -44,22 +44,22 @@ const { mockPDFDocument } = vi.hoisted(() => {
     end: vi.fn(),
     on: vi.fn((event: string, callback: Function) => {
       if (event === 'finish') {
-        setTimeout(callback, 0);
+        setTimeout(callback, 0)
       }
-      return mockPDFDocument;
+      return mockPDFDocument
     }),
-  };
+  }
 
-  return { mockPDFDocument };
-});
+  return { mockPDFDocument }
+})
 
 vi.mock('pdfkit', () => ({
   default: class {
     constructor() {
-      return mockPDFDocument;
+      return mockPDFDocument
     }
   },
-}));
+}))
 
 vi.mock('fs', () => ({
   default: {
@@ -72,14 +72,14 @@ vi.mock('fs', () => ({
     on: vi.fn(),
   })),
   readFileSync: vi.fn(() => '<svg>Mock Logo</svg>'),
-}));
+}))
 
 describe('InvoiceService', () => {
-  let service: InvoiceService;
-  let mockPrisma: any;
+  let service: InvoiceService
+  let mockPrisma: any
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.clearAllMocks()
 
     // Create mock Prisma client
     mockPrisma = {
@@ -108,10 +108,10 @@ describe('InvoiceService', () => {
       payment: {
         findUnique: vi.fn(),
       },
-    } as any;
+    } as any
 
-    service = new InvoiceService(mockPrisma as PrismaClient);
-  });
+    service = new InvoiceService(mockPrisma as PrismaClient)
+  })
 
   describe('generateInvoice', () => {
     it('should generate invoice for subscription', async () => {
@@ -124,26 +124,26 @@ describe('InvoiceService', () => {
         usageMarkup: 0.1, // 10% markup
         currentPeriodStart: new Date('2025-01-01'),
         currentPeriodEnd: new Date('2025-01-31'),
-      };
+      }
 
       const customer = {
         id: 'cust-123',
         userId: 'user-123',
         email: 'test@example.com',
         name: 'Test User',
-      };
+      }
 
       const billingSettings = {
         storagePerGBCents: 10,
         bandwidthPerGBCents: 5,
         computePerHourCents: 20,
         requestsPer1000Cents: 1,
-      };
+      }
 
       const usageRecords = [
         { type: 'STORAGE', quantity: 100, unit: 'GB' },
         { type: 'BANDWIDTH', quantity: 200, unit: 'GB' },
-      ];
+      ]
 
       const createdInvoice = {
         id: 'inv-123',
@@ -154,37 +154,39 @@ describe('InvoiceService', () => {
         subtotal: 5550, // (2 * 2000) + ((100*10 + 200*5) * 1.1)
         total: 5550,
         amountDue: 5550,
-      };
+      }
 
-      mockPrisma.subscription.findUnique.mockResolvedValue(subscription);
-      mockPrisma.customer.findUnique.mockResolvedValue(customer);
-      mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
-      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.subscription.findUnique.mockResolvedValue(subscription)
+      mockPrisma.customer.findUnique.mockResolvedValue(customer)
+      mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings)
+      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords)
       mockPrisma.usageRecord.groupBy.mockResolvedValue([
         { type: 'STORAGE', _sum: { amount: 1000 } },
         { type: 'BANDWIDTH', _sum: { amount: 1000 } },
-      ]);
-      mockPrisma.invoice.create.mockResolvedValue(createdInvoice);
-      mockPrisma.invoiceLineItem.createMany.mockResolvedValue({ count: 3 });
+      ])
+      mockPrisma.invoice.create.mockResolvedValue(createdInvoice)
+      mockPrisma.invoiceLineItem.createMany.mockResolvedValue({ count: 3 })
 
-      const result = await service.generateInvoice('sub-123');
+      const result = await service.generateInvoice('sub-123')
 
-      expect(result).toBe('inv-123');
+      expect(result).toBe('inv-123')
       expect(mockPrisma.invoice.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           customerId: 'cust-123',
           subscriptionId: 'sub-123',
           status: 'OPEN',
         }),
-      });
-      expect(mockPrisma.invoiceLineItem.create).toHaveBeenCalled();
-    });
+      })
+      expect(mockPrisma.invoiceLineItem.create).toHaveBeenCalled()
+    })
 
     it('should throw error if subscription not found', async () => {
-      mockPrisma.subscription.findUnique.mockResolvedValue(null);
+      mockPrisma.subscription.findUnique.mockResolvedValue(null)
 
-      await expect(service.generateInvoice('sub-123')).rejects.toThrow('Subscription not found');
-    });
+      await expect(service.generateInvoice('sub-123')).rejects.toThrow(
+        'Subscription not found'
+      )
+    })
 
     it('should apply usage markup correctly', async () => {
       const subscription = {
@@ -196,47 +198,47 @@ describe('InvoiceService', () => {
         usageMarkup: 0.25, // 25% markup
         currentPeriodStart: new Date('2025-01-01'),
         currentPeriodEnd: new Date('2025-01-31'),
-      };
+      }
 
       const customer = {
         id: 'cust-123',
         userId: 'user-123',
-      };
+      }
 
       const billingSettings = {
         storagePerGBCents: 10,
         bandwidthPerGBCents: 5,
         computePerHourCents: 20,
         requestsPer1000Cents: 1,
-      };
+      }
 
       const usageRecords = [
         { type: 'STORAGE', quantity: 1000, unit: 'GB' }, // 1000 * 10 = 10000 cents
-      ];
+      ]
 
-      mockPrisma.subscription.findUnique.mockResolvedValue(subscription);
-      mockPrisma.customer.findUnique.mockResolvedValue(customer);
-      mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings);
-      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords);
+      mockPrisma.subscription.findUnique.mockResolvedValue(subscription)
+      mockPrisma.customer.findUnique.mockResolvedValue(customer)
+      mockPrisma.billingSettings.findFirst.mockResolvedValue(billingSettings)
+      mockPrisma.usageRecord.findMany.mockResolvedValue(usageRecords)
       mockPrisma.usageRecord.groupBy.mockResolvedValue([
         { type: 'STORAGE', _sum: { amount: 10000 } },
-      ]);
-      mockPrisma.invoice.create.mockImplementation((args) => {
+      ])
+      mockPrisma.invoice.create.mockImplementation(args => {
         // Verify that usage markup was applied
         // Base: 5 * 5000 = 25000
         // Usage: 10000 * 1.25 = 12500
         // Total: 37500
-        expect(args.data.subtotal).toBe(37500);
+        expect(args.data.subtotal).toBe(37500)
         return Promise.resolve({
           id: 'inv-456',
           ...args.data,
-        });
-      });
-      mockPrisma.invoiceLineItem.createMany.mockResolvedValue({ count: 2 });
+        })
+      })
+      mockPrisma.invoiceLineItem.createMany.mockResolvedValue({ count: 2 })
 
-      await service.generateInvoice('sub-123');
-    });
-  });
+      await service.generateInvoice('sub-123')
+    })
+  })
 
   describe('generatePDF', () => {
     it('should generate PDF for invoice', async () => {
@@ -272,29 +274,31 @@ describe('InvoiceService', () => {
         periodEnd: new Date('2025-01-31'),
         dueDate: new Date('2025-02-15'),
         createdAt: new Date('2025-01-31'),
-      };
+      }
 
-      mockPrisma.invoice.findUnique.mockResolvedValue(invoice);
+      mockPrisma.invoice.findUnique.mockResolvedValue(invoice)
       mockPrisma.invoice.update.mockResolvedValue({
         ...invoice,
         pdfUrl: '/invoices/inv-123.pdf',
-      });
+      })
 
-      const result = await service.generatePDF('inv-123');
+      const result = await service.generatePDF('inv-123')
 
-      expect(result).toContain('invoices');
-      expect(result).toContain('INV-001');
-      expect(result).toContain('.pdf');
-      expect(mockPDFDocument.text).toHaveBeenCalled();
-      expect(mockPDFDocument.end).toHaveBeenCalled();
-    });
+      expect(result).toContain('invoices')
+      expect(result).toContain('INV-001')
+      expect(result).toContain('.pdf')
+      expect(mockPDFDocument.text).toHaveBeenCalled()
+      expect(mockPDFDocument.end).toHaveBeenCalled()
+    })
 
     it('should throw error if invoice not found', async () => {
-      mockPrisma.invoice.findUnique.mockResolvedValue(null);
+      mockPrisma.invoice.findUnique.mockResolvedValue(null)
 
-      await expect(service.generatePDF('inv-123')).rejects.toThrow('Invoice not found');
-    });
-  });
+      await expect(service.generatePDF('inv-123')).rejects.toThrow(
+        'Invoice not found'
+      )
+    })
+  })
 
   describe('markAsPaid', () => {
     it('should mark invoice as paid', async () => {
@@ -303,24 +307,24 @@ describe('InvoiceService', () => {
         status: 'OPEN',
         amountDue: 5000,
         amountPaid: 0,
-      };
+      }
 
       const payment = {
         id: 'payment-123',
         amount: 5000,
         status: 'SUCCEEDED',
-      };
+      }
 
-      mockPrisma.invoice.findUnique.mockResolvedValue(invoice);
-      mockPrisma.payment.findUnique.mockResolvedValue(payment);
+      mockPrisma.invoice.findUnique.mockResolvedValue(invoice)
+      mockPrisma.payment.findUnique.mockResolvedValue(payment)
       mockPrisma.invoice.update.mockResolvedValue({
         ...invoice,
         status: 'PAID',
         paidAt: new Date(),
         amountPaid: 5000,
-      });
+      })
 
-      await service.markAsPaid('inv-123', 'payment-123');
+      await service.markAsPaid('inv-123', 'payment-123')
 
       expect(mockPrisma.invoice.update).toHaveBeenCalledWith({
         where: { id: 'inv-123' },
@@ -329,15 +333,15 @@ describe('InvoiceService', () => {
           paidAt: expect.any(Date),
           amountPaid: 5000,
         },
-      });
-    });
+      })
+    })
 
     it('should throw error if invoice not found', async () => {
-      mockPrisma.invoice.findUnique.mockResolvedValue(null);
+      mockPrisma.invoice.findUnique.mockResolvedValue(null)
 
-      await expect(service.markAsPaid('inv-123', 'payment-123')).rejects.toThrow(
-        'Invoice not found'
-      );
-    });
-  });
-});
+      await expect(
+        service.markAsPaid('inv-123', 'payment-123')
+      ).rejects.toThrow('Invoice not found')
+    })
+  })
+})

@@ -1,7 +1,7 @@
-import { GraphQLError } from 'graphql';
+import { GraphQLError } from 'graphql'
 
 export interface RouteConfig {
-  [pathPattern: string]: string;
+  [pathPattern: string]: string
 }
 
 /**
@@ -11,18 +11,20 @@ export interface RouteConfig {
  */
 export function validateRoutes(routes: any): void {
   if (!routes) {
-    return;
+    return
   }
 
   // Check if routes is an object
   if (typeof routes !== 'object' || Array.isArray(routes)) {
-    throw new GraphQLError('Routes must be an object mapping path patterns to target URLs');
+    throw new GraphQLError(
+      'Routes must be an object mapping path patterns to target URLs'
+    )
   }
 
-  const entries = Object.entries(routes);
+  const entries = Object.entries(routes)
 
   if (entries.length === 0) {
-    throw new GraphQLError('Routes object cannot be empty');
+    throw new GraphQLError('Routes object cannot be empty')
   }
 
   for (const [pathPattern, targetUrl] of entries) {
@@ -30,30 +32,30 @@ export function validateRoutes(routes: any): void {
     if (typeof pathPattern !== 'string' || !pathPattern.startsWith('/')) {
       throw new GraphQLError(
         `Invalid path pattern "${pathPattern}". Path patterns must start with "/"`
-      );
+      )
     }
 
     // Validate target URL
     if (typeof targetUrl !== 'string') {
       throw new GraphQLError(
         `Invalid target URL for path "${pathPattern}". Target must be a string`
-      );
+      )
     }
 
     // Validate URL format
     try {
-      new URL(targetUrl);
+      new URL(targetUrl)
     } catch (error) {
       throw new GraphQLError(
         `Invalid target URL "${targetUrl}" for path "${pathPattern}". Must be a valid URL`
-      );
+      )
     }
 
     // Ensure URL has http or https protocol
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
       throw new GraphQLError(
         `Invalid target URL "${targetUrl}" for path "${pathPattern}". Must use http:// or https:// protocol`
-      );
+      )
     }
   }
 }
@@ -65,9 +67,9 @@ export function validateRoutes(routes: any): void {
  */
 export function normalizeRoutes(routes: any): RouteConfig | null {
   if (!routes) {
-    return null;
+    return null
   }
 
-  validateRoutes(routes);
-  return routes as RouteConfig;
+  validateRoutes(routes)
+  return routes as RouteConfig
 }

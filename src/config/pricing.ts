@@ -56,11 +56,11 @@ export const PRICING = {
     /** IPFS storage for container images - per GB/month */
     storage: 0.06,
     /** PostgreSQL database for metadata - per GB/month */
-    database: 0.10,
+    database: 0.1,
     /** Akash compute for registry service - per hour */
     compute: 0.02,
   },
-} as const;
+} as const
 
 /**
  * Calculate storage cost for a given storage type and size
@@ -74,15 +74,15 @@ export function calculateStorageCost(
   sizeGB: number,
   months: number = 1
 ): number {
-  const pricePerGB = PRICING.storage[storageType];
+  const pricePerGB = PRICING.storage[storageType]
 
   // Arweave is one-time payment
   if (storageType === 'arweave') {
-    return sizeGB * pricePerGB;
+    return sizeGB * pricePerGB
   }
 
   // IPFS and Filecoin are monthly
-  return sizeGB * pricePerGB * months;
+  return sizeGB * pricePerGB * months
 }
 
 /**
@@ -95,16 +95,16 @@ export function calculateBandwidthCost(
   tier: 'free' | 'pro' | 'enterprise',
   usageGB: number
 ): number {
-  const tierConfig = PRICING.bandwidth[tier];
+  const tierConfig = PRICING.bandwidth[tier]
 
   // Enterprise has custom pricing
   if (tier === 'enterprise' || !tierConfig.included || !tierConfig.overage) {
-    return 0;
+    return 0
   }
 
   // Calculate overage
-  const overage = Math.max(0, usageGB - tierConfig.included);
-  return overage * tierConfig.overage;
+  const overage = Math.max(0, usageGB - tierConfig.included)
+  return overage * tierConfig.overage
 }
 
 /**
@@ -117,7 +117,7 @@ export function calculateComputeCost(
   type: 'agentRuntime' | 'functionInvocations' | 'gpuProcessing',
   units: number
 ): number {
-  return units * PRICING.compute[type];
+  return units * PRICING.compute[type]
 }
 
 /**
@@ -132,11 +132,11 @@ export function calculateRegistryCost(
   databaseGB: number,
   computeHours: number = 730 // 24/7 for a month
 ): number {
-  const storageCost = storageGB * PRICING.registry.storage;
-  const databaseCost = databaseGB * PRICING.registry.database;
-  const computeCost = computeHours * PRICING.registry.compute;
+  const storageCost = storageGB * PRICING.registry.storage
+  const databaseCost = databaseGB * PRICING.registry.database
+  const computeCost = computeHours * PRICING.registry.compute
 
-  return storageCost + databaseCost + computeCost;
+  return storageCost + databaseCost + computeCost
 }
 
 /**
@@ -146,23 +146,63 @@ export function getPricingInfo() {
   return {
     storage: [
       { network: 'IPFS', type: 'Per GB/month', price: PRICING.storage.ipfs },
-      { network: 'Filecoin', type: 'Per GB/month', price: PRICING.storage.filecoin },
-      { network: 'Arweave', type: 'One-time per GB', price: PRICING.storage.arweave },
+      {
+        network: 'Filecoin',
+        type: 'Per GB/month',
+        price: PRICING.storage.filecoin,
+      },
+      {
+        network: 'Arweave',
+        type: 'One-time per GB',
+        price: PRICING.storage.arweave,
+      },
     ],
     bandwidth: [
-      { tier: 'Free', included: PRICING.bandwidth.free.included, overage: PRICING.bandwidth.free.overage },
-      { tier: 'Pro', included: PRICING.bandwidth.pro.included, overage: PRICING.bandwidth.pro.overage },
+      {
+        tier: 'Free',
+        included: PRICING.bandwidth.free.included,
+        overage: PRICING.bandwidth.free.overage,
+      },
+      {
+        tier: 'Pro',
+        included: PRICING.bandwidth.pro.included,
+        overage: PRICING.bandwidth.pro.overage,
+      },
       { tier: 'Enterprise', included: 'Custom', overage: 'Custom' },
     ],
     compute: [
-      { service: 'Agent Runtime', price: PRICING.compute.agentRuntime, unit: 'hour' },
-      { service: 'Function Invocations', price: PRICING.compute.functionInvocations, unit: 'million' },
-      { service: 'GPU Processing', price: PRICING.compute.gpuProcessing, unit: 'hour' },
+      {
+        service: 'Agent Runtime',
+        price: PRICING.compute.agentRuntime,
+        unit: 'hour',
+      },
+      {
+        service: 'Function Invocations',
+        price: PRICING.compute.functionInvocations,
+        unit: 'million',
+      },
+      {
+        service: 'GPU Processing',
+        price: PRICING.compute.gpuProcessing,
+        unit: 'hour',
+      },
     ],
     registry: [
-      { resource: 'IPFS Storage', price: PRICING.registry.storage, unit: 'GB/month' },
-      { resource: 'PostgreSQL Database', price: PRICING.registry.database, unit: 'GB/month' },
-      { resource: 'Akash Compute', price: PRICING.registry.compute, unit: 'hour' },
+      {
+        resource: 'IPFS Storage',
+        price: PRICING.registry.storage,
+        unit: 'GB/month',
+      },
+      {
+        resource: 'PostgreSQL Database',
+        price: PRICING.registry.database,
+        unit: 'GB/month',
+      },
+      {
+        resource: 'Akash Compute',
+        price: PRICING.registry.compute,
+        unit: 'hour',
+      },
     ],
-  };
+  }
 }

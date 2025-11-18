@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { InvoiceScheduler } from './invoiceScheduler.js';
-import type { PrismaClient } from '@prisma/client';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { InvoiceScheduler } from './invoiceScheduler.js'
+import type { PrismaClient } from '@prisma/client'
 
 // Mock node-cron
 const { mockSchedule } = vi.hoisted(() => {
@@ -8,79 +8,79 @@ const { mockSchedule } = vi.hoisted(() => {
     stop: vi.fn(),
     start: vi.fn(),
     destroy: vi.fn(),
-  }));
+  }))
 
-  return { mockSchedule };
-});
+  return { mockSchedule }
+})
 
 vi.mock('node-cron', () => ({
   schedule: mockSchedule,
-}));
+}))
 
 // Mock InvoiceService
 vi.mock('./invoiceService.js', () => ({
   InvoiceService: class {
-    generateInvoice = vi.fn().mockResolvedValue('invoice-123');
+    generateInvoice = vi.fn().mockResolvedValue('invoice-123')
     constructor(prisma: any) {}
   },
-}));
+}))
 
 describe('InvoiceScheduler', () => {
-  let scheduler: InvoiceScheduler;
-  let mockPrisma: any;
+  let scheduler: InvoiceScheduler
+  let mockPrisma: any
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.clearAllMocks()
 
     mockPrisma = {
       subscription: {
         findMany: vi.fn(),
         update: vi.fn(),
       },
-    } as any;
+    } as any
 
-    scheduler = new InvoiceScheduler(mockPrisma as PrismaClient);
-  });
+    scheduler = new InvoiceScheduler(mockPrisma as PrismaClient)
+  })
 
   afterEach(() => {
-    scheduler.stop();
-  });
+    scheduler.stop()
+  })
 
   describe('start', () => {
     it('should start the cron scheduler at 2 AM', () => {
-      scheduler.start();
+      scheduler.start()
 
       expect(mockSchedule).toHaveBeenCalledWith(
         '0 2 * * *', // 2 AM daily
         expect.any(Function)
-      );
-    });
+      )
+    })
 
     it('should not start if already running', () => {
-      scheduler.start();
-      scheduler.start();
+      scheduler.start()
+      scheduler.start()
 
       // Should only be called once
-      expect(mockSchedule).toHaveBeenCalledTimes(1);
-    });
-  });
+      expect(mockSchedule).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('stop', () => {
     it('should stop the scheduler', () => {
-      scheduler.start();
-      scheduler.stop();
+      scheduler.start()
+      scheduler.stop()
 
       // Scheduler should be stopped
-      scheduler.start();
+      scheduler.start()
 
-      expect(mockSchedule).toHaveBeenCalledTimes(2);
-    });
-  });
+      expect(mockSchedule).toHaveBeenCalledTimes(2)
+    })
+  })
 
   describe('generateDueInvoices', () => {
     it('should generate invoices for subscriptions with ended periods', async () => {
-      const now = new Date('2024-01-31T10:00:00Z');
-      const yesterday = new Date('2024-01-30T10:00:00Z');
+      const now = new Date('2024-01-31T10:00:00Z')
+      const yesterday = new Date('2024-01-30T10:00:00Z')
 
       const dueSubscriptions = [
         {
@@ -107,15 +107,15 @@ describe('InvoiceScheduler', () => {
             },
           },
         },
-      ];
+      ]
 
-      vi.useFakeTimers();
-      vi.setSystemTime(now);
+      vi.useFakeTimers()
+      vi.setSystemTime(now)
 
-      mockPrisma.subscription.findMany.mockResolvedValue(dueSubscriptions);
-      mockPrisma.subscription.update.mockResolvedValue({});
+      mockPrisma.subscription.findMany.mockResolvedValue(dueSubscriptions)
+      mockPrisma.subscription.update.mockResolvedValue({})
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       expect(mockPrisma.subscription.findMany).toHaveBeenCalledWith({
         where: {
@@ -138,16 +138,16 @@ describe('InvoiceScheduler', () => {
             },
           },
         },
-      });
+      })
 
-      const mockInvoiceService = scheduler['invoiceService'];
+      const mockInvoiceService = scheduler['invoiceService']
 
-      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledTimes(2);
-      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledWith('sub-1');
-      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledWith('sub-2');
+      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledTimes(2)
+      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledWith('sub-1')
+      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledWith('sub-2')
 
-      vi.useRealTimers();
-    });
+      vi.useRealTimers()
+    })
 
     it('should update subscription periods after invoice generation', async () => {
       const subscription = {
@@ -162,12 +162,12 @@ describe('InvoiceScheduler', () => {
             email: 'alice@example.com',
           },
         },
-      };
+      }
 
-      mockPrisma.subscription.findMany.mockResolvedValue([subscription]);
-      mockPrisma.subscription.update.mockResolvedValue({});
+      mockPrisma.subscription.findMany.mockResolvedValue([subscription])
+      mockPrisma.subscription.update.mockResolvedValue({})
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       expect(mockPrisma.subscription.update).toHaveBeenCalledWith({
         where: { id: 'sub-1' },
@@ -175,18 +175,18 @@ describe('InvoiceScheduler', () => {
           currentPeriodStart: subscription.currentPeriodEnd,
           currentPeriodEnd: expect.any(Date), // Next month
         },
-      });
-    });
+      })
+    })
 
     it('should handle no subscriptions due', async () => {
-      mockPrisma.subscription.findMany.mockResolvedValue([]);
+      mockPrisma.subscription.findMany.mockResolvedValue([])
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      const mockInvoiceService = scheduler['invoiceService'];
+      const mockInvoiceService = scheduler['invoiceService']
 
-      expect(mockInvoiceService.generateInvoice).not.toHaveBeenCalled();
-    });
+      expect(mockInvoiceService.generateInvoice).not.toHaveBeenCalled()
+    })
 
     it('should continue processing if one invoice fails', async () => {
       const subscriptions = [
@@ -196,7 +196,11 @@ describe('InvoiceScheduler', () => {
           currentPeriodEnd: new Date('2024-01-30'),
           currentPeriodStart: new Date('2024-01-01'),
           customer: {
-            user: { id: 'user-1', username: 'alice', email: 'alice@example.com' },
+            user: {
+              id: 'user-1',
+              username: 'alice',
+              email: 'alice@example.com',
+            },
           },
         },
         {
@@ -214,37 +218,41 @@ describe('InvoiceScheduler', () => {
           currentPeriodEnd: new Date('2024-01-30'),
           currentPeriodStart: new Date('2024-01-01'),
           customer: {
-            user: { id: 'user-3', username: 'charlie', email: 'charlie@example.com' },
+            user: {
+              id: 'user-3',
+              username: 'charlie',
+              email: 'charlie@example.com',
+            },
           },
         },
-      ];
+      ]
 
-      mockPrisma.subscription.findMany.mockResolvedValue(subscriptions);
-      mockPrisma.subscription.update.mockResolvedValue({});
+      mockPrisma.subscription.findMany.mockResolvedValue(subscriptions)
+      mockPrisma.subscription.update.mockResolvedValue({})
 
-      const mockInvoiceService = scheduler['invoiceService'];
+      const mockInvoiceService = scheduler['invoiceService']
 
       // Mock second invoice to fail
       mockInvoiceService.generateInvoice
         .mockResolvedValueOnce('invoice-1')
         .mockRejectedValueOnce(new Error('Payment processor error'))
-        .mockResolvedValueOnce('invoice-3');
+        .mockResolvedValueOnce('invoice-3')
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       // All subscriptions should be attempted
-      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledTimes(3);
+      expect(mockInvoiceService.generateInvoice).toHaveBeenCalledTimes(3)
 
       // Only successful invoices should update subscriptions
-      expect(mockPrisma.subscription.update).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.subscription.update).toHaveBeenCalledTimes(2)
       expect(mockPrisma.subscription.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'sub-1' } })
-      );
+      )
       expect(mockPrisma.subscription.update).toHaveBeenCalledWith(
         expect.objectContaining({ where: { id: 'sub-3' } })
-      );
-    });
-  });
+      )
+    })
+  })
 
   describe('getNextPeriodEnd', () => {
     it('should calculate next billing period (one month later)', async () => {
@@ -256,12 +264,12 @@ describe('InvoiceScheduler', () => {
         customer: {
           user: { id: 'user-1', username: 'alice', email: 'alice@example.com' },
         },
-      };
+      }
 
-      mockPrisma.subscription.findMany.mockResolvedValue([subscription]);
-      mockPrisma.subscription.update.mockResolvedValue({});
+      mockPrisma.subscription.findMany.mockResolvedValue([subscription])
+      mockPrisma.subscription.update.mockResolvedValue({})
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
       expect(mockPrisma.subscription.update).toHaveBeenCalledWith({
         where: { id: 'sub-1' },
@@ -269,49 +277,53 @@ describe('InvoiceScheduler', () => {
           currentPeriodStart: new Date('2024-01-31T00:00:00Z'),
           currentPeriodEnd: new Date('2024-03-02T00:00:00Z'), // Jan 31 + 1 month = Mar 2 (since Feb only has 29 days)
         },
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('runNow', () => {
     it('should trigger invoice generation immediately', async () => {
-      mockPrisma.subscription.findMany.mockResolvedValue([]);
+      mockPrisma.subscription.findMany.mockResolvedValue([])
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      expect(mockPrisma.subscription.findMany).toHaveBeenCalled();
-    });
-  });
+      expect(mockPrisma.subscription.findMany).toHaveBeenCalled()
+    })
+  })
 
   describe('scheduler timing', () => {
     it('should be configured to run at 2 AM', () => {
-      scheduler.start();
+      scheduler.start()
 
       // Verify cron pattern is for 2 AM (0 2 * * *)
       expect(mockSchedule).toHaveBeenCalledWith(
         '0 2 * * *',
         expect.any(Function)
-      );
-    });
-  });
+      )
+    })
+  })
 
   describe('error handling', () => {
     it('should handle database errors gracefully', async () => {
-      mockPrisma.subscription.findMany.mockRejectedValue(new Error('Database error'));
+      mockPrisma.subscription.findMany.mockRejectedValue(
+        new Error('Database error')
+      )
 
-      await expect(scheduler.runNow()).resolves.not.toThrow();
-    });
+      await expect(scheduler.runNow()).resolves.not.toThrow()
+    })
 
     it('should log errors but continue operation', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      mockPrisma.subscription.findMany.mockRejectedValue(new Error('Test error'));
+      mockPrisma.subscription.findMany.mockRejectedValue(
+        new Error('Test error')
+      )
 
-      await scheduler.runNow();
+      await scheduler.runNow()
 
-      expect(consoleSpy).toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalled()
 
-      consoleSpy.mockRestore();
-    });
-  });
-});
+      consoleSpy.mockRestore()
+    })
+  })
+})

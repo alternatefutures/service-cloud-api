@@ -1,17 +1,17 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 export interface EnsConfig {
-  providerUrl?: string; // Ethereum RPC provider URL
-  privateKey?: string; // Wallet private key for transactions
+  providerUrl?: string // Ethereum RPC provider URL
+  privateKey?: string // Wallet private key for transactions
 }
 
 export interface EnsRecord {
-  ensName: string;
-  contentHash: string;
-  owner: string;
-  resolver: string;
+  ensName: string
+  contentHash: string
+  owner: string
+  resolver: string
 }
 
 /**
@@ -25,15 +25,15 @@ export async function setEnsContentHash(
   config: EnsConfig
 ): Promise<EnsRecord> {
   const domain = await prisma.domain.findUnique({
-    where: { id: domainId }
-  });
+    where: { id: domainId },
+  })
 
   if (!domain) {
-    throw new Error('Domain not found');
+    throw new Error('Domain not found')
   }
 
   if (!ensName.endsWith('.eth')) {
-    throw new Error('ENS name must end with .eth');
+    throw new Error('ENS name must end with .eth')
   }
 
   try {
@@ -50,7 +50,7 @@ export async function setEnsContentHash(
     // await tx.wait();
 
     // Placeholder for actual ENS transaction
-    const resolverAddress = '0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41'; // Public ENS resolver
+    const resolverAddress = '0x4976fb03C32e5B8cfe2b6cCB31c09Ba78EBaBa41' // Public ENS resolver
 
     // Update domain with ENS information
     await prisma.domain.update({
@@ -60,25 +60,30 @@ export async function setEnsContentHash(
         ensContentHash: contentHash,
         domainType: 'ENS',
         verified: true, // ENS ownership implies verification
-        dnsVerifiedAt: new Date()
-      }
-    });
+        dnsVerifiedAt: new Date(),
+      },
+    })
 
     return {
       ensName,
       contentHash,
       owner: config.privateKey ? 'wallet-address' : 'unknown',
-      resolver: resolverAddress
-    };
+      resolver: resolverAddress,
+    }
   } catch (error) {
-    throw new Error(`ENS content hash update failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `ENS content hash update failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
 
 /**
  * Get ENS content hash
  */
-export async function getEnsContentHash(ensName: string, config: EnsConfig): Promise<string | null> {
+export async function getEnsContentHash(
+  ensName: string,
+  config: EnsConfig
+): Promise<string | null> {
   try {
     // Query ENS resolver for content hash
     // const { ethers } = require('ethers');
@@ -89,13 +94,13 @@ export async function getEnsContentHash(ensName: string, config: EnsConfig): Pro
 
     // Placeholder: Check database
     const domain = await prisma.domain.findFirst({
-      where: { ensName }
-    });
+      where: { ensName },
+    })
 
-    return domain?.ensContentHash || null;
+    return domain?.ensContentHash || null
   } catch (error) {
-    console.error('ENS content hash lookup failed:', error);
-    return null;
+    console.error('ENS content hash lookup failed:', error)
+    return null
   }
 }
 
@@ -125,10 +130,10 @@ export async function verifyEnsOwnership(
     // return owner.toLowerCase() === expectedOwner.toLowerCase();
 
     // Placeholder implementation
-    return true;
+    return true
   } catch (error) {
-    console.error('ENS ownership verification failed:', error);
-    return false;
+    console.error('ENS ownership verification failed:', error)
+    return false
   }
 }
 
@@ -142,7 +147,7 @@ export function ipfsCidToContentHash(cid: string): string {
   // For IPFS: e3010170{CID-bytes}
   // For IPNS: e5010172{hash-bytes}
 
-  return `ipfs://${cid}`;
+  return `ipfs://${cid}`
 }
 
 /**
@@ -152,14 +157,14 @@ export function contentHashToIpfsCid(contentHash: string): string | null {
   // Decode ENS content hash back to IPFS CID
 
   if (contentHash.startsWith('ipfs://')) {
-    return contentHash.replace('ipfs://', '');
+    return contentHash.replace('ipfs://', '')
   }
 
   if (contentHash.startsWith('ipns://')) {
-    return contentHash.replace('ipns://', '');
+    return contentHash.replace('ipns://', '')
   }
 
-  return null;
+  return null
 }
 
 /**
@@ -174,20 +179,20 @@ export async function updateEnsOnDeploy(
   const domains = await prisma.domain.findMany({
     where: {
       siteId,
-      domainType: 'ENS'
-    }
-  });
+      domainType: 'ENS',
+    },
+  })
 
-  const contentHash = ipfsCidToContentHash(newCid);
+  const contentHash = ipfsCidToContentHash(newCid)
 
   // Update each ENS record
   for (const domain of domains) {
     if (domain.ensName) {
       try {
-        await setEnsContentHash(domain.id, domain.ensName, contentHash, config);
-        console.log(`Updated ENS record ${domain.ensName} to CID ${newCid}`);
+        await setEnsContentHash(domain.id, domain.ensName, contentHash, config)
+        console.log(`Updated ENS record ${domain.ensName} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update ENS record ${domain.ensName}:`, error);
+        console.error(`Failed to update ENS record ${domain.ensName}:`, error)
       }
     }
   }
@@ -196,7 +201,10 @@ export async function updateEnsOnDeploy(
 /**
  * Check if ENS name is available
  */
-export async function checkEnsAvailability(ensName: string, config: EnsConfig): Promise<boolean> {
+export async function checkEnsAvailability(
+  ensName: string,
+  config: EnsConfig
+): Promise<boolean> {
   try {
     // Query ENS registry to check if name is registered
     // const { ethers } = require('ethers');
@@ -207,37 +215,40 @@ export async function checkEnsAvailability(ensName: string, config: EnsConfig): 
     // return owner === ethers.ZeroAddress;
 
     const existing = await prisma.domain.findFirst({
-      where: { ensName }
-    });
+      where: { ensName },
+    })
 
-    return !existing;
+    return !existing
   } catch (error) {
-    console.error('ENS availability check failed:', error);
-    return false;
+    console.error('ENS availability check failed:', error)
+    return false
   }
 }
 
 /**
  * Get full ENS record details
  */
-export async function getEnsRecord(ensName: string, config: EnsConfig): Promise<EnsRecord | null> {
+export async function getEnsRecord(
+  ensName: string,
+  config: EnsConfig
+): Promise<EnsRecord | null> {
   try {
     const domain = await prisma.domain.findFirst({
-      where: { ensName }
-    });
+      where: { ensName },
+    })
 
     if (!domain || !domain.ensContentHash || !domain.ensName) {
-      return null;
+      return null
     }
 
     return {
       ensName: domain.ensName,
       contentHash: domain.ensContentHash,
       owner: 'unknown', // Would query from ENS registry
-      resolver: 'unknown' // Would query from ENS registry
-    };
+      resolver: 'unknown', // Would query from ENS registry
+    }
   } catch (error) {
-    console.error('Failed to get ENS record:', error);
-    return null;
+    console.error('Failed to get ENS record:', error)
+    return null
   }
 }

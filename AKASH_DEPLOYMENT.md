@@ -1,4 +1,5 @@
 # Akash Deployment Guide - Phase 1
+
 ## Deploy Alternate Futures Backend to Akash Network
 
 **Status:** Phase 1 - Akash + Resend
@@ -12,6 +13,7 @@
 ### 1. Install Akash CLI
 
 **macOS:**
+
 ```bash
 # Using Homebrew
 brew tap akash-network/tap
@@ -22,6 +24,7 @@ curl -sSfL https://raw.githubusercontent.com/akash-network/node/master/install.s
 ```
 
 **Verify installation:**
+
 ```bash
 akash version
 ```
@@ -31,11 +34,13 @@ akash version
 You need 5-10 AKT tokens (~$15-30) to deploy:
 
 **Where to buy:**
+
 - [Osmosis](https://app.osmosis.zone) (recommended)
 - [Kraken](https://kraken.com)
 - [Gate.io](https://gate.io)
 
 **Transfer to Keplr Wallet:**
+
 1. Install [Keplr browser extension](https://www.keplr.app/)
 2. Create/import wallet
 3. Add Akash Network
@@ -92,6 +97,7 @@ docker push YOUR_DOCKERHUB_USERNAME/alternatefutures-backend:latest
 ```
 
 **Update deploy.yaml:**
+
 ```yaml
 services:
   api:
@@ -120,6 +126,7 @@ services:
 ```
 
 **Generate secure secrets:**
+
 ```bash
 # Generate JWT secret (32 chars)
 openssl rand -base64 32
@@ -251,6 +258,7 @@ TTL: 300
 ```
 
 **Wait for DNS propagation (5-10 minutes):**
+
 ```bash
 # Check DNS
 dig api.alternatefutures.ai
@@ -388,6 +396,7 @@ node -e "const { PrismaClient } = require('@prisma/client'); const prisma = new 
 ### Provider not responding
 
 Try deploying to a different provider:
+
 ```bash
 # Close current lease
 akash tx market lease close \
@@ -404,6 +413,7 @@ akash tx market lease close \
 ## 📈 Cost Comparison
 
 ### Before (Railway)
+
 ```
 Railway Starter:    $5/month
 Railway DB:        $10/month
@@ -413,6 +423,7 @@ Total:            $25/month
 ```
 
 ### After (Akash)
+
 ```
 Akash Compute:     ~$3/month
 Akash Database:    ~$2/month
@@ -427,6 +438,7 @@ Savings:          $10/month (40%)
 ## 🎉 Success!
 
 Once deployed, you have:
+
 - ✅ Backend running on DePIN (Akash)
 - ✅ 40% cost savings
 - ✅ Same API URL (just DNS change)
@@ -440,6 +452,7 @@ Once deployed, you have:
 ### Keep Railway as Backup (Recommended for now)
 
 Don't shut down Railway immediately:
+
 1. Run Akash for 1 week
 2. Monitor stability
 3. Test all features
@@ -448,6 +461,7 @@ Don't shut down Railway immediately:
 ### Phase 2 (Optional - Later)
 
 Add XMTP for Web3 notifications:
+
 - Install XMTP SDK
 - Add wallet notification routing
 - FREE wallet-to-wallet messaging
@@ -457,11 +471,13 @@ Add XMTP for Web3 notifications:
 ## 🆘 Need Help?
 
 **Akash Support:**
+
 - Discord: https://discord.akash.network
 - Docs: https://docs.akash.network
 - Forums: https://forum.akash.network
 
 **This Project:**
+
 - Check DEPIN_MIGRATION.md for overview
 - Check IMPLEMENTATION_STATUS.md for full status
 

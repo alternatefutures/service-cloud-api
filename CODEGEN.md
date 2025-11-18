@@ -38,6 +38,7 @@ npm run generate:types:watch
 ### When to Generate
 
 Generate types whenever you:
+
 - Add or modify GraphQL types in `src/schema/typeDefs.ts`
 - Add or modify resolvers
 - Change Prisma schema (after running `npx prisma generate`)
@@ -63,7 +64,7 @@ The generated types are automatically used by:
 After running codegen, your resolvers become fully type-safe:
 
 ```typescript
-import { Resolvers } from './generated/graphql';
+import { Resolvers } from './generated/graphql'
 
 export const domainResolvers: Resolvers = {
   Mutation: {
@@ -71,21 +72,23 @@ export const domainResolvers: Resolvers = {
       // args and context are fully typed!
       const domain = await context.prisma.domain.create({
         data: args.input,
-      });
-      return domain;
+      })
+      return domain
     },
   },
-};
+}
 ```
 
 ## Troubleshooting
 
 **Types not updating?**
+
 - Run `npm run generate:types` manually
 - Check for TypeScript errors in schema definition
 - Ensure Prisma types are up to date (`npx prisma generate`)
 
 **SDK types out of sync?**
+
 - Ensure you've run codegen in the backend
 - Generated file is at `../cloud-sdk/src/generated/graphql-types.ts`
 - Rebuild SDK after generation

@@ -2,8 +2,8 @@
 
 **Purpose**: Track testnet validation and determine mainnet migration readiness.
 
-**Start Date**: ******\_\_\_******
-**Target Migration Date**: ******\_\_\_******
+**Start Date**: **\*\***\_\_\_**\*\***
+**Target Migration Date**: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -24,7 +24,7 @@
   - [ ] api
   - [ ] ipfs
 
-**Notes**: ******************************\_\_\_******************************
+**Notes**: **************\*\***************\_\_\_**************\*\***************
 
 ---
 
@@ -39,9 +39,9 @@
 - [ ] Admin UI accessible at forwarded port
 - [ ] Database connection working from API
 
-**Admin UI URL**: http://******\_\_\_******:**\_**
+**Admin UI URL**: http://**\*\***\_\_\_**\*\***:**\_**
 
-**Screenshot saved**: ******\_\_\_******
+**Screenshot saved**: **\*\***\_\_\_**\*\***
 
 ### GraphQL API
 
@@ -51,7 +51,7 @@
 - [ ] Database queries executing successfully
 - [ ] No startup errors in logs
 
-**API URL**: http://******\_\_\_******:**\_**/graphql
+**API URL**: http://**\*\***\_\_\_**\*\***:**\_**/graphql
 
 **Test query result**:
 
@@ -66,7 +66,7 @@ Response: _______________
 - [ ] Test file retrieved successfully
 - [ ] Peer connections established
 
-**IPFS Gateway URL**: http://******\_\_\_******:**\_**
+**IPFS Gateway URL**: http://**\*\***\_\_\_**\*\***:**\_**
 
 ---
 
@@ -112,7 +112,7 @@ ab -n 1000 -c 100 http://<api-url>/graphql
 - [ ] Memory usage avg: **\_**% (target: < 80%)
 - [ ] Disk usage: **\_**% (target: < 75%)
 
-**Performance Screenshot**: ******\_\_\_******
+**Performance Screenshot**: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -152,8 +152,8 @@ Query failures during downtime: _____
 
 ### 72-Hour Uptime Test
 
-**Start Time**: ******\_\_\_******
-**End Time**: ******\_\_\_******
+**Start Time**: **\*\***\_\_\_**\*\***
+**End Time**: **\*\***\_\_\_**\*\***
 
 - [ ] All services running for 72+ hours
 - [ ] No unexpected restarts
@@ -169,25 +169,25 @@ Query failures during downtime: _____
 
 - Services up: ☐ All ☐ Partial ☐ Down
 - Critical errors: **\_**
-- Notes: ******\_\_\_******
+- Notes: **\*\***\_\_\_**\*\***
 
 **Day 5**:
 
 - Services up: ☐ All ☐ Partial ☐ Down
 - Critical errors: **\_**
-- Notes: ******\_\_\_******
+- Notes: **\*\***\_\_\_**\*\***
 
 **Day 6**:
 
 - Services up: ☐ All ☐ Partial ☐ Down
 - Critical errors: **\_**
-- Notes: ******\_\_\_******
+- Notes: **\*\***\_\_\_**\*\***
 
 **Day 7**:
 
 - Services up: ☐ All ☐ Partial ☐ Down
 - Critical errors: **\_**
-- Notes: ******\_\_\_******
+- Notes: **\*\***\_\_\_**\*\***
 
 ### Sustained Load Test
 
@@ -331,7 +331,7 @@ Lost updates: _____
 
 ## Migration Decision
 
-**Date**: ******\_\_\_******
+**Date**: **\*\***\_\_\_**\*\***
 
 **Decision**: ☐ PROCEED TO MAINNET ☐ EXTEND TESTNET ☐ HALT
 
@@ -343,7 +343,7 @@ Lost updates: _____
 
 ---
 
-**Signed off by**: ******\_\_\_******
+**Signed off by**: **\*\***\_\_\_**\*\***
 
 ---
 
