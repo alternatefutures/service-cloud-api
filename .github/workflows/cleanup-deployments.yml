@@ -1,4 +1,4 @@
-name: Cleanup Akash Deployments
+name: Cleanup Akash Deployments (v2)
 
 on:
   workflow_dispatch:
