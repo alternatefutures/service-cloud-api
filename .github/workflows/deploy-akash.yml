@@ -160,27 +160,39 @@ jobs:
           echo "Querying transaction ${{ env.DEPLOYMENT_TX }} for DSEQ..."
           TX_RESULT=$(akash query tx ${{ env.DEPLOYMENT_TX }} --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --output json)
 
-          # Debug: show transaction structure
-          echo "Transaction events:"
-          echo "$TX_RESULT" | jq -r '.events[]? | .type' || echo "No events found"
+          # Extract DSEQ from EventDeploymentCreated event
+          # The DSEQ is in a JSON string inside the 'id' attribute value
+          DSEQ=$(echo "$TX_RESULT" | jq -r '
+            .events[]?
+            | select(.type=="akash.deployment.v1.EventDeploymentCreated")
+            | .attributes[]?
+            | select(.key=="id")
+            | .value
+            | fromjson
+            | .dseq
+          ' 2>/dev/null || echo "")
 
-          # Try multiple methods to extract DSEQ
-          # Method 1: Check for deployment-related events
-          DSEQ=$(echo "$TX_RESULT" | jq -r '.events[]? | select(.type=="akash.v1") | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null || echo "")
-
-          # Method 2: Try message events in logs
+          # Fallback: Try the market event which also has dseq
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
-            echo "Method 1 failed, trying logs..."
-            DSEQ=$(echo "$TX_RESULT" | jq -r '.logs[]?.events[]? | select(.type=="message") | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null | head -n1 || echo "")
+            echo "Trying EventOrderCreated..."
+            DSEQ=$(echo "$TX_RESULT" | jq -r '
+              .events[]?
+              | select(.type=="akash.market.v1.EventOrderCreated")
+              | .attributes[]?
+              | select(.key=="id")
+              | .value
+              | fromjson
+              | .dseq
+            ' 2>/dev/null || echo "")
           fi
 
-          # Method 3: Try any event with dseq attribute
+          # Fallback: Parse from tx body
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
-            echo "Method 2 failed, trying any event with dseq..."
-            DSEQ=$(echo "$TX_RESULT" | jq -r '.. | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null | head -n1 || echo "")
+            echo "Trying transaction body..."
+            DSEQ=$(echo "$TX_RESULT" | jq -r '.tx.body.messages[]? | select(."@type"=="/akash.deployment.v1beta4.MsgCreateDeployment") | .id.dseq' 2>/dev/null || echo "")
           fi
 
-          # Method 4: Query deployment list
+          # Final fallback: Query deployment list
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
             echo "Transaction parsing failed, querying deployment list..."
             sleep 10
