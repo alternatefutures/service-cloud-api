@@ -290,7 +290,7 @@ jobs:
 
           echo ""
           echo "=== Service URIs ==="
-          PROVIDER=$(akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq -r '.leases[0].lease.lease_id.provider')
+          PROVIDER=$(akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq -r '.leases[0].lease.id.provider')
           echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
           echo "Provider: $PROVIDER"
 
