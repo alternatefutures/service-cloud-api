@@ -90,22 +90,27 @@ jobs:
 
           echo "SDL prepared with secrets"
 
-      - name: Verify certificate
+      - name: Generate and verify certificate
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
         run: |
+          # Always generate certificate locally (GitHub Actions runners are ephemeral)
+          echo "Generating certificate locally..."
+          akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+
+          # Check if certificate is published on blockchain
           CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
+
           if [ "$CERT_COUNT" -eq "0" ]; then
-            echo "No certificate found, creating one..."
-            akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --gas-prices 0.025uakt --gas auto --gas-adjustment 1.5 -y
-            sleep 10
+            echo "Publishing certificate to blockchain..."
             akash tx cert publish client --from $AKASH_KEY_NAME --keyring-backend test --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --gas-prices 0.025uakt --gas auto --gas-adjustment 1.5 -y
             sleep 10
+            echo "Certificate published successfully"
           else
-            echo "Certificate already exists"
+            echo "Certificate already exists on blockchain (using existing)"
           fi
 
       - name: Create deployment
