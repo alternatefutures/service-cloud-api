@@ -5,9 +5,8 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'deploy-mainnet.yaml'
-      - '.github/workflows/deploy-akash.yml'
+    # Deploy on any change to main (not just SDL/workflow changes)
+    # This ensures every merge triggers a deployment
 
   # Manual deployment trigger with environment selection
   workflow_dispatch:
