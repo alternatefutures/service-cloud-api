@@ -298,8 +298,21 @@ jobs:
           echo ""
           echo "Querying provider host..."
           PROVIDER_INFO=$(akash query provider get $PROVIDER --node $AKASH_NODE --output json)
-          PROVIDER_HOST=$(echo "$PROVIDER_INFO" | jq -r '.provider.host_uri')
-          echo "Provider Host: $PROVIDER_HOST"
+
+          # Debug: Show provider info structure
+          echo "Provider info:"
+          echo "$PROVIDER_INFO" | jq '.'
+
+          # Try different possible paths for host URI
+          PROVIDER_HOST=$(echo "$PROVIDER_INFO" | jq -r '.provider.host_uri // .provider.hostUri // .host_uri // empty')
+
+          if [ -z "$PROVIDER_HOST" ] || [ "$PROVIDER_HOST" == "null" ]; then
+            echo "Could not extract provider host URI from provider info"
+            echo "Available provider fields:"
+            echo "$PROVIDER_INFO" | jq 'keys'
+          else
+            echo "Provider Host: $PROVIDER_HOST"
+          fi
 
           # Query lease status from provider API using curl
           echo ""
