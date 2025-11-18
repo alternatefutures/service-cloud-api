@@ -160,27 +160,41 @@ jobs:
           echo "Querying transaction ${{ env.DEPLOYMENT_TX }} for DSEQ..."
           TX_RESULT=$(akash query tx ${{ env.DEPLOYMENT_TX }} --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --output json)
 
-          # Extract DSEQ from transaction events
-          # The deployment creation emits an event with the DSEQ
-          DSEQ=$(echo "$TX_RESULT" | jq -r '.events[] | select(.type=="akash.v1") | .attributes[] | select(.key=="dseq") | .value')
+          # Debug: show transaction structure
+          echo "Transaction events:"
+          echo "$TX_RESULT" | jq -r '.events[]? | .type' || echo "No events found"
 
-          # Fallback: try getting from logs
+          # Try multiple methods to extract DSEQ
+          # Method 1: Check for deployment-related events
+          DSEQ=$(echo "$TX_RESULT" | jq -r '.events[]? | select(.type=="akash.v1") | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null || echo "")
+
+          # Method 2: Try message events in logs
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
-            echo "Trying to extract DSEQ from logs..."
-            DSEQ=$(echo "$TX_RESULT" | jq -r '.logs[0].events[] | select(.type=="message") | .attributes[] | select(.key=="dseq") | .value')
+            echo "Method 1 failed, trying logs..."
+            DSEQ=$(echo "$TX_RESULT" | jq -r '.logs[]?.events[]? | select(.type=="message") | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null | head -n1 || echo "")
           fi
 
-          # Final fallback: query deployment list
+          # Method 3: Try any event with dseq attribute
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
-            echo "Querying deployment list..."
+            echo "Method 2 failed, trying any event with dseq..."
+            DSEQ=$(echo "$TX_RESULT" | jq -r '.. | .attributes[]? | select(.key=="dseq") | .value' 2>/dev/null | head -n1 || echo "")
+          fi
+
+          # Method 4: Query deployment list
+          if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
+            echo "Transaction parsing failed, querying deployment list..."
             sleep 10
-            DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[0].deployment.deployment_id.dseq')
+            DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[]?.deployment?.deployment_id?.dseq' 2>/dev/null | head -n1 || echo "")
           fi
 
+          # Validate DSEQ
           if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
             echo "Error: Could not extract DSEQ from transaction or deployment list"
-            echo "Transaction result:"
+            echo "Full transaction result:"
             echo "$TX_RESULT" | jq '.'
+            echo ""
+            echo "Deployment list:"
+            akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.'
             exit 1
           fi
 
