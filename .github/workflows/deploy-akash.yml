@@ -245,25 +245,15 @@ jobs:
 
           echo ""
           echo "=== Bid summary ==="
-          # Try to show provider and price from each bid
-          echo "$BIDS" | jq -r '.bids[] | "\(.bid.bid_id.provider // "MISSING") - \(.bid.price.amount) uakt"' || true
+          # Show provider and price from each bid
+          echo "$BIDS" | jq -r '.bids[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
 
           # Find the lowest bid and extract provider
           # Sort by price and get the first (lowest) bid
           LOWEST_BID=$(echo "$BIDS" | jq '.bids | sort_by(.bid.price.amount | tonumber) | .[0]')
 
-          # Try multiple methods to extract provider
-          PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.bid_id.provider // empty' 2>/dev/null)
-
-          if [ -z "$PROVIDER" ]; then
-            # Try alternative path
-            PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid_id.provider // empty' 2>/dev/null)
-          fi
-
-          if [ -z "$PROVIDER" ]; then
-            # Try top-level
-            PROVIDER=$(echo "$LOWEST_BID" | jq -r '.provider // empty' 2>/dev/null)
-          fi
+          # Extract provider from correct path: .bid.id.provider
+          PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.id.provider')
 
           if [ -z "$PROVIDER" ]; then
             echo "Error: Could not extract provider address"
