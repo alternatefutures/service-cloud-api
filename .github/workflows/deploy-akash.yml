@@ -288,7 +288,29 @@ jobs:
           echo ""
           echo "=== Service URIs ==="
           PROVIDER=$(akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq -r '.leases[0].lease.lease_id.provider')
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
           akash provider lease-status --dseq ${{ env.DSEQ }} --provider $PROVIDER --node $AKASH_NODE --from deploy --keyring-backend test || true
+
+      - name: Setup Node.js for DNS sync
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies for DNS sync
+        run: |
+          npm install -g tsx
+          npm install
+
+      - name: Sync DNS records
+        env:
+          OPENPROVIDER_USERNAME: ${{ secrets.OPENPROVIDER_USERNAME }}
+          OPENPROVIDER_PASSWORD: ${{ secrets.OPENPROVIDER_PASSWORD }}
+          DOMAIN: alternatefutures.ai
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+        run: |
+          echo "Syncing DNS for deployment ${{ env.DSEQ }} on provider ${{ env.PROVIDER }}"
+          tsx scripts/sync-dns.ts ${{ env.DSEQ }} ${{ env.PROVIDER }}
 
       - name: Deployment summary
         if: always()
@@ -301,9 +323,16 @@ jobs:
           echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Wallet**: ${{ env.AKASH_ADDRESS }}" >> $GITHUB_STEP_SUMMARY
           echo "- **DSEQ**: ${{ env.DSEQ }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider**: ${{ env.PROVIDER }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Transaction**: ${{ env.DEPLOYMENT_TX }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### DNS Records (Auto-configured)" >> $GITHUB_STEP_SUMMARY
+          echo "- **api.alternatefutures.ai** → GraphQL API" >> $GITHUB_STEP_SUMMARY
+          echo "- **yb.alternatefutures.ai** → YugabyteDB Admin UI" >> $GITHUB_STEP_SUMMARY
+          echo "- **ipfs.alternatefutures.ai** → IPFS Gateway" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Configure DNS for your domains" >> $GITHUB_STEP_SUMMARY
+          echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
           echo "2. Monitor deployment health" >> $GITHUB_STEP_SUMMARY
           echo "3. Check service logs" >> $GITHUB_STEP_SUMMARY
+          echo "4. Test endpoints once DNS propagates" >> $GITHUB_STEP_SUMMARY
