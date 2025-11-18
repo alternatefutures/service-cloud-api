@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { resolvers } from './index.js';
-import { GraphQLError } from 'graphql';
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { resolvers } from './index.js'
+import { GraphQLError } from 'graphql'
 
 describe('Route Configuration Resolvers', () => {
-  let mockContext: any;
+  let mockContext: any
 
   beforeEach(() => {
     mockContext = {
@@ -16,8 +16,8 @@ describe('Route Configuration Resolvers', () => {
       },
       projectId: 'project-123',
       userId: 'user-123',
-    };
-  });
+    }
+  })
 
   describe('createAFFunction with routes', () => {
     it('should create function without routes', async () => {
@@ -31,17 +31,17 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction);
+      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction)
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
         { name: 'Test Function' },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockFunction);
+      expect(result).toEqual(mockFunction)
       expect(mockContext.prisma.aFFunction.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           name: 'Test Function',
@@ -49,15 +49,15 @@ describe('Route Configuration Resolvers', () => {
           projectId: 'project-123',
           status: 'ACTIVE',
         }),
-      });
-    });
+      })
+    })
 
     it('should create function with valid routes', async () => {
       const validRoutes = {
         '/api/users/*': 'https://users-service.com',
         '/api/products/*': 'https://products-service.com',
         '/*': 'https://default.com',
-      };
+      }
 
       const mockFunction = {
         id: 'func-1',
@@ -69,29 +69,29 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction);
+      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction)
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
         { name: 'Gateway Function', routes: validRoutes },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockFunction);
+      expect(result).toEqual(mockFunction)
       expect(mockContext.prisma.aFFunction.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           name: 'Gateway Function',
           routes: validRoutes,
         }),
-      });
-    });
+      })
+    })
 
     it('should reject function creation with invalid routes', async () => {
       const invalidRoutes = {
         'invalid-path': 'not-a-url',
-      };
+      }
 
       await expect(
         resolvers.Mutation.createAFFunction(
@@ -99,15 +99,15 @@ describe('Route Configuration Resolvers', () => {
           { name: 'Test Function', routes: invalidRoutes },
           mockContext
         )
-      ).rejects.toThrow(GraphQLError);
+      ).rejects.toThrow(GraphQLError)
 
-      expect(mockContext.prisma.aFFunction.create).not.toHaveBeenCalled();
-    });
+      expect(mockContext.prisma.aFFunction.create).not.toHaveBeenCalled()
+    })
 
     it('should reject routes with non-http protocols', async () => {
       const invalidRoutes = {
         '/api': 'ftp://example.com',
-      };
+      }
 
       await expect(
         resolvers.Mutation.createAFFunction(
@@ -115,8 +115,8 @@ describe('Route Configuration Resolvers', () => {
           { name: 'Test Function', routes: invalidRoutes },
           mockContext
         )
-      ).rejects.toThrow(GraphQLError);
-    });
+      ).rejects.toThrow(GraphQLError)
+    })
 
     it('should reject empty routes object', async () => {
       await expect(
@@ -125,14 +125,14 @@ describe('Route Configuration Resolvers', () => {
           { name: 'Test Function', routes: {} },
           mockContext
         )
-      ).rejects.toThrow(GraphQLError);
-    });
+      ).rejects.toThrow(GraphQLError)
+    })
 
     it('should require project ID', async () => {
       const contextWithoutProject = {
         ...mockContext,
         projectId: undefined,
-      };
+      }
 
       await expect(
         resolvers.Mutation.createAFFunction(
@@ -140,18 +140,18 @@ describe('Route Configuration Resolvers', () => {
           { name: 'Test Function' },
           contextWithoutProject
         )
-      ).rejects.toThrow(GraphQLError);
+      ).rejects.toThrow(GraphQLError)
       expect(() => {
-        throw new GraphQLError('Project ID required');
-      }).toThrow('Project ID required');
-    });
-  });
+        throw new GraphQLError('Project ID required')
+      }).toThrow('Project ID required')
+    })
+  })
 
   describe('updateAFFunction with routes', () => {
     it('should update function with new routes', async () => {
       const newRoutes = {
         '/api/*': 'https://new-api.com',
-      };
+      }
 
       const mockUpdatedFunction = {
         id: 'func-1',
@@ -162,24 +162,26 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.update.mockResolvedValue(mockUpdatedFunction);
+      mockContext.prisma.aFFunction.update.mockResolvedValue(
+        mockUpdatedFunction
+      )
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
         { id: 'func-1', routes: newRoutes },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockUpdatedFunction);
+      expect(result).toEqual(mockUpdatedFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-1' },
         data: expect.objectContaining({
           routes: newRoutes,
         }),
-      });
-    });
+      })
+    })
 
     it('should update function with null routes (clear routes)', async () => {
       const mockUpdatedFunction = {
@@ -191,29 +193,31 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.update.mockResolvedValue(mockUpdatedFunction);
+      mockContext.prisma.aFFunction.update.mockResolvedValue(
+        mockUpdatedFunction
+      )
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
         { id: 'func-1', routes: null },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockUpdatedFunction);
+      expect(result).toEqual(mockUpdatedFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-1' },
         data: expect.objectContaining({
           routes: null,
         }),
-      });
-    });
+      })
+    })
 
     it('should reject update with invalid routes', async () => {
       const invalidRoutes = {
         'no-slash': 'https://example.com',
-      };
+      }
 
       await expect(
         resolvers.Mutation.updateAFFunction(
@@ -221,10 +225,10 @@ describe('Route Configuration Resolvers', () => {
           { id: 'func-1', routes: invalidRoutes },
           mockContext
         )
-      ).rejects.toThrow(GraphQLError);
+      ).rejects.toThrow(GraphQLError)
 
-      expect(mockContext.prisma.aFFunction.update).not.toHaveBeenCalled();
-    });
+      expect(mockContext.prisma.aFFunction.update).not.toHaveBeenCalled()
+    })
 
     it('should update other fields without affecting routes', async () => {
       const mockUpdatedFunction = {
@@ -236,30 +240,32 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.update.mockResolvedValue(mockUpdatedFunction);
+      mockContext.prisma.aFFunction.update.mockResolvedValue(
+        mockUpdatedFunction
+      )
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
         { id: 'func-1', name: 'New Name', status: 'INACTIVE' },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockUpdatedFunction);
+      expect(result).toEqual(mockUpdatedFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-1' },
         data: expect.objectContaining({
           name: 'New Name',
           status: 'INACTIVE',
         }),
-      });
-    });
+      })
+    })
 
     it('should update multiple fields including routes', async () => {
       const newRoutes = {
         '/v2/*': 'https://v2-api.com',
-      };
+      }
 
       const mockUpdatedFunction = {
         id: 'func-1',
@@ -270,9 +276,11 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.update.mockResolvedValue(mockUpdatedFunction);
+      mockContext.prisma.aFFunction.update.mockResolvedValue(
+        mockUpdatedFunction
+      )
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
@@ -283,9 +291,9 @@ describe('Route Configuration Resolvers', () => {
           routes: newRoutes,
         },
         mockContext
-      );
+      )
 
-      expect(result).toEqual(mockUpdatedFunction);
+      expect(result).toEqual(mockUpdatedFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-1' },
         data: expect.objectContaining({
@@ -293,9 +301,9 @@ describe('Route Configuration Resolvers', () => {
           slug: 'updated-slug',
           routes: newRoutes,
         }),
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('Route configuration edge cases', () => {
     it('should handle complex route patterns', async () => {
@@ -304,7 +312,7 @@ describe('Route Configuration Resolvers', () => {
         '/api/v2/users/*': 'https://users-v2.com',
         '/api/*/legacy': 'https://legacy.com',
         '/*': 'https://default.com',
-      };
+      }
 
       const mockFunction = {
         id: 'func-1',
@@ -315,23 +323,23 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction);
+      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction)
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
         { name: 'Complex Function', routes: complexRoutes },
         mockContext
-      );
+      )
 
-      expect(result.routes).toEqual(complexRoutes);
-    });
+      expect(result.routes).toEqual(complexRoutes)
+    })
 
     it('should handle URLs with paths and query parameters', async () => {
       const routesWithParams = {
         '/api': 'https://example.com/base/path?key=value&foo=bar',
-      };
+      }
 
       const mockFunction = {
         id: 'func-1',
@@ -342,17 +350,17 @@ describe('Route Configuration Resolvers', () => {
         projectId: 'project-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction);
+      mockContext.prisma.aFFunction.create.mockResolvedValue(mockFunction)
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
         { name: 'Param Function', routes: routesWithParams },
         mockContext
-      );
+      )
 
-      expect(result.routes).toEqual(routesWithParams);
-    });
-  });
-});
+      expect(result.routes).toEqual(routesWithParams)
+    })
+  })
+})

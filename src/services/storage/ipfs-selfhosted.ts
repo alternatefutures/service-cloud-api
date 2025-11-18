@@ -1,8 +1,8 @@
-import { create, IPFSHTTPClient } from 'ipfs-http-client';
-import type { StorageService, UploadResult } from './types.js';
-import * as fs from 'fs';
-import * as path from 'path';
-import { globSource } from 'ipfs-http-client';
+import { create, IPFSHTTPClient } from 'ipfs-http-client'
+import type { StorageService, UploadResult } from './types.js'
+import * as fs from 'fs'
+import * as path from 'path'
+import { globSource } from 'ipfs-http-client'
 
 /**
  * Self-Hosted IPFS Storage Service
@@ -10,19 +10,22 @@ import { globSource } from 'ipfs-http-client';
  * Use this with IPFS node deployed on Akash Network
  */
 export class SelfHostedIPFSStorageService implements StorageService {
-  private client: IPFSHTTPClient;
-  private gatewayUrl: string;
+  private client: IPFSHTTPClient
+  private gatewayUrl: string
 
   constructor(apiUrl?: string, gatewayUrl?: string) {
-    const api = apiUrl || process.env.IPFS_API_URL || 'http://localhost:5001';
-    this.gatewayUrl = gatewayUrl || process.env.IPFS_GATEWAY_URL || 'https://ipfs.alternatefutures.ai';
+    const api = apiUrl || process.env.IPFS_API_URL || 'http://localhost:5001'
+    this.gatewayUrl =
+      gatewayUrl ||
+      process.env.IPFS_GATEWAY_URL ||
+      'https://ipfs.alternatefutures.ai'
 
-    this.client = create({ url: api });
+    this.client = create({ url: api })
   }
 
   async upload(data: Buffer | string, filename: string): Promise<UploadResult> {
     try {
-      const buffer = typeof data === 'string' ? Buffer.from(data) : data;
+      const buffer = typeof data === 'string' ? Buffer.from(data) : data
 
       const result = await this.client.add(
         {
@@ -33,16 +36,18 @@ export class SelfHostedIPFSStorageService implements StorageService {
           wrapWithDirectory: false,
           pin: true, // Pin to ensure persistence
         }
-      );
+      )
 
       return {
         cid: result.cid.toString(),
         url: `${this.gatewayUrl}/ipfs/${result.cid.toString()}`,
         size: result.size,
         storageType: 'IPFS',
-      };
+      }
     } catch (error) {
-      throw new Error(`IPFS upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `IPFS upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
     }
   }
 
@@ -50,11 +55,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
     try {
       // Verify directory exists
       if (!fs.existsSync(dirPath)) {
-        throw new Error(`Directory not found: ${dirPath}`);
+        throw new Error(`Directory not found: ${dirPath}`)
       }
 
       // Upload directory with all contents
-      let lastResult: { cid: any; size: number } | undefined;
+      let lastResult: { cid: any; size: number } | undefined
 
       for await (const file of this.client.addAll(
         globSource(dirPath, '**/*') as any,
@@ -63,11 +68,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
           pin: true,
         }
       )) {
-        lastResult = file;
+        lastResult = file
       }
 
       if (!lastResult) {
-        throw new Error('No files uploaded');
+        throw new Error('No files uploaded')
       }
 
       // The last result is the directory itself
@@ -76,9 +81,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
         url: `${this.gatewayUrl}/ipfs/${lastResult.cid.toString()}`,
         size: lastResult.size,
         storageType: 'IPFS',
-      };
+      }
     } catch (error) {
-      throw new Error(`IPFS directory upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `IPFS directory upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
     }
   }
 
@@ -87,9 +94,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
    */
   async pin(cid: string): Promise<void> {
     try {
-      await this.client.pin.add(cid);
+      await this.client.pin.add(cid)
     } catch (error) {
-      throw new Error(`IPFS pin failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `IPFS pin failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
     }
   }
 
@@ -98,9 +107,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
    */
   async unpin(cid: string): Promise<void> {
     try {
-      await this.client.pin.rm(cid);
+      await this.client.pin.rm(cid)
     } catch (error) {
-      throw new Error(`IPFS unpin failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `IPFS unpin failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
     }
   }
 
@@ -109,15 +120,17 @@ export class SelfHostedIPFSStorageService implements StorageService {
    */
   async get(cid: string): Promise<Buffer> {
     try {
-      const chunks: Uint8Array[] = [];
+      const chunks: Uint8Array[] = []
 
       for await (const chunk of this.client.cat(cid)) {
-        chunks.push(chunk);
+        chunks.push(chunk)
       }
 
-      return Buffer.concat(chunks);
+      return Buffer.concat(chunks)
     } catch (error) {
-      throw new Error(`IPFS get failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `IPFS get failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      )
     }
   }
 
@@ -126,11 +139,11 @@ export class SelfHostedIPFSStorageService implements StorageService {
    */
   async testConnection(): Promise<boolean> {
     try {
-      const id = await this.client.id();
-      console.log(`Connected to IPFS node: ${id.id}`);
-      return true;
+      const id = await this.client.id()
+      console.log(`Connected to IPFS node: ${id.id}`)
+      return true
     } catch {
-      return false;
+      return false
     }
   }
 
@@ -138,35 +151,35 @@ export class SelfHostedIPFSStorageService implements StorageService {
    * Get IPFS node information
    */
   async getNodeInfo(): Promise<{
-    id: string;
-    agentVersion: string;
-    protocolVersion: string;
-    addresses: string[];
+    id: string
+    agentVersion: string
+    protocolVersion: string
+    addresses: string[]
   }> {
-    const info = await this.client.id();
+    const info = await this.client.id()
     return {
       id: info.id.toString(),
       agentVersion: info.agentVersion,
       protocolVersion: info.protocolVersion,
-      addresses: info.addresses.map((addr) => addr.toString()),
-    };
+      addresses: info.addresses.map(addr => addr.toString()),
+    }
   }
 
   /**
    * Get repository statistics
    */
   async getStats(): Promise<{
-    numObjects: bigint;
-    repoSize: bigint;
-    storageMax: bigint;
-    version: string;
+    numObjects: bigint
+    repoSize: bigint
+    storageMax: bigint
+    version: string
   }> {
-    const stats = await this.client.repo.stat();
+    const stats = await this.client.repo.stat()
     return {
       numObjects: stats.numObjects,
       repoSize: stats.repoSize,
       storageMax: stats.storageMax,
       version: stats.version,
-    };
+    }
   }
 }

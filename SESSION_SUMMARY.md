@@ -13,9 +13,11 @@
 **Day 2 of 3-day migration - COMPLETE!**
 
 #### Backend Repository (`alternatefutures-backend`)
+
 **Branch:** `feature/alt-92-migrate-auth-to-service`
 
 **Commits:**
+
 1. **`2d8a04a`** - Complete auth service migration: Remove all local PAT code
    - Removed `src/services/auth/` (1,162 lines)
    - Removed `src/jobs/cleanupExpiredTokens.ts`
@@ -34,9 +36,11 @@
 4. **`9864388`** - Add Linear tickets for Auth Service SaaS 1-week sprint
 
 #### Auth Service Repository (`alternatefutures-auth`)
+
 **Branch:** `feature/alt-92-personal-access-tokens`
 
 **Commits:**
+
 1. **`17eb8eb`** - Document JWT_SECRET sync requirement and add Redis config
    - Added REDIS_URL to `.env.example`
    - Documented JWT_SECRET matching requirement
@@ -44,13 +48,14 @@
 ### 2. Service-to-Service Authentication
 
 **How it works:**
+
 ```typescript
 // Backend generates JWT token
 const token = jwt.sign(
   {
     userId: user.id,
     service: 'alternatefutures-backend',
-    type: 'service-to-service'
+    type: 'service-to-service',
   },
   process.env.JWT_SECRET,
   { expiresIn: '5m' }
@@ -59,12 +64,13 @@ const token = jwt.sign(
 // Auth service validates using shared JWT_SECRET
 const response = await fetch(`${AUTH_SERVICE_URL}/tokens`, {
   headers: {
-    'Authorization': `Bearer ${token}`
-  }
+    Authorization: `Bearer ${token}`,
+  },
 })
 ```
 
 **Security Features:**
+
 - Short-lived tokens (5 minutes)
 - Both services share same `JWT_SECRET`
 - Tokens include service metadata for auditing
@@ -74,6 +80,7 @@ const response = await fetch(`${AUTH_SERVICE_URL}/tokens`, {
 **Insight:** Auth service is 50% of what Privy offers!
 
 **What You Already Have:**
+
 - ✅ Email authentication (magic links)
 - ✅ SMS authentication
 - ✅ Web3 wallet connection (MetaMask, WalletConnect)
@@ -83,6 +90,7 @@ const response = await fetch(`${AUTH_SERVICE_URL}/tokens`, {
 - ✅ Rate limiting
 
 **What's Missing for SaaS:**
+
 - ❌ Multi-tenancy (customer isolation)
 - ❌ Usage tracking & billing
 - ❌ Customer dashboard
@@ -94,17 +102,20 @@ const response = await fetch(`${AUTH_SERVICE_URL}/tokens`, {
 ### 4. Pivoted from Traditional SaaS to Compute-Based Model
 
 **Original Plan:**
+
 - Free/Starter/Pro/Enterprise tiers
 - MAU-based pricing ($29-$99/month)
 - Complex tier management
 
 **New Plan:**
+
 - Pay-per-use compute pricing (like Lambda)
 - 50% markup on compute costs
 - No tiers, no MAU limits
 - Simpler billing, better alignment with platform
 
 **Pricing Example:**
+
 ```
 1M auth requests = ~$10 compute cost
 With 50% markup = $15 customer cost
@@ -115,12 +126,14 @@ Your profit: $5 per million requests
 ### 5. Researched Audited Security Libraries
 
 **From Privy Open Source:**
+
 - ✅ `@privy-io/shamir-secret-sharing` (216 stars, audited)
   - For embedded wallets (future phase)
   - Zero dependencies
   - TypeScript implementation
 
 **Already Using (Audited):**
+
 - ✅ `bcrypt` - Password hashing (industry standard)
 - ✅ `jsonwebtoken` - JWT tokens (Auth0 maintained)
 - ✅ `ioredis` - Redis client (industry standard)
@@ -128,6 +141,7 @@ Your profit: $5 per million requests
 - ✅ `@solana/web3.js` - Official Solana SDK
 
 **To Add:**
+
 - `nanoid` - Secure ID generation (better than uuid)
 - `@walletconnect/sign-client` - WalletConnect v2
 
@@ -138,6 +152,7 @@ Your profit: $5 per million requests
 **Total Tickets:** 13 (ALT-100 to ALT-141)
 
 **Sprint Breakdown:**
+
 - **Day 1-2:** Multi-tenant foundation (4 tickets)
 - **Day 3:** Usage tracking (2 tickets)
 - **Day 4-5:** Customer dashboard (3 tickets)
@@ -145,6 +160,7 @@ Your profit: $5 per million requests
 - **Day 7:** Landing page + launch (2 tickets)
 
 **Deliverables:**
+
 - Multi-tenant auth service with complete data isolation
 - Usage tracking with compute-based billing
 - Customer dashboard (Next.js + shadcn/ui)
@@ -167,11 +183,13 @@ Your profit: $5 per million requests
 ## 🏗️ Architecture Changes
 
 ### Before Today:
+
 ```
 Backend (local PAT auth) → Database
 ```
 
 ### After Today:
+
 ```
 Backend → Auth Service (via JWT tokens) → Database
          ↑
@@ -179,6 +197,7 @@ Backend → Auth Service (via JWT tokens) → Database
 ```
 
 ### Future (1 Week):
+
 ```
 Customer App → Auth Service (via app_id + app_secret)
                ↓
@@ -194,16 +213,19 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 📊 Migration Status
 
 ### ✅ Day 1 (Complete)
+
 - Copy PAT functionality to auth service
 - Add API endpoints and tests
 
 ### ✅ Day 2 (Complete)
+
 - Update backend authentication middleware
 - Update GraphQL resolvers to proxy
 - Implement JWT service-to-service auth
 - Remove all old PAT code
 
 ### 🔄 Day 3 (Next)
+
 - Deploy both services
 - Configure production environment variables
 - End-to-end testing
@@ -214,6 +236,7 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 🎯 Next Steps
 
 ### Immediate (This Week):
+
 1. **Import tickets to Linear**
    - Go to Linear → Settings → Import → CSV
    - Upload `LINEAR_IMPORT.csv`
@@ -231,6 +254,7 @@ Customer App → Auth Service (via app_id + app_secret)
    - Goal: Launch MVP in 7 days
 
 ### Week 1 Goals:
+
 - [ ] 3+ test apps with complete tenant isolation
 - [ ] Usage tracking functional
 - [ ] Dashboard deployed and working
@@ -238,6 +262,7 @@ Customer App → Auth Service (via app_id + app_secret)
 - [ ] 5-10 signups from soft launch
 
 ### Week 2 Goals:
+
 - [ ] 50 signups
 - [ ] 10 active apps
 - [ ] $100 in compute revenue
@@ -251,18 +276,21 @@ Customer App → Auth Service (via app_id + app_secret)
 "Authentication for Web3, priced like serverless"
 
 **Pricing:**
+
 - Pay only for what you use
 - No monthly fees, no MAU limits
 - Transparent compute-based pricing
 - 1M requests = ~$15 (vs $99/mo elsewhere)
 
 **Target Market:**
+
 - Web3 startups building dApps
 - Developers who want wallet + social auth
 - Teams tired of Auth0/Clerk pricing
 - Projects that need email + Web3 in one SDK
 
 **Competitive Advantages:**
+
 1. Compute-based pricing (vs MAU limits)
 2. Web3-native (wallet support built-in)
 3. All features available to everyone
@@ -274,6 +302,7 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 🔐 Security Posture
 
 **Audited Libraries Used:**
+
 - bcrypt (password hashing)
 - jsonwebtoken (JWT tokens)
 - ethers (Web3)
@@ -281,10 +310,12 @@ Customer App → Auth Service (via app_id + app_secret)
 - ioredis (Redis)
 
 **Future Embedded Wallets:**
+
 - @privy-io/shamir-secret-sharing (audited, 216 stars)
 - @web3auth/web3auth (alternative, also audited)
 
 **Security Features:**
+
 - Multi-tenant data isolation
 - Rate limiting per app
 - Short-lived service tokens
@@ -297,6 +328,7 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 📈 Success Metrics
 
 **Week 1 (End of Sprint):**
+
 - Multi-tenant architecture working
 - Usage tracking implemented
 - Dashboard functional
@@ -304,18 +336,21 @@ Customer App → Auth Service (via app_id + app_secret)
 - 5-10 signups
 
 **Month 1:**
+
 - 100 signups
 - 20 active apps
 - 5 paying customers
 - $100 MRR
 
 **Month 3:**
+
 - 500 signups
 - 100 active apps
 - 20 paying customers
 - $1,000 MRR
 
 **Month 6:**
+
 - 2,000 signups
 - 300 active apps
 - 50 paying customers
@@ -326,28 +361,33 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 🛠️ Tech Stack
 
 **Auth Service:**
+
 - Hono (web framework)
 - SQLite (database)
 - Redis (rate limiting, caching)
 - bcrypt, jsonwebtoken, ethers, @solana/web3.js
 
 **Backend:**
+
 - GraphQL Yoga
 - Prisma + PostgreSQL
 - Redis
 
 **Dashboard (Week 1):**
+
 - Next.js 15 (App Router)
 - Tailwind CSS + shadcn/ui
 - React Query (TanStack Query)
 - Recharts (usage charts)
 
 **SDK (Week 1):**
+
 - React SDK
 - TypeScript
 - ethers + @solana/web3.js
 
 **Future:**
+
 - Node.js SDK
 - Python SDK (maybe)
 - Mobile SDKs (iOS, Android)
@@ -367,12 +407,14 @@ Customer App → Auth Service (via app_id + app_secret)
 ## 🚀 Ready to Launch
 
 **What's working:**
+
 - Auth service with full feature set
 - Backend integration with service-to-service auth
 - Clean migration (1,162 lines removed)
 - Solid architecture for multi-tenancy
 
 **What's next:**
+
 - Import Linear tickets
 - Start building multi-tenant features
 - Launch in 7 days!

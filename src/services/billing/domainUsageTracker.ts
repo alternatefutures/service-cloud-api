@@ -8,7 +8,7 @@
  * - DNS query volume
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client'
 
 export class DomainUsageTracker {
   constructor(private prisma: PrismaClient) {}
@@ -23,11 +23,11 @@ export class DomainUsageTracker {
     periodStart,
     periodEnd,
   }: {
-    customerId: string;
-    domainId: string;
-    hostname: string;
-    periodStart: Date;
-    periodEnd: Date;
+    customerId: string
+    domainId: string
+    hostname: string
+    periodStart: Date
+    periodEnd: Date
   }) {
     // Track as a request (domain registration)
     await this.prisma.usageRecord.create({
@@ -46,7 +46,7 @@ export class DomainUsageTracker {
           action: 'domain_creation',
         },
       },
-    });
+    })
   }
 
   /**
@@ -60,12 +60,12 @@ export class DomainUsageTracker {
     periodEnd,
     isRenewal = false,
   }: {
-    customerId: string;
-    domainId: string;
-    hostname: string;
-    periodStart: Date;
-    periodEnd: Date;
-    isRenewal?: boolean;
+    customerId: string
+    domainId: string
+    hostname: string
+    periodStart: Date
+    periodEnd: Date
+    isRenewal?: boolean
   }) {
     // SSL certificates are typically free via Let's Encrypt,
     // but we track them for monitoring and potential premium SSL in future
@@ -88,7 +88,7 @@ export class DomainUsageTracker {
           provider: 'letsencrypt',
         },
       },
-    });
+    })
   }
 
   /**
@@ -103,13 +103,13 @@ export class DomainUsageTracker {
     periodStart,
     periodEnd,
   }: {
-    customerId: string;
-    domainId: string;
-    hostname: string;
-    verificationMethod: 'TXT' | 'CNAME' | 'A';
-    success: boolean;
-    periodStart: Date;
-    periodEnd: Date;
+    customerId: string
+    domainId: string
+    hostname: string
+    verificationMethod: 'TXT' | 'CNAME' | 'A'
+    success: boolean
+    periodStart: Date
+    periodEnd: Date
   }) {
     await this.prisma.usageRecord.create({
       data: {
@@ -129,7 +129,7 @@ export class DomainUsageTracker {
           action: 'domain_verification',
         },
       },
-    });
+    })
   }
 
   /**
@@ -140,9 +140,9 @@ export class DomainUsageTracker {
     periodStart,
     periodEnd,
   }: {
-    customerId: string;
-    periodStart: Date;
-    periodEnd: Date;
+    customerId: string
+    periodStart: Date
+    periodEnd: Date
   }) {
     const usageRecords = await this.prisma.usageRecord.findMany({
       where: {
@@ -155,7 +155,7 @@ export class DomainUsageTracker {
           in: ['custom_domain', 'ssl_certificate', 'domain_verification'],
         },
       },
-    });
+    })
 
     const summary = {
       customDomainsCreated: 0,
@@ -164,28 +164,28 @@ export class DomainUsageTracker {
       verificationAttempts: 0,
       successfulVerifications: 0,
       totalDomainOperations: usageRecords.length,
-    };
+    }
 
     for (const record of usageRecords) {
-      const metadata = record.metadata as any;
+      const metadata = record.metadata as any
 
       if (record.resourceType === 'custom_domain') {
-        summary.customDomainsCreated++;
+        summary.customDomainsCreated++
       } else if (record.resourceType === 'ssl_certificate') {
         if (metadata?.action === 'ssl_renewal') {
-          summary.sslCertificatesRenewed++;
+          summary.sslCertificatesRenewed++
         } else {
-          summary.sslCertificatesProvisioned++;
+          summary.sslCertificatesProvisioned++
         }
       } else if (record.resourceType === 'domain_verification') {
-        summary.verificationAttempts++;
+        summary.verificationAttempts++
         if (metadata?.success) {
-          summary.successfulVerifications++;
+          summary.successfulVerifications++
         }
       }
     }
 
-    return summary;
+    return summary
   }
 
   /**
@@ -196,10 +196,10 @@ export class DomainUsageTracker {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { user: true },
-    });
+    })
 
     if (!customer) {
-      return 0;
+      return 0
     }
 
     // Count all domains for user's projects
@@ -212,9 +212,9 @@ export class DomainUsageTracker {
         },
         verified: true, // Only count verified domains
       },
-    });
+    })
 
-    return domainsCount;
+    return domainsCount
   }
 
   /**
@@ -229,20 +229,20 @@ export class DomainUsageTracker {
     periodStart,
     periodEnd,
   }: {
-    customerId: string;
-    periodStart: Date;
-    periodEnd: Date;
+    customerId: string
+    periodStart: Date
+    periodEnd: Date
   }) {
-    const activeDomainsCount = await this.getActiveDomainsCount(customerId);
+    const activeDomainsCount = await this.getActiveDomainsCount(customerId)
 
     // Example pricing structure (can be configured):
     // - First 3 custom domains: Free
     // - Additional domains: $1/month per domain
-    const freeDomainTier = 3;
-    const pricePerDomain = 100; // $1.00 in cents
+    const freeDomainTier = 3
+    const pricePerDomain = 100 // $1.00 in cents
 
-    const billableDomains = Math.max(0, activeDomainsCount - freeDomainTier);
-    const domainCost = billableDomains * pricePerDomain;
+    const billableDomains = Math.max(0, activeDomainsCount - freeDomainTier)
+    const domainCost = billableDomains * pricePerDomain
 
     return {
       activeDomainsCount,
@@ -253,6 +253,6 @@ export class DomainUsageTracker {
         billable: billableDomains,
         pricePerDomain,
       },
-    };
+    }
   }
 }

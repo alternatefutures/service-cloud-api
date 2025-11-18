@@ -73,12 +73,14 @@ Complete decentralization stack for container image storage and distribution:
 ## Components
 
 ### 1. PostgreSQL (Metadata Storage)
+
 - **Purpose**: Store registry metadata (image names, tags, references)
 - **Resources**: 1 CPU, 2GB RAM, 20GB storage
 - **Network**: Internal only (accessible to OpenRegistry)
 - **Image**: `postgres:15-alpine`
 
 ### 2. IPFS Node (Kubo - Storage Layer)
+
 - **Purpose**: Decentralized storage for container image layers
 - **Resources**: 2 CPU, 4GB RAM, 100GB storage
 - **Network**:
@@ -89,6 +91,7 @@ Complete decentralization stack for container image storage and distribution:
 - **Config**: Server profile for production
 
 ### 3. OpenRegistry (OCI API Server)
+
 - **Purpose**: OCI-compliant container registry API
 - **Resources**: 2 CPU, 4GB RAM, 10GB storage
 - **Network**: Public HTTP on port 5000 → `registry.alternatefutures.ai`
@@ -98,6 +101,7 @@ Complete decentralization stack for container image storage and distribution:
 ## Why This Matters
 
 ### Complete Decentralization
+
 1. **No Docker Hub**: Eliminate dependency on centralized registries
 2. **No Filebase/Pinata**: Own your IPFS infrastructure
 3. **No Cloud Providers**: Runs on Akash Network
@@ -107,12 +111,14 @@ Complete decentralization stack for container image storage and distribution:
 ### Cost Comparison
 
 **Traditional Stack:**
+
 - Docker Hub Teams: $7/user/month
 - IPFS Pinning (Pinata): $20-100/month
 - Cloud Hosting (AWS): $50-200/month
 - **Total**: ~$77-307/month
 
 **Decentralized Stack:**
+
 - Akash Network: ~$40-70/month
 - IPFS Node: Included in Akash cost
 - OpenRegistry: Included in Akash cost
@@ -121,6 +127,7 @@ Complete decentralization stack for container image storage and distribution:
 **Savings**: 40-85% cost reduction + full sovereignty
 
 ### User Benefits
+
 - **Developers**: Push/pull containers without centralized deps
 - **Platform Users**: Can use the same registry for their deployments
 - **Web3 Native**: Aligns with decentralization mission
@@ -134,25 +141,28 @@ Complete decentralization stack for container image storage and distribution:
 The backend now supports **two IPFS modes**:
 
 #### 1. Legacy Mode (Pinata)
+
 ```typescript
 // Uses Pinata if no IPFS_API_URL is set
-const storage = StorageServiceFactory.create('IPFS');
+const storage = StorageServiceFactory.create('IPFS')
 // → Uses IPFSStorageService (Pinata SDK)
 ```
 
 #### 2. Self-Hosted Mode (NEW)
+
 ```typescript
 // Uses self-hosted IPFS when IPFS_API_URL is set
-process.env.IPFS_API_URL = 'http://ipfs:5001';
-process.env.IPFS_GATEWAY_URL = 'https://ipfs.alternatefutures.ai';
+process.env.IPFS_API_URL = 'http://ipfs:5001'
+process.env.IPFS_GATEWAY_URL = 'https://ipfs.alternatefutures.ai'
 
-const storage = StorageServiceFactory.create('IPFS');
+const storage = StorageServiceFactory.create('IPFS')
 // → Uses SelfHostedIPFSStorageService (ipfs-http-client)
 ```
 
 ### Environment Variables
 
 **Backend (`deploy.yaml`):**
+
 ```yaml
 # Enable self-hosted IPFS
 - IPFS_API_URL=http://ipfs:5001
@@ -160,6 +170,7 @@ const storage = StorageServiceFactory.create('IPFS');
 ```
 
 **OpenRegistry (`deploy-registry.yaml`):**
+
 ```yaml
 # Connect to self-hosted IPFS
 - OPEN_REGISTRY_DFS_IPFS_ENABLED=true
@@ -173,38 +184,40 @@ The `SelfHostedIPFSStorageService` provides:
 
 ```typescript
 // Upload file
-await ipfs.upload(buffer, 'myfile.txt');
+await ipfs.upload(buffer, 'myfile.txt')
 // → Returns: { cid, url, size, storageType }
 
 // Upload directory
-await ipfs.uploadDirectory('./build');
+await ipfs.uploadDirectory('./build')
 // → Uploads entire directory to IPFS
 
 // Pin existing CID
-await ipfs.pin('QmHash...');
+await ipfs.pin('QmHash...')
 
 // Unpin to free space
-await ipfs.unpin('QmHash...');
+await ipfs.unpin('QmHash...')
 
 // Get file from IPFS
-const buffer = await ipfs.get('QmHash...');
+const buffer = await ipfs.get('QmHash...')
 
 // Node info
-const info = await ipfs.getNodeInfo();
+const info = await ipfs.getNodeInfo()
 // → { id, agentVersion, protocolVersion, addresses }
 
 // Storage stats
-const stats = await ipfs.getStats();
+const stats = await ipfs.getStats()
 // → { numObjects, repoSize, storageMax, version }
 ```
 
 ## Deployment Steps
 
 ### Prerequisites
+
 1. Akash wallet with AKT tokens
 2. Namecheap domain access for DNS configuration
 
 ### Step 1: Deploy Registry Stack
+
 ```bash
 cd /Users/wonderwomancode/Projects/fleek/alternatefutures-backend
 
@@ -222,13 +235,16 @@ akash tx deployment create deploy-registry.yaml \
 ```
 
 ### Step 2: Configure DNS
+
 Add to Namecheap:
+
 ```
 registry  →  A Record  →  <akash-provider-ip>
 ipfs      →  A Record  →  <akash-provider-ip>
 ```
 
 ### Step 3: Test Registry
+
 ```bash
 # Check OCI API
 curl https://registry.alternatefutures.ai/v2/
@@ -240,6 +256,7 @@ curl https://ipfs.alternatefutures.ai/ipfs/QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbs
 ```
 
 ### Step 4: Push Backend Image
+
 ```bash
 # Tag with your registry
 docker tag alternatefutures/backend:latest \
@@ -250,7 +267,9 @@ docker push registry.alternatefutures.ai/alternatefutures/backend:latest
 ```
 
 ### Step 5: Deploy Backend Using Registry
+
 Update `deploy.yaml`:
+
 ```yaml
 services:
   api:
@@ -261,6 +280,7 @@ services:
 ```
 
 Deploy:
+
 ```bash
 akash tx deployment create deploy.yaml --from default
 ```
@@ -271,10 +291,11 @@ akash tx deployment create deploy.yaml --from default
 
 ```typescript
 // src/commands/registry/index.ts
-import { Command } from 'commander';
+import { Command } from 'commander'
 
-export const registryCommand = new Command('registry')
-  .description('Manage container images on decentralized registry');
+export const registryCommand = new Command('registry').description(
+  'Manage container images on decentralized registry'
+)
 
 // Login
 registryCommand
@@ -282,7 +303,7 @@ registryCommand
   .description('Login to Alternate Futures Registry')
   .action(async () => {
     // Implement authentication
-  });
+  })
 
 // Push
 registryCommand
@@ -291,7 +312,7 @@ registryCommand
   .action(async (image: string) => {
     // Tag and push using Docker SDK
     // Images automatically stored on IPFS
-  });
+  })
 
 // List
 registryCommand
@@ -299,7 +320,7 @@ registryCommand
   .description('List your container images')
   .action(async () => {
     // Fetch from registry API
-  });
+  })
 
 // Info
 registryCommand
@@ -307,7 +328,7 @@ registryCommand
   .description('Show image details including IPFS CIDs')
   .action(async (image: string) => {
     // Show image layers, sizes, IPFS CIDs
-  });
+  })
 ```
 
 ## App Frontend Integration
@@ -375,11 +396,13 @@ export function RegistryPage() {
 ## Monitoring & Health
 
 ### Registry Health Endpoint
+
 ```bash
 curl https://registry.alternatefutures.ai/v2/
 ```
 
 ### IPFS Node Health
+
 ```bash
 # Node info
 curl http://ipfs.alternatefutures.ai:5001/api/v0/id
@@ -417,12 +440,12 @@ If you're currently using Pinata, migration is automatic:
 
 ```typescript
 // Before: Uses Pinata
-const storage = StorageServiceFactory.create('IPFS');
+const storage = StorageServiceFactory.create('IPFS')
 
 // After: Set IPFS_API_URL environment variable
 // Now automatically uses self-hosted IPFS!
-process.env.IPFS_API_URL = 'http://ipfs:5001';
-const storage = StorageServiceFactory.create('IPFS');
+process.env.IPFS_API_URL = 'http://ipfs:5001'
+const storage = StorageServiceFactory.create('IPFS')
 ```
 
 No code changes needed - just environment configuration!

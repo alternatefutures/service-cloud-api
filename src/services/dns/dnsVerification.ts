@@ -1,20 +1,20 @@
-import { Resolver } from 'dns/promises';
-import crypto from 'crypto';
+import { Resolver } from 'dns/promises'
+import crypto from 'crypto'
 
-const resolver = new Resolver();
+const resolver = new Resolver()
 
 export interface DnsVerificationResult {
-  verified: boolean;
-  record?: string;
-  error?: string;
+  verified: boolean
+  record?: string
+  error?: string
 }
 
 /**
  * Generate a unique verification token for TXT record verification
  */
 export function generateVerificationToken(hostname: string): string {
-  const randomBytes = crypto.randomBytes(16).toString('hex');
-  return `af-site-verification=${randomBytes}`;
+  const randomBytes = crypto.randomBytes(16).toString('hex')
+  return `af-site-verification=${randomBytes}`
 }
 
 /**
@@ -25,30 +25,30 @@ export async function verifyTxtRecord(
   expectedToken: string
 ): Promise<DnsVerificationResult> {
   try {
-    const records = await resolver.resolveTxt(hostname);
+    const records = await resolver.resolveTxt(hostname)
 
     // Flatten TXT records (they come as arrays of arrays)
-    const flatRecords = records.flat();
+    const flatRecords = records.flat()
 
     // Check if any TXT record matches our verification token
-    const found = flatRecords.some(record => record === expectedToken);
+    const found = flatRecords.some(record => record === expectedToken)
 
     if (found) {
       return {
         verified: true,
-        record: expectedToken
-      };
+        record: expectedToken,
+      }
     }
 
     return {
       verified: false,
-      error: 'Verification token not found in TXT records'
-    };
+      error: 'Verification token not found in TXT records',
+    }
   } catch (error) {
     return {
       verified: false,
-      error: error instanceof Error ? error.message : 'DNS lookup failed'
-    };
+      error: error instanceof Error ? error.message : 'DNS lookup failed',
+    }
   }
 }
 
@@ -60,30 +60,31 @@ export async function verifyCnameRecord(
   expectedTarget: string
 ): Promise<DnsVerificationResult> {
   try {
-    const records = await resolver.resolveCname(hostname);
+    const records = await resolver.resolveCname(hostname)
 
     // Check if CNAME points to expected target
-    const found = records.some(record =>
-      record.toLowerCase() === expectedTarget.toLowerCase() ||
-      record.toLowerCase() === `${expectedTarget}.`.toLowerCase()
-    );
+    const found = records.some(
+      record =>
+        record.toLowerCase() === expectedTarget.toLowerCase() ||
+        record.toLowerCase() === `${expectedTarget}.`.toLowerCase()
+    )
 
     if (found) {
       return {
         verified: true,
-        record: records[0]
-      };
+        record: records[0],
+      }
     }
 
     return {
       verified: false,
-      error: `CNAME does not point to ${expectedTarget}`
-    };
+      error: `CNAME does not point to ${expectedTarget}`,
+    }
   } catch (error) {
     return {
       verified: false,
-      error: error instanceof Error ? error.message : 'CNAME lookup failed'
-    };
+      error: error instanceof Error ? error.message : 'CNAME lookup failed',
+    }
   }
 }
 
@@ -95,27 +96,27 @@ export async function verifyARecord(
   expectedIp: string
 ): Promise<DnsVerificationResult> {
   try {
-    const records = await resolver.resolve4(hostname);
+    const records = await resolver.resolve4(hostname)
 
     // Check if any A record matches our IP
-    const found = records.some(record => record === expectedIp);
+    const found = records.some(record => record === expectedIp)
 
     if (found) {
       return {
         verified: true,
-        record: records[0]
-      };
+        record: records[0],
+      }
     }
 
     return {
       verified: false,
-      error: `A record does not point to ${expectedIp}`
-    };
+      error: `A record does not point to ${expectedIp}`,
+    }
   } catch (error) {
     return {
       verified: false,
-      error: error instanceof Error ? error.message : 'A record lookup failed'
-    };
+      error: error instanceof Error ? error.message : 'A record lookup failed',
+    }
   }
 }
 
@@ -129,25 +130,25 @@ export async function checkDnsPropagation(
   expectedValue: string
 ): Promise<boolean> {
   try {
-    let result: DnsVerificationResult;
+    let result: DnsVerificationResult
 
     switch (recordType) {
       case 'TXT':
-        result = await verifyTxtRecord(hostname, expectedValue);
-        break;
+        result = await verifyTxtRecord(hostname, expectedValue)
+        break
       case 'CNAME':
-        result = await verifyCnameRecord(hostname, expectedValue);
-        break;
+        result = await verifyCnameRecord(hostname, expectedValue)
+        break
       case 'A':
-        result = await verifyARecord(hostname, expectedValue);
-        break;
+        result = await verifyARecord(hostname, expectedValue)
+        break
       default:
-        return false;
+        return false
     }
 
-    return result.verified;
+    return result.verified
   } catch {
-    return false;
+    return false
   }
 }
 
@@ -155,12 +156,12 @@ export async function checkDnsPropagation(
  * Get platform CNAME target for domain configuration
  */
 export function getPlatformCnameTarget(): string {
-  return process.env.PLATFORM_CNAME_TARGET || 'cname.alternatefutures.ai';
+  return process.env.PLATFORM_CNAME_TARGET || 'cname.alternatefutures.ai'
 }
 
 /**
  * Get platform IP address for A record configuration
  */
 export function getPlatformIpAddress(): string {
-  return process.env.PLATFORM_IP_ADDRESS || '0.0.0.0';
+  return process.env.PLATFORM_IP_ADDRESS || '0.0.0.0'
 }

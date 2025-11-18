@@ -1,18 +1,18 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 export interface IpnsConfig {
-  ipfsApiUrl?: string;
-  ipfsApiKey?: string;
-  privateKey?: string; // IPNS key
+  ipfsApiUrl?: string
+  ipfsApiKey?: string
+  privateKey?: string // IPNS key
 }
 
 export interface IpnsRecord {
-  ipnsHash: string; // The IPNS hash (public key hash)
-  currentCid: string; // Current IPFS CID it points to
-  lifetime?: string;
-  ttl?: string;
+  ipnsHash: string // The IPNS hash (public key hash)
+  currentCid: string // Current IPFS CID it points to
+  lifetime?: string
+  ttl?: string
 }
 
 /**
@@ -26,16 +26,16 @@ export async function publishIpnsRecord(
 ): Promise<IpnsRecord> {
   const domain = await prisma.domain.findUnique({
     where: { id: domainId },
-    include: { site: true }
-  });
+    include: { site: true },
+  })
 
   if (!domain) {
-    throw new Error('Domain not found');
+    throw new Error('Domain not found')
   }
 
   try {
     // Check if IPNS key already exists for this domain
-    let ipnsKey = domain.ipnsHash;
+    let ipnsKey = domain.ipnsHash
 
     if (!ipnsKey) {
       // Generate new IPNS key
@@ -44,7 +44,7 @@ export async function publishIpnsRecord(
       // ipnsKey = key.id;
 
       // Placeholder for IPNS key generation
-      ipnsKey = `k51qzi5uqu5d${domain.id.substring(0, 40)}`;
+      ipnsKey = `k51qzi5uqu5d${domain.id.substring(0, 40)}`
     }
 
     // Publish IPNS record
@@ -62,40 +62,45 @@ export async function publishIpnsRecord(
         ipnsHash: ipnsKey,
         domainType: 'IPNS',
         verified: true,
-        dnsVerifiedAt: new Date()
-      }
-    });
+        dnsVerifiedAt: new Date(),
+      },
+    })
 
     // Update or create IPNS record in database
     await prisma.iPNSRecord.upsert({
       where: {
-        siteId: domain.siteId
+        siteId: domain.siteId,
       } as any, // Type assertion for unique constraint compatibility
       create: {
         name: ipnsKey,
         hash: cid,
-        siteId: domain.siteId
+        siteId: domain.siteId,
       },
       update: {
-        hash: cid
-      }
-    });
+        hash: cid,
+      },
+    })
 
     return {
       ipnsHash: ipnsKey,
       currentCid: cid,
       lifetime: '24h',
-      ttl: '1h'
-    };
+      ttl: '1h',
+    }
   } catch (error) {
-    throw new Error(`IPNS publish failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `IPNS publish failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
 
 /**
  * Resolve IPNS hash to current CID
  */
-export async function resolveIpnsHash(ipnsHash: string, config: IpnsConfig): Promise<string | null> {
+export async function resolveIpnsHash(
+  ipnsHash: string,
+  config: IpnsConfig
+): Promise<string | null> {
   try {
     // Resolve IPNS name to get current CID
     // const ipfs = create({ url: config.ipfsApiUrl });
@@ -104,13 +109,13 @@ export async function resolveIpnsHash(ipnsHash: string, config: IpnsConfig): Pro
 
     // Placeholder: Check database
     const record = await prisma.iPNSRecord.findFirst({
-      where: { name: ipnsHash }
-    });
+      where: { name: ipnsHash },
+    })
 
-    return record?.hash || null;
+    return record?.hash || null
   } catch (error) {
-    console.error('IPNS resolution failed:', error);
-    return null;
+    console.error('IPNS resolution failed:', error)
+    return null
   }
 }
 
@@ -123,42 +128,45 @@ export async function updateIpnsRecord(
   config: IpnsConfig
 ): Promise<IpnsRecord> {
   const domain = await prisma.domain.findUnique({
-    where: { id: domainId }
-  });
+    where: { id: domainId },
+  })
 
   if (!domain) {
-    throw new Error('Domain not found');
+    throw new Error('Domain not found')
   }
 
   if (!domain.ipnsHash) {
-    throw new Error('Domain does not have an IPNS record. Create one first.');
+    throw new Error('Domain does not have an IPNS record. Create one first.')
   }
 
-  return await publishIpnsRecord(domainId, newCid, config);
+  return await publishIpnsRecord(domainId, newCid, config)
 }
 
 /**
  * Get IPNS record details
  */
-export async function getIpnsRecord(ipnsHash: string, config: IpnsConfig): Promise<IpnsRecord | null> {
+export async function getIpnsRecord(
+  ipnsHash: string,
+  config: IpnsConfig
+): Promise<IpnsRecord | null> {
   try {
     const record = await prisma.iPNSRecord.findFirst({
-      where: { name: ipnsHash }
-    });
+      where: { name: ipnsHash },
+    })
 
     if (!record) {
-      return null;
+      return null
     }
 
     return {
       ipnsHash: record.name,
       currentCid: record.hash,
       lifetime: '24h',
-      ttl: '1h'
-    };
+      ttl: '1h',
+    }
   } catch (error) {
-    console.error('Failed to get IPNS record:', error);
-    return null;
+    console.error('Failed to get IPNS record:', error)
+    return null
   }
 }
 
@@ -174,18 +182,18 @@ export async function autoUpdateIpnsOnDeploy(
   const domains = await prisma.domain.findMany({
     where: {
       siteId,
-      domainType: 'IPNS'
-    }
-  });
+      domainType: 'IPNS',
+    },
+  })
 
   // Update each IPNS record
   for (const domain of domains) {
     if (domain.ipnsHash) {
       try {
-        await updateIpnsRecord(domain.id, newCid, config);
-        console.log(`Updated IPNS record ${domain.ipnsHash} to CID ${newCid}`);
+        await updateIpnsRecord(domain.id, newCid, config)
+        console.log(`Updated IPNS record ${domain.ipnsHash} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update IPNS record ${domain.ipnsHash}:`, error);
+        console.error(`Failed to update IPNS record ${domain.ipnsHash}:`, error)
       }
     }
   }
@@ -194,7 +202,10 @@ export async function autoUpdateIpnsOnDeploy(
 /**
  * Create IPNS key for domain
  */
-export async function createIpnsKey(hostname: string, config: IpnsConfig): Promise<string> {
+export async function createIpnsKey(
+  hostname: string,
+  config: IpnsConfig
+): Promise<string> {
   try {
     // Generate IPNS key
     // const ipfs = create({ url: config.ipfsApiUrl });
@@ -202,55 +213,68 @@ export async function createIpnsKey(hostname: string, config: IpnsConfig): Promi
     // return key.id;
 
     // Placeholder
-    return `k51qzi5uqu5d${hostname.replace(/[^a-z0-9]/gi, '').toLowerCase().substring(0, 40)}`;
+    return `k51qzi5uqu5d${hostname
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase()
+      .substring(0, 40)}`
   } catch (error) {
-    throw new Error(`IPNS key generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `IPNS key generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
 
 /**
  * List all IPNS keys
  */
-export async function listIpnsKeys(config: IpnsConfig): Promise<Array<{ name: string; id: string }>> {
+export async function listIpnsKeys(
+  config: IpnsConfig
+): Promise<Array<{ name: string; id: string }>> {
   try {
     // const ipfs = create({ url: config.ipfsApiUrl });
     // const keys = await ipfs.key.list();
     // return keys.map(k => ({ name: k.name, id: k.id }));
 
     // Placeholder: Get from database
-    const records = await prisma.iPNSRecord.findMany();
-    return records.map(r => ({ name: r.name, id: r.name }));
+    const records = await prisma.iPNSRecord.findMany()
+    return records.map(r => ({ name: r.name, id: r.name }))
   } catch (error) {
-    console.error('Failed to list IPNS keys:', error);
-    return [];
+    console.error('Failed to list IPNS keys:', error)
+    return []
   }
 }
 
 /**
  * Delete IPNS key
  */
-export async function deleteIpnsKey(keyName: string, config: IpnsConfig): Promise<boolean> {
+export async function deleteIpnsKey(
+  keyName: string,
+  config: IpnsConfig
+): Promise<boolean> {
   try {
     // const ipfs = create({ url: config.ipfsApiUrl });
     // await ipfs.key.rm(keyName);
 
     // Remove from database
     await prisma.iPNSRecord.deleteMany({
-      where: { name: keyName }
-    });
+      where: { name: keyName },
+    })
 
-    return true;
+    return true
   } catch (error) {
-    console.error('Failed to delete IPNS key:', error);
-    return false;
+    console.error('Failed to delete IPNS key:', error)
+    return false
   }
 }
 
 /**
  * Get IPNS URL for a domain
  */
-export function getIpnsUrl(ipnsHash: string, gatewayUrl: string = 'https://ipfs.io'): string {
-  return `${gatewayUrl}/ipns/${ipnsHash}`;
+export function getIpnsUrl(
+  ipnsHash: string,
+  gatewayUrl: string = 'https://ipfs.io'
+): string {
+  return `${gatewayUrl}/ipns/${ipnsHash}`
 }
 
 /**
@@ -258,5 +282,7 @@ export function getIpnsUrl(ipnsHash: string, gatewayUrl: string = 'https://ipfs.
  */
 export function isValidIpnsHash(hash: string): boolean {
   // IPNS hashes typically start with 'k51' for ed25519 keys or 'k2k4r8' for RSA keys
-  return hash.startsWith('k51') || hash.startsWith('k2k4r8') || hash.startsWith('Qm');
+  return (
+    hash.startsWith('k51') || hash.startsWith('k2k4r8') || hash.startsWith('Qm')
+  )
 }

@@ -1,19 +1,19 @@
-import type { PrismaClient } from '@prisma/client';
-import { StorageServiceFactory, type StorageType } from '../storage/factory.js';
-import { BuildService, type BuildOptions } from '../build/builder.js';
-import { deploymentEvents } from '../events/index.js';
+import type { PrismaClient } from '@prisma/client'
+import { StorageServiceFactory, type StorageType } from '../storage/factory.js'
+import { BuildService, type BuildOptions } from '../build/builder.js'
+import { deploymentEvents } from '../events/index.js'
 
 export interface DeploymentOptions {
-  siteId: string;
-  sourceDirectory: string;
-  storageType: StorageType;
-  buildOptions?: BuildOptions;
-  outputDirectory?: string;
+  siteId: string
+  sourceDirectory: string
+  storageType: StorageType
+  buildOptions?: BuildOptions
+  outputDirectory?: string
 }
 
 export interface DeploymentCallbacks {
-  onStatusChange?: (status: string) => void;
-  onLog?: (log: string) => void;
+  onStatusChange?: (status: string) => void
+  onLog?: (log: string) => void
 }
 
 export class DeploymentService {
@@ -23,8 +23,14 @@ export class DeploymentService {
     options: DeploymentOptions,
     callbacks?: DeploymentCallbacks
   ): Promise<{ deploymentId: string; cid: string; url: string }> {
-    const { siteId, sourceDirectory, storageType, buildOptions, outputDirectory } = options;
-    const { onStatusChange, onLog } = callbacks || {};
+    const {
+      siteId,
+      sourceDirectory,
+      storageType,
+      buildOptions,
+      outputDirectory,
+    } = options
+    const { onStatusChange, onLog } = callbacks || {}
 
     // Create deployment record with PENDING status
     const deployment = await this.prisma.deployment.create({
@@ -34,20 +40,23 @@ export class DeploymentService {
         status: 'PENDING',
         storageType,
       },
-    });
+    })
 
-    const deploymentId = deployment.id;
+    const deploymentId = deployment.id
 
     // Helper to emit logs and call callback
-    const emitLog = (message: string, level: 'info' | 'error' | 'warn' = 'info') => {
+    const emitLog = (
+      message: string,
+      level: 'info' | 'error' | 'warn' = 'info'
+    ) => {
       deploymentEvents.emitLog({
         deploymentId,
         timestamp: new Date(),
         message,
         level,
-      });
-      onLog?.(message);
-    };
+      })
+      onLog?.(message)
+    }
 
     // Helper to emit status and call callback
     const emitStatus = (status: string) => {
@@ -55,66 +64,66 @@ export class DeploymentService {
         deploymentId,
         status,
         timestamp: new Date(),
-      });
-      onStatusChange?.(status);
-    };
+      })
+      onStatusChange?.(status)
+    }
 
     try {
-      let uploadDirectory = sourceDirectory;
+      let uploadDirectory = sourceDirectory
 
       // If build options provided, run build first
       if (buildOptions) {
-        emitStatus('BUILDING');
+        emitStatus('BUILDING')
         await this.prisma.deployment.update({
           where: { id: deploymentId },
           data: { status: 'BUILDING' },
-        });
+        })
 
-        emitLog('Starting build process...');
-        const buildService = new BuildService();
+        emitLog('Starting build process...')
+        const buildService = new BuildService()
         const buildResult = await buildService.build(
           sourceDirectory,
           buildOptions,
           emitLog
-        );
+        )
 
         if (!buildResult.success) {
           await this.prisma.deployment.update({
             where: { id: deploymentId },
             data: { status: 'FAILED' },
-          });
+          })
 
-          emitStatus('FAILED');
-          emitLog(`Build failed: ${buildResult.error}`, 'error');
+          emitStatus('FAILED')
+          emitLog(`Build failed: ${buildResult.error}`, 'error')
 
           // Clean up build directory
           if (buildResult.buildPath) {
-            buildService.cleanup(buildResult.buildPath);
+            buildService.cleanup(buildResult.buildPath)
           }
 
-          throw new Error(`Build failed: ${buildResult.error}`);
+          throw new Error(`Build failed: ${buildResult.error}`)
         }
 
-        emitLog('Build completed successfully');
+        emitLog('Build completed successfully')
 
         // Use the build output directory
         uploadDirectory = outputDirectory
           ? `${buildResult.buildPath}/${outputDirectory}`
-          : buildResult.buildPath;
+          : buildResult.buildPath
       }
 
       // Upload to storage
-      emitStatus('UPLOADING');
+      emitStatus('UPLOADING')
       await this.prisma.deployment.update({
         where: { id: deploymentId },
         data: { status: 'UPLOADING' },
-      });
+      })
 
-      emitLog(`Uploading to ${storageType}...`);
-      const storageService = StorageServiceFactory.create(storageType);
-      const uploadResult = await storageService.uploadDirectory(uploadDirectory);
+      emitLog(`Uploading to ${storageType}...`)
+      const storageService = StorageServiceFactory.create(storageType)
+      const uploadResult = await storageService.uploadDirectory(uploadDirectory)
 
-      emitLog(`Upload completed: ${uploadResult.url}`);
+      emitLog(`Upload completed: ${uploadResult.url}`)
 
       // Update deployment with CID and success status
       await this.prisma.deployment.update({
@@ -123,7 +132,7 @@ export class DeploymentService {
           cid: uploadResult.cid,
           status: 'SUCCESS',
         },
-      });
+      })
 
       // Create pin record
       await this.prisma.pin.create({
@@ -133,34 +142,35 @@ export class DeploymentService {
           size: uploadResult.size,
           deploymentId,
         },
-      });
+      })
 
-      emitStatus('SUCCESS');
-      emitLog('Deployment completed successfully');
+      emitStatus('SUCCESS')
+      emitLog('Deployment completed successfully')
 
       // Clean up build directory if we created one
       if (buildOptions) {
-        const buildService = new BuildService();
-        buildService.cleanup(uploadDirectory.split('/').slice(0, -1).join('/'));
+        const buildService = new BuildService()
+        buildService.cleanup(uploadDirectory.split('/').slice(0, -1).join('/'))
       }
 
       return {
         deploymentId,
         cid: uploadResult.cid,
         url: uploadResult.url,
-      };
+      }
     } catch (error) {
       // Mark deployment as failed
       await this.prisma.deployment.update({
         where: { id: deploymentId },
         data: { status: 'FAILED' },
-      });
+      })
 
-      emitStatus('FAILED');
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      emitLog(`Deployment failed: ${errorMessage}`, 'error');
+      emitStatus('FAILED')
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error'
+      emitLog(`Deployment failed: ${errorMessage}`, 'error')
 
-      throw error;
+      throw error
     }
   }
 }

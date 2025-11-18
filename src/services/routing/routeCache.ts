@@ -1,8 +1,8 @@
-import type { RouteConfig } from '../../utils/routeValidation.js';
+import type { RouteConfig } from '../../utils/routeValidation.js'
 
 export interface CacheEntry {
-  routes: RouteConfig;
-  timestamp: number;
+  routes: RouteConfig
+  timestamp: number
 }
 
 /**
@@ -10,13 +10,13 @@ export interface CacheEntry {
  * Caches function route configurations for performance
  */
 export class RouteCache {
-  private cache: Map<string, CacheEntry>;
-  private ttl: number; // Time to live in milliseconds
+  private cache: Map<string, CacheEntry>
+  private ttl: number // Time to live in milliseconds
 
   constructor(ttlSeconds: number = 300) {
     // Default 5 minutes
-    this.cache = new Map();
-    this.ttl = ttlSeconds * 1000;
+    this.cache = new Map()
+    this.ttl = ttlSeconds * 1000
   }
 
   /**
@@ -24,20 +24,20 @@ export class RouteCache {
    * Returns null if not cached or expired
    */
   get(functionId: string): RouteConfig | null {
-    const entry = this.cache.get(functionId);
+    const entry = this.cache.get(functionId)
 
     if (!entry) {
-      return null;
+      return null
     }
 
     // Check if expired
-    const now = Date.now();
+    const now = Date.now()
     if (now - entry.timestamp > this.ttl) {
-      this.cache.delete(functionId);
-      return null;
+      this.cache.delete(functionId)
+      return null
     }
 
-    return entry.routes;
+    return entry.routes
   }
 
   /**
@@ -47,21 +47,21 @@ export class RouteCache {
     this.cache.set(functionId, {
       routes,
       timestamp: Date.now(),
-    });
+    })
   }
 
   /**
    * Invalidate cache for a specific function
    */
   invalidate(functionId: string): void {
-    this.cache.delete(functionId);
+    this.cache.delete(functionId)
   }
 
   /**
    * Clear all cached routes
    */
   clear(): void {
-    this.cache.clear();
+    this.cache.clear()
   }
 
   /**
@@ -71,23 +71,23 @@ export class RouteCache {
     return {
       size: this.cache.size,
       ttl: this.ttl,
-    };
+    }
   }
 
   /**
    * Clean up expired entries
    */
   cleanup(): number {
-    const now = Date.now();
-    let removed = 0;
+    const now = Date.now()
+    let removed = 0
 
     for (const [functionId, entry] of this.cache.entries()) {
       if (now - entry.timestamp > this.ttl) {
-        this.cache.delete(functionId);
-        removed++;
+        this.cache.delete(functionId)
+        removed++
       }
     }
 
-    return removed;
+    return removed
   }
 }

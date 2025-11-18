@@ -24,49 +24,49 @@ export enum WSMessageType {
 }
 
 export interface WSMessage {
-  type: WSMessageType;
-  payload: any;
-  timestamp?: number;
-  messageId?: string;
+  type: WSMessageType
+  payload: any
+  timestamp?: number
+  messageId?: string
 }
 
 export interface WSAuthenticatePayload {
-  token: string;
-  chatId?: string;
+  token: string
+  chatId?: string
 }
 
 export interface WSSendMessagePayload {
-  chatId: string;
-  content: string;
-  attachments?: string[];
+  chatId: string
+  content: string
+  attachments?: string[]
 }
 
 export interface WSMessageReceivedPayload {
-  id: string;
-  chatId: string;
-  content: string;
-  role: 'USER' | 'AGENT' | 'SYSTEM';
-  userId?: string;
-  agentId?: string;
-  createdAt: string;
-  metadata?: any;
+  id: string
+  chatId: string
+  content: string
+  role: 'USER' | 'AGENT' | 'SYSTEM'
+  userId?: string
+  agentId?: string
+  createdAt: string
+  metadata?: any
 }
 
 export interface WSErrorPayload {
-  code: string;
-  message: string;
-  details?: any;
+  code: string
+  message: string
+  details?: any
 }
 
 export interface WSTypingPayload {
-  chatId: string;
-  userId?: string;
-  isTyping: boolean;
+  chatId: string
+  userId?: string
+  isTyping: boolean
 }
 
 export interface ConnectionMetadata {
-  userId: string;
-  chatId?: string;
-  connectedAt: Date;
-  lastActivity: Date;
+  userId: string
+  chatId?: string
+  connectedAt: Date
+  lastActivity: Date
 }

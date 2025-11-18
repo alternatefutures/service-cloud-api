@@ -1,17 +1,17 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 export interface ArnsConfig {
-  arweaveNodeUrl?: string;
-  walletJwk?: any; // Arweave wallet JWK
+  arweaveNodeUrl?: string
+  walletJwk?: any // Arweave wallet JWK
 }
 
 export interface ArnsRecord {
-  name: string;
-  transactionId: string;
-  contentId: string;
-  ttl?: number;
+  name: string
+  transactionId: string
+  contentId: string
+  ttl?: number
 }
 
 /**
@@ -25,11 +25,11 @@ export async function registerArnsName(
   config: ArnsConfig
 ): Promise<ArnsRecord> {
   const domain = await prisma.domain.findUnique({
-    where: { id: domainId }
-  });
+    where: { id: domainId },
+  })
 
   if (!domain) {
-    throw new Error('Domain not found');
+    throw new Error('Domain not found')
   }
 
   try {
@@ -48,7 +48,7 @@ export async function registerArnsName(
     // 3. Submitting to Arweave network
 
     // Placeholder for actual ArNS registration
-    const transactionId = `mock-arns-tx-${Date.now()}`;
+    const transactionId = `mock-arns-tx-${Date.now()}`
 
     // Update domain with ArNS information
     await prisma.domain.update({
@@ -58,17 +58,19 @@ export async function registerArnsName(
         arnsTransactionId: transactionId,
         domainType: 'ARNS',
         verified: true, // ArNS registration implies verification
-        dnsVerifiedAt: new Date()
-      }
-    });
+        dnsVerifiedAt: new Date(),
+      },
+    })
 
     return {
       name: arnsName,
       transactionId,
-      contentId
-    };
+      contentId,
+    }
   } catch (error) {
-    throw new Error(`ArNS registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `ArNS registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
 
@@ -81,131 +83,150 @@ export async function updateArnsRecord(
   config: ArnsConfig
 ): Promise<ArnsRecord> {
   const domain = await prisma.domain.findUnique({
-    where: { id: domainId }
-  });
+    where: { id: domainId },
+  })
 
   if (!domain) {
-    throw new Error('Domain not found');
+    throw new Error('Domain not found')
   }
 
   if (!domain.arnsName) {
-    throw new Error('Domain does not have an ArNS name registered');
+    throw new Error('Domain does not have an ArNS name registered')
   }
 
   try {
     // Update ArNS record on Arweave
     // This would create a new transaction updating the ArNS mapping
-    const transactionId = `mock-arns-update-tx-${Date.now()}`;
+    const transactionId = `mock-arns-update-tx-${Date.now()}`
 
     // Update domain record
     await prisma.domain.update({
       where: { id: domainId },
       data: {
-        arnsTransactionId: transactionId
-      }
-    });
+        arnsTransactionId: transactionId,
+      },
+    })
 
     return {
       name: domain.arnsName,
       transactionId,
-      contentId: newContentId
-    };
+      contentId: newContentId,
+    }
   } catch (error) {
-    throw new Error(`ArNS update failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    throw new Error(
+      `ArNS update failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+    )
   }
 }
 
 /**
  * Resolve ArNS name to content ID
  */
-export async function resolveArnsName(arnsName: string, config: ArnsConfig): Promise<string | null> {
+export async function resolveArnsName(
+  arnsName: string,
+  config: ArnsConfig
+): Promise<string | null> {
   try {
     // Query ArNS contract to get current content ID for the name
     // This would involve reading from Arweave smart contract
 
     // Placeholder implementation
     const domain = await prisma.domain.findFirst({
-      where: { arnsName }
-    });
+      where: { arnsName },
+    })
 
     if (!domain) {
-      return null;
+      return null
     }
 
     // In real implementation, this would be the Arweave transaction ID
     // that the ArNS name points to
-    return domain.arnsTransactionId;
+    return domain.arnsTransactionId
   } catch (error) {
-    console.error('ArNS resolution failed:', error);
-    return null;
+    console.error('ArNS resolution failed:', error)
+    return null
   }
 }
 
 /**
  * Check if ArNS name is available
  */
-export async function checkArnsAvailability(arnsName: string, config: ArnsConfig): Promise<boolean> {
+export async function checkArnsAvailability(
+  arnsName: string,
+  config: ArnsConfig
+): Promise<boolean> {
   try {
     // Query ArNS registry to check if name is taken
     const existing = await prisma.domain.findFirst({
-      where: { arnsName }
-    });
+      where: { arnsName },
+    })
 
-    return !existing;
+    return !existing
   } catch (error) {
-    console.error('ArNS availability check failed:', error);
-    return false;
+    console.error('ArNS availability check failed:', error)
+    return false
   }
 }
 
 /**
  * Get ArNS record details
  */
-export async function getArnsRecord(arnsName: string, config: ArnsConfig): Promise<ArnsRecord | null> {
+export async function getArnsRecord(
+  arnsName: string,
+  config: ArnsConfig
+): Promise<ArnsRecord | null> {
   try {
     const domain = await prisma.domain.findFirst({
       where: { arnsName },
-      include: { site: { include: { deployments: { take: 1, orderBy: { createdAt: 'desc' } } } } }
-    });
+      include: {
+        site: {
+          include: { deployments: { take: 1, orderBy: { createdAt: 'desc' } } },
+        },
+      },
+    })
 
     if (!domain || !domain.arnsTransactionId || !domain.arnsName) {
-      return null;
+      return null
     }
 
     // Get latest deployment CID as content ID
-    const contentId = domain.site.deployments[0]?.cid || '';
+    const contentId = domain.site.deployments[0]?.cid || ''
 
     return {
       name: domain.arnsName,
       transactionId: domain.arnsTransactionId,
-      contentId
-    };
+      contentId,
+    }
   } catch (error) {
-    console.error('Failed to get ArNS record:', error);
-    return null;
+    console.error('Failed to get ArNS record:', error)
+    return null
   }
 }
 
 /**
  * Automatically update ArNS on new deployment
  */
-export async function autoUpdateArnsOnDeploy(siteId: string, newCid: string, config: ArnsConfig): Promise<void> {
+export async function autoUpdateArnsOnDeploy(
+  siteId: string,
+  newCid: string,
+  config: ArnsConfig
+): Promise<void> {
   // Find all ArNS domains for this site
   const domains = await prisma.domain.findMany({
     where: {
       siteId,
-      domainType: 'ARNS'
-    }
-  });
+      domainType: 'ARNS',
+    },
+  })
 
   // Update each ArNS record
   for (const domain of domains) {
     if (domain.arnsName) {
       try {
-        await updateArnsRecord(domain.id, newCid, config);
-        console.log(`Updated ArNS record ${domain.arnsName} to CID ${newCid}`);
+        await updateArnsRecord(domain.id, newCid, config)
+        console.log(`Updated ArNS record ${domain.arnsName} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update ArNS record ${domain.arnsName}:`, error);
+        console.error(`Failed to update ArNS record ${domain.arnsName}:`, error)
       }
     }
   }

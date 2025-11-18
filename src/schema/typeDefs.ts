@@ -722,7 +722,9 @@ export const typeDefs = /* GraphQL */ `
     domain(id: ID!): Domain
     domains(siteId: ID): [Domain!]!
     domainByHostname(hostname: String!): Domain
-    domainVerificationInstructions(domainId: ID!): DomainVerificationInstructions!
+    domainVerificationInstructions(
+      domainId: ID!
+    ): DomainVerificationInstructions!
     sslCertificateStatus: [SslCertificateStatusInfo!]!
 
     # Storage Analytics
@@ -752,7 +754,11 @@ export const typeDefs = /* GraphQL */ `
 
     # Storage Tracking
     pinnedContent(limit: Int): [PinnedContent!]!
-    storageSnapshots(startDate: Date, endDate: Date, limit: Int): [StorageSnapshot!]!
+    storageSnapshots(
+      startDate: Date
+      endDate: Date
+      limit: Int
+    ): [StorageSnapshot!]!
     storageStats: StorageTrackingStats!
 
     # Usage Buffer Monitoring
@@ -772,7 +778,10 @@ export const typeDefs = /* GraphQL */ `
 
   type Mutation {
     # Auth
-    createPersonalAccessToken(name: String!, expiresAt: Date): PersonalAccessTokenCreated!
+    createPersonalAccessToken(
+      name: String!
+      expiresAt: Date
+    ): PersonalAccessTokenCreated!
     deletePersonalAccessToken(id: ID!): Boolean!
 
     # Projects
@@ -845,7 +854,11 @@ export const typeDefs = /* GraphQL */ `
     # Web3 Domains
     registerArns(domainId: ID!, arnsName: String!, contentId: String!): Domain!
     updateArnsContent(domainId: ID!, contentId: String!): Domain!
-    setEnsContentHash(domainId: ID!, ensName: String!, contentHash: String!): Domain!
+    setEnsContentHash(
+      domainId: ID!
+      ensName: String!
+      contentHash: String!
+    ): Domain!
     publishIpns(domainId: ID!, cid: String!): Domain!
     updateIpns(domainId: ID!, cid: String!): Domain!
   }
@@ -858,4 +871,4 @@ export const typeDefs = /* GraphQL */ `
     deploymentLogs(deploymentId: ID!): DeploymentLog!
     deploymentStatus(deploymentId: ID!): DeploymentStatusUpdate!
   }
-`;
+`

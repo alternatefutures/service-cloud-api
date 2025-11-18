@@ -19,7 +19,7 @@ The runtime routing system enables functions to act as API gateways, routing inc
    - Forwards HTTP requests to target URLs
    - Preserves headers, query parameters, and request body
    - Handles timeouts and connection errors
-   - Adds X-Forwarded-* headers
+   - Adds X-Forwarded-\* headers
 
 3. **RouteCache** (`src/services/routing/routeCache.ts`)
    - Caches function route configurations
@@ -57,14 +57,14 @@ Return Response
 ### Basic Integration
 
 ```typescript
-import { RuntimeRouter } from './services/routing';
-import { PrismaClient } from '@prisma/client';
+import { RuntimeRouter } from './services/routing'
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 const router = new RuntimeRouter(prisma, {
-  cacheTTL: 300,      // 5 minutes
+  cacheTTL: 300, // 5 minutes
   proxyTimeout: 30000, // 30 seconds
-});
+})
 
 // Handle incoming request
 async function handleFunctionRequest(functionId: string, request: Request) {
@@ -75,24 +75,21 @@ async function handleFunctionRequest(functionId: string, request: Request) {
     headers: Object.fromEntries(request.headers),
     query: Object.fromEntries(new URL(request.url).searchParams),
     body: await request.json().catch(() => undefined),
-  };
+  }
 
   // Try routing first
-  const routedResponse = await router.handleRequest(functionId, proxyRequest);
+  const routedResponse = await router.handleRequest(functionId, proxyRequest)
 
   if (routedResponse) {
     // Route matched - return proxied response
-    return new Response(
-      JSON.stringify(routedResponse.body),
-      {
-        status: routedResponse.status,
-        headers: routedResponse.headers,
-      }
-    );
+    return new Response(JSON.stringify(routedResponse.body), {
+      status: routedResponse.status,
+      headers: routedResponse.headers,
+    })
   }
 
   // No route matched - execute user's function code
-  return executeUserFunction(functionId, request);
+  return executeUserFunction(functionId, request)
 }
 ```
 
@@ -186,22 +183,22 @@ Routes are matched in order of specificity:
 ### Cache Statistics
 
 ```typescript
-const stats = router.getStats();
-console.log(stats.cache.size);  // Number of cached functions
-console.log(stats.cache.ttl);   // Cache TTL in milliseconds
+const stats = router.getStats()
+console.log(stats.cache.size) // Number of cached functions
+console.log(stats.cache.ttl) // Cache TTL in milliseconds
 ```
 
 ### Manual Cache Control
 
 ```typescript
 // Invalidate cache for specific function
-router.invalidateCache('function-id');
+router.invalidateCache('function-id')
 
 // Clear all caches
-router.clearCache();
+router.clearCache()
 
 // Cleanup expired entries
-const removed = router.cleanup();
+const removed = router.cleanup()
 ```
 
 ## Error Handling
@@ -243,6 +240,7 @@ The proxy handles several error types:
 ### Forwarded Headers
 
 The proxy automatically adds:
+
 - `X-Forwarded-For`: Client IP address
 - `X-Forwarded-Host`: Original host header
 - `X-Forwarded-Proto`: Always `https`
@@ -250,6 +248,7 @@ The proxy automatically adds:
 ### Filtered Headers
 
 Hop-by-hop headers are removed:
+
 - `host`
 - `connection`
 - `keep-alive`
@@ -301,8 +300,8 @@ npm test -- src/services/routing/routeMatcher.test.ts
 
 ```typescript
 interface RuntimeRouterOptions {
-  cacheTTL?: number;      // Cache TTL in seconds (default: 300)
-  proxyTimeout?: number;  // Proxy timeout in ms (default: 30000)
+  cacheTTL?: number // Cache TTL in seconds (default: 300)
+  proxyTimeout?: number // Proxy timeout in ms (default: 30000)
 }
 ```
 
@@ -310,9 +309,9 @@ interface RuntimeRouterOptions {
 
 ```typescript
 const router = new RuntimeRouter(prisma, {
-  cacheTTL: 600,        // 10 minutes
-  proxyTimeout: 60000,  // 60 seconds
-});
+  cacheTTL: 600, // 10 minutes
+  proxyTimeout: 60000, // 60 seconds
+})
 ```
 
 ## Database Schema
@@ -343,7 +342,7 @@ model AFFunction {
 
 ### Current Limitations
 
-1. Only supports wildcard (*) patterns
+1. Only supports wildcard (\*) patterns
 2. No regex pattern support
 3. No method-based routing (GET, POST, etc.)
 4. No header-based routing
@@ -370,21 +369,21 @@ The runtime router should be integrated into the function execution flow:
 ```typescript
 // Function runtime entry point
 export async function handleRequest(functionId: string, request: Request) {
-  const router = new RuntimeRouter(prisma);
+  const router = new RuntimeRouter(prisma)
 
   // Convert to ProxyRequest format
-  const proxyRequest = convertToProxyRequest(request);
+  const proxyRequest = convertToProxyRequest(request)
 
   // Try routing first
-  const response = await router.handleRequest(functionId, proxyRequest);
+  const response = await router.handleRequest(functionId, proxyRequest)
 
   if (response) {
     // Route matched - return proxied response
-    return convertToWebResponse(response);
+    return convertToWebResponse(response)
   }
 
   // No route matched - execute user's function
-  return executeUserFunction(functionId, request);
+  return executeUserFunction(functionId, request)
 }
 ```
 
@@ -393,6 +392,7 @@ export async function handleRequest(functionId: string, request: Request) {
 ### Route Design
 
 1. **Order routes from most to least specific**
+
    ```json
    {
      "/api/users/me": "https://users.example.com/current",
@@ -403,6 +403,7 @@ export async function handleRequest(functionId: string, request: Request) {
    ```
 
 2. **Use wildcards for flexibility**
+
    ```json
    {
      "/api/v1/*": "https://api-v1.example.com",
@@ -421,46 +422,49 @@ export async function handleRequest(functionId: string, request: Request) {
 ### Cache Management
 
 1. Invalidate cache after route updates:
+
    ```typescript
-   await updateFunctionRoutes(functionId, newRoutes);
-   router.invalidateCache(functionId);
+   await updateFunctionRoutes(functionId, newRoutes)
+   router.invalidateCache(functionId)
    ```
 
 2. Clear all caches on deployment:
+
    ```typescript
-   router.clearCache();
+   router.clearCache()
    ```
 
 3. Run periodic cleanup:
    ```typescript
    setInterval(() => {
-     const removed = router.cleanup();
-     console.log(`Cleaned up ${removed} expired cache entries`);
-   }, 60000); // Every minute
+     const removed = router.cleanup()
+     console.log(`Cleaned up ${removed} expired cache entries`)
+   }, 60000) // Every minute
    ```
 
 ### Error Handling
 
 1. Log proxy errors for debugging:
+
    ```typescript
-   const response = await router.handleRequest(functionId, request);
+   const response = await router.handleRequest(functionId, request)
    if (response && response.status >= 500) {
-     console.error('Proxy error:', response.body);
+     console.error('Proxy error:', response.body)
    }
    ```
 
 2. Implement fallback logic:
    ```typescript
-   const response = await router.handleRequest(functionId, request);
+   const response = await router.handleRequest(functionId, request)
    if (!response) {
      // No route matched - execute function
-     return executeUserFunction(functionId, request);
+     return executeUserFunction(functionId, request)
    }
    if (response.status >= 500) {
      // Proxy error - execute function as fallback
-     return executeUserFunction(functionId, request);
+     return executeUserFunction(functionId, request)
    }
-   return response;
+   return response
    ```
 
 ## Troubleshooting
@@ -483,10 +487,11 @@ export async function handleRequest(functionId: string, request: Request) {
 ### Proxy Timeout
 
 1. Increase timeout:
+
    ```typescript
    const router = new RuntimeRouter(prisma, {
      proxyTimeout: 60000, // 60 seconds
-   });
+   })
    ```
 
 2. Check target service health
@@ -495,15 +500,16 @@ export async function handleRequest(functionId: string, request: Request) {
 ### Cache Issues
 
 1. Clear cache after updates:
+
    ```typescript
-   router.invalidateCache(functionId);
+   router.invalidateCache(functionId)
    ```
 
 2. Reduce TTL for frequently updated routes:
    ```typescript
    const router = new RuntimeRouter(prisma, {
      cacheTTL: 60, // 1 minute
-   });
+   })
    ```
 
 ## Related Documentation
@@ -515,6 +521,7 @@ export async function handleRequest(functionId: string, request: Request) {
 ## Changelog
 
 ### v1.0.0 (2025-10-28)
+
 - Initial implementation
 - Route matching with wildcards
 - Request proxying

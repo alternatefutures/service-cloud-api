@@ -1,9 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 async function main() {
-  console.log('🌱 Seeding database...');
+  console.log('🌱 Seeding database...')
 
   // Create test user
   const user = await prisma.user.upsert({
@@ -14,8 +14,8 @@ async function main() {
       email: 'test@alternatefutures.ai',
       username: 'testuser',
     },
-  });
-  console.log('✅ Created user:', user.email);
+  })
+  console.log('✅ Created user:', user.email)
 
   // Create Personal Access Token
   const pat = await prisma.personalAccessToken.upsert({
@@ -27,9 +27,9 @@ async function main() {
       token: 'af_local_test_token_12345',
       userId: user.id,
     },
-  });
-  console.log('✅ Created PAT:', pat.name);
-  console.log('   Token:', pat.token);
+  })
+  console.log('✅ Created PAT:', pat.name)
+  console.log('   Token:', pat.token)
 
   // Create test project
   const project = await prisma.project.upsert({
@@ -41,8 +41,8 @@ async function main() {
       slug: 'test-project',
       userId: user.id,
     },
-  });
-  console.log('✅ Created project:', project.name);
+  })
+  console.log('✅ Created project:', project.name)
 
   // Create a test site
   const site = await prisma.site.upsert({
@@ -54,8 +54,8 @@ async function main() {
       slug: 'test-site',
       projectId: project.id,
     },
-  });
-  console.log('✅ Created site:', site.name);
+  })
+  console.log('✅ Created site:', site.name)
 
   // Create test function with routes
   const testFunction = await prisma.aFFunction.upsert({
@@ -74,21 +74,24 @@ async function main() {
       status: 'ACTIVE',
       projectId: project.id,
     },
-  });
-  console.log('✅ Created function:', testFunction.name);
-  console.log('   Routes configured:', Object.keys(testFunction.routes as any).length);
+  })
+  console.log('✅ Created function:', testFunction.name)
+  console.log(
+    '   Routes configured:',
+    Object.keys(testFunction.routes as any).length
+  )
 
-  console.log('\n🎉 Seeding complete!');
-  console.log('\n📋 Test credentials:');
-  console.log('   Authorization: af_local_test_token_12345');
-  console.log('   X-Project-Id: proj-1');
+  console.log('\n🎉 Seeding complete!')
+  console.log('\n📋 Test credentials:')
+  console.log('   Authorization: af_local_test_token_12345')
+  console.log('   X-Project-Id: proj-1')
 }
 
 main()
-  .catch((e) => {
-    console.error('Error seeding database:', e);
-    process.exit(1);
+  .catch(e => {
+    console.error('Error seeding database:', e)
+    process.exit(1)
   })
   .finally(async () => {
-    await prisma.$disconnect();
-  });
+    await prisma.$disconnect()
+  })

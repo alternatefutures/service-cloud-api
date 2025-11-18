@@ -15,6 +15,7 @@ Complete guide to deploying the AlternateFutures GraphQL backend to decentralize
 Deploy to decentralized compute infrastructure.
 
 **Benefits:**
+
 - 60-85% cost savings (~$21-32/month vs $60-140/month)
 - Decentralized and censorship-resistant
 - Self-hosted IPFS included
@@ -36,6 +37,7 @@ npm run deploy:railway
 ```
 
 This script will:
+
 - ✅ Check Railway CLI installation and login status
 - ✅ Verify project connection
 - ✅ Check for PostgreSQL database (prompts to add if missing)
@@ -59,19 +61,23 @@ npm install
 #### Step 2: Set Up Railway
 
 1. **Install Railway CLI**:
+
    ```bash
    npm install -g @railway/cli
    ```
 
 2. **Login to Railway**:
+
    ```bash
    railway login
    ```
 
 3. **Create new project**:
+
    ```bash
    railway init
    ```
+
    - Project name: `alternatefutures-backend`
 
 4. **Add PostgreSQL database**:
@@ -119,6 +125,7 @@ Your GraphQL endpoint: `https://alternatefutures-backend-production.up.railway.a
 ### Automated Build Process
 
 The `railway.json` configuration automatically runs:
+
 1. `npm install` - Install dependencies
 2. `npm run build` - Compile TypeScript
 3. `npm run db:generate` - Generate Prisma client
@@ -140,14 +147,14 @@ The `railway.json` configuration automatically runs:
 In **Advanced DNS** settings:
 
 **For Akash Network:**
-| Type  | Host | Value | TTL |
+| Type | Host | Value | TTL |
 |-------|------|-------|-----|
-| CNAME | api  | <your-akash-uri> | Automatic |
+| CNAME | api | <your-akash-uri> | Automatic |
 
 **For Railway:**
-| Type  | Host | Value | TTL |
+| Type | Host | Value | TTL |
 |-------|------|-------|-----|
-| CNAME | api  | alternatefutures-backend-production.up.railway.app. | Automatic |
+| CNAME | api | alternatefutures-backend-production.up.railway.app. | Automatic |
 
 **Important**: Add a trailing dot (`.`) at the end of the URL
 
@@ -156,6 +163,7 @@ In **Advanced DNS** settings:
 DNS changes can take 5-30 minutes to propagate.
 
 Check status:
+
 ```bash
 dig api.alternatefutures.ai
 ```
@@ -212,11 +220,13 @@ echo 'SDK__GRAPHQL_API_URL=https://api.alternatefutures.ai/graphql' >> .env
 ```
 
 Rebuild CLI:
+
 ```bash
 pnpm build
 ```
 
 Set up authentication:
+
 ```bash
 # Store the PAT in CLI config
 af auth login
@@ -224,6 +234,7 @@ af auth login
 ```
 
 Test functions commands:
+
 ```bash
 # Create a function
 af functions create
@@ -271,6 +282,7 @@ af functions deploy \
 ```
 
 This will:
+
 1. Upload code to IPFS
 2. Create deployment record
 3. Return invoke URL
@@ -281,8 +293,8 @@ Example: `https://alternatefutures-graphql-api.af-functions.dev/graphql`
 
 In Namecheap, update the CNAME:
 
-| Type  | Host | Value | TTL |
-|-------|------|-------|-----|
+| Type  | Host | Value                                          | TTL       |
+| ----- | ---- | ---------------------------------------------- | --------- |
 | CNAME | api  | alternatefutures-graphql-api.af-functions.dev. | Automatic |
 
 ### Step 5: Verify
@@ -331,6 +343,7 @@ Now your platform is running on itself! 🎉
 ## Troubleshooting
 
 ### DNS not resolving
+
 ```bash
 # Check DNS propagation
 dig api.alternatefutures.ai
@@ -340,6 +353,7 @@ sudo dscacheutil -flushcache
 ```
 
 ### Database connection errors
+
 ```bash
 # Check Railway database status
 railway status
@@ -349,6 +363,7 @@ railway logs
 ```
 
 ### CLI not connecting
+
 ```bash
 # Verify environment variables
 cat /Users/wonderwomancode/Projects/fleek/cloud-cli/.env
@@ -387,6 +402,7 @@ Complete decentralization: deploy the backend, database, and IPFS node to Akash 
 ### Architecture
 
 The Akash deployment includes:
+
 - **PostgreSQL**: Database (1 CPU, 2GB RAM, 10GB storage)
 - **IPFS (Kubo)**: Self-hosted storage node (2 CPU, 4GB RAM, 100GB storage)
 - **API**: GraphQL backend (1 CPU, 1GB RAM)
@@ -429,7 +445,7 @@ The `deploy.yaml` file is already configured with self-hosted IPFS. Update the f
 services:
   postgres:
     env:
-      - POSTGRES_PASSWORD=CHANGE_THIS_SECURE_PASSWORD  # CHANGE THIS!
+      - POSTGRES_PASSWORD=CHANGE_THIS_SECURE_PASSWORD # CHANGE THIS!
 
   api:
     env:
@@ -437,7 +453,7 @@ services:
       - DATABASE_URL=postgresql://postgres:CHANGE_THIS_SECURE_PASSWORD@postgres:5432/alternatefutures
 
       # JWT Secret (min 32 characters)
-      - JWT_SECRET=CHANGE_THIS_JWT_SECRET_MIN_32_CHARS  # CHANGE THIS!
+      - JWT_SECRET=CHANGE_THIS_JWT_SECRET_MIN_32_CHARS # CHANGE THIS!
 
       # Email
       - RESEND_API_KEY=your_resend_api_key
@@ -510,10 +526,10 @@ akash provider lease-status --dseq $DSEQ --from mykey --provider $PROVIDER
 
 Update Namecheap DNS to point to Akash:
 
-| Type  | Host | Value | TTL |
-|-------|------|-------|-----|
+| Type  | Host | Value                                           | TTL       |
+| ----- | ---- | ----------------------------------------------- | --------- |
 | CNAME | api  | r9vtl0bnv8mcqmaf66uh9pjqb8.ingress.aksh.online. | Automatic |
-| CNAME | ipfs | gateway-abc123.ingress.aksh.online. | Automatic |
+| CNAME | ipfs | gateway-abc123.ingress.aksh.online.             | Automatic |
 
 **Important**: Add trailing dot and use your actual Akash URLs.
 
@@ -577,18 +593,21 @@ PINATA_API_SECRET=your_secret
 ```
 
 **Dual-Mode Logic:**
+
 - If `IPFS_API_URL` is set → Uses SelfHostedIPFSStorageService
 - If `IPFS_API_URL` is NOT set → Falls back to Pinata
 
 ### Cost Comparison
 
 **Railway (Centralized):**
+
 - Compute: $20/month
 - PostgreSQL: $10/month
 - Pinata IPFS: $20-100/month
 - **Total**: $50-130/month
 
 **Akash (Decentralized):**
+
 - Compute (API): ~$3-5/month
 - PostgreSQL: ~$5-7/month
 - IPFS Node: ~$10-15/month
@@ -602,10 +621,10 @@ Add health checks to your monitoring:
 
 ```typescript
 // Check IPFS node health
-const ipfsHealth = await fetch('https://ipfs.alternatefutures.ai/api/v0/id');
+const ipfsHealth = await fetch('https://ipfs.alternatefutures.ai/api/v0/id')
 
 // Check backend API
-const apiHealth = await fetch('https://api.alternatefutures.ai/graphql');
+const apiHealth = await fetch('https://api.alternatefutures.ai/graphql')
 
 // Get IPFS stats via GraphQL (add this query)
 const stats = await graphql(`
@@ -617,7 +636,7 @@ const stats = await graphql(`
       numObjects
     }
   }
-`);
+`)
 ```
 
 ### Updating Deployment
@@ -639,6 +658,7 @@ akash provider send-manifest deploy.yaml --dseq $DSEQ --provider $PROVIDER --fro
 ### Backup Strategy
 
 **PostgreSQL Backups:**
+
 ```bash
 # Backup database
 kubectl exec -it postgres-pod --context akash -- pg_dump -U postgres alternatefutures > backup.sql
@@ -648,6 +668,7 @@ kubectl exec -i postgres-pod --context akash -- psql -U postgres alternatefuture
 ```
 
 **IPFS Backups:**
+
 - IPFS content is distributed across the network
 - Pin important content to multiple nodes
 - Export repo: `ipfs repo export`
@@ -656,6 +677,7 @@ kubectl exec -i postgres-pod --context akash -- psql -U postgres alternatefuture
 ### Troubleshooting
 
 **IPFS node not connecting:**
+
 ```bash
 # Check IPFS logs
 kubectl logs ipfs-pod --context akash
@@ -665,6 +687,7 @@ curl http://ipfs:5001/api/v0/id
 ```
 
 **Backend can't reach IPFS:**
+
 ```bash
 # Verify environment variables
 kubectl exec api-pod --context akash -- env | grep IPFS
@@ -674,6 +697,7 @@ kubectl exec api-pod --context akash -- curl http://ipfs:5001/api/v0/id
 ```
 
 **High costs on Akash:**
+
 - Review provider pricing
 - Reduce IPFS storage allocation
 - Consider different provider

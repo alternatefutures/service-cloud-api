@@ -32,10 +32,12 @@ model AFFunction {
 ### Route Configuration Format
 
 Routes are defined as a JSON object where:
+
 - **Keys**: Path patterns (must start with `/`)
 - **Values**: Target URLs (must be valid HTTP/HTTPS URLs)
 
 Example:
+
 ```json
 {
   "/api/users/*": "https://users-service.com",
@@ -56,7 +58,7 @@ type AFFunction {
   name: String!
   slug: String!
   invokeUrl: String
-  routes: JSON          # Route configuration
+  routes: JSON # Route configuration
   status: FunctionStatus!
   # ... other fields
 }
@@ -106,10 +108,7 @@ To remove all route configuration, set routes to `null`:
 
 ```graphql
 mutation ClearRoutes {
-  updateAFFunction(
-    id: "func-123"
-    routes: null
-  ) {
+  updateAFFunction(id: "func-123", routes: null) {
     id
     routes
   }
@@ -123,52 +122,55 @@ The route configuration is validated according to these rules:
 ### Path Patterns
 
 1. **Must start with `/`**: All path patterns must begin with a forward slash
+
    ```javascript
    // ✓ Valid
-   "/api/users/*"
-   "/products"
-   "/*"
+   '/api/users/*'
+   '/products'
+   '/*'
 
    // ✗ Invalid
-   "api/users"    // Missing leading slash
-   "users/*"      // Missing leading slash
+   'api/users' // Missing leading slash
+   'users/*' // Missing leading slash
    ```
 
 2. **Wildcards supported**: Use `*` for wildcard matching
    ```javascript
-   "/api/*"           // Matches /api/anything
-   "/users/*/posts"   // Matches /users/123/posts
-   "/*"               // Matches all paths
+   '/api/*' // Matches /api/anything
+   '/users/*/posts' // Matches /users/123/posts
+   '/*' // Matches all paths
    ```
 
 ### Target URLs
 
 1. **Must be valid URLs**: Target must be a properly formatted URL
+
    ```javascript
    // ✓ Valid
-   "https://example.com"
-   "http://localhost:3000"
-   "https://api.example.com/base/path"
+   'https://example.com'
+   'http://localhost:3000'
+   'https://api.example.com/base/path'
 
    // ✗ Invalid
-   "not-a-url"
-   "example.com"     // Missing protocol
+   'not-a-url'
+   'example.com' // Missing protocol
    ```
 
 2. **Must use HTTP/HTTPS**: Only HTTP and HTTPS protocols are allowed
+
    ```javascript
    // ✓ Valid
-   "http://example.com"
-   "https://example.com"
+   'http://example.com'
+   'https://example.com'
 
    // ✗ Invalid
-   "ftp://example.com"
-   "ws://example.com"
+   'ftp://example.com'
+   'ws://example.com'
    ```
 
 3. **Query parameters allowed**: Target URLs can include query parameters
    ```javascript
-   "https://example.com/api?key=value&foo=bar"
+   'https://example.com/api?key=value&foo=bar'
    ```
 
 ### General Rules
@@ -284,13 +286,13 @@ mutation CreateLegacyRouter {
 Route validation is handled by the `routeValidation.ts` utility:
 
 ```typescript
-import { validateRoutes, normalizeRoutes } from '../utils/routeValidation.js';
+import { validateRoutes, normalizeRoutes } from '../utils/routeValidation.js'
 
 // Validate routes
-validateRoutes(routes); // Throws GraphQLError if invalid
+validateRoutes(routes) // Throws GraphQLError if invalid
 
 // Normalize and validate
-const normalizedRoutes = normalizeRoutes(routes); // Returns null or validated routes
+const normalizedRoutes = normalizeRoutes(routes) // Returns null or validated routes
 ```
 
 ### Resolver Integration
@@ -300,22 +302,24 @@ Routes are validated in both `createAFFunction` and `updateAFFunction` mutations
 ```typescript
 // In createAFFunction
 if (routes) {
-  validateRoutes(routes);
+  validateRoutes(routes)
 }
 
 // In updateAFFunction
 if (routes !== undefined && routes !== null) {
-  validateRoutes(routes);
+  validateRoutes(routes)
 }
 ```
 
 ## Testing
 
 Comprehensive test coverage is provided in:
+
 - `src/utils/routeValidation.test.ts` - Validation logic tests (16 tests)
 - `src/resolvers/routeConfiguration.test.ts` - Resolver integration tests (13 tests)
 
 Run tests with:
+
 ```bash
 npm test
 npm run test:watch    # Watch mode

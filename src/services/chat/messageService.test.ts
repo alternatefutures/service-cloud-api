@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MessageService } from './messageService.js';
-import type { PrismaClient } from '@prisma/client';
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { MessageService } from './messageService.js'
+import type { PrismaClient } from '@prisma/client'
 
 describe('MessageService', () => {
-  let mockPrisma: any;
-  let messageService: MessageService;
+  let mockPrisma: any
+  let messageService: MessageService
 
   beforeEach(() => {
     // Create mock Prisma client
@@ -25,10 +25,10 @@ describe('MessageService', () => {
         findUnique: vi.fn(),
         update: vi.fn(),
       },
-    } as unknown as PrismaClient;
+    } as unknown as PrismaClient
 
-    messageService = new MessageService(mockPrisma);
-  });
+    messageService = new MessageService(mockPrisma)
+  })
 
   describe('createChat', () => {
     it('should create a new chat', async () => {
@@ -41,13 +41,17 @@ describe('MessageService', () => {
         updatedAt: new Date(),
         agent: { id: 'agent-123', name: 'Test Agent' },
         user: { id: 'user-123', email: 'test@example.com' },
-      };
+      }
 
-      mockPrisma.chat.create.mockResolvedValue(mockChat);
+      mockPrisma.chat.create.mockResolvedValue(mockChat)
 
-      const result = await messageService.createChat('user-123', 'agent-123', 'Test Chat');
+      const result = await messageService.createChat(
+        'user-123',
+        'agent-123',
+        'Test Chat'
+      )
 
-      expect(result).toEqual(mockChat);
+      expect(result).toEqual(mockChat)
       expect(mockPrisma.chat.create).toHaveBeenCalledWith({
         data: {
           userId: 'user-123',
@@ -64,9 +68,9 @@ describe('MessageService', () => {
             },
           },
         },
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('createMessage', () => {
     it('should create a user message and update chat timestamp', async () => {
@@ -78,25 +82,25 @@ describe('MessageService', () => {
         userId: 'user-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockPrisma.message.create.mockResolvedValue(mockMessage);
-      mockPrisma.chat.update.mockResolvedValue({});
+      mockPrisma.message.create.mockResolvedValue(mockMessage)
+      mockPrisma.chat.update.mockResolvedValue({})
 
       const result = await messageService.createMessage({
         chatId: 'chat-123',
         content: 'Hello!',
         role: 'USER',
         userId: 'user-123',
-      });
+      })
 
-      expect(result).toEqual(mockMessage);
-      expect(mockPrisma.message.create).toHaveBeenCalled();
+      expect(result).toEqual(mockMessage)
+      expect(mockPrisma.message.create).toHaveBeenCalled()
       expect(mockPrisma.chat.update).toHaveBeenCalledWith({
         where: { id: 'chat-123' },
         data: { lastMessageAt: expect.any(Date) },
-      });
-    });
+      })
+    })
 
     it('should create an agent message', async () => {
       const mockMessage = {
@@ -107,22 +111,22 @@ describe('MessageService', () => {
         agentId: 'agent-123',
         createdAt: new Date(),
         updatedAt: new Date(),
-      };
+      }
 
-      mockPrisma.message.create.mockResolvedValue(mockMessage);
-      mockPrisma.chat.update.mockResolvedValue({});
+      mockPrisma.message.create.mockResolvedValue(mockMessage)
+      mockPrisma.chat.update.mockResolvedValue({})
 
       const result = await messageService.createMessage({
         chatId: 'chat-123',
         content: 'AI response',
         role: 'AGENT',
         agentId: 'agent-123',
-      });
+      })
 
-      expect(result).toEqual(mockMessage);
-      expect(mockPrisma.message.create).toHaveBeenCalled();
-    });
-  });
+      expect(result).toEqual(mockMessage)
+      expect(mockPrisma.message.create).toHaveBeenCalled()
+    })
+  })
 
   describe('getChatMessages', () => {
     it('should retrieve messages for a chat', async () => {
@@ -141,13 +145,13 @@ describe('MessageService', () => {
           role: 'AGENT',
           createdAt: new Date('2024-01-02'),
         },
-      ];
+      ]
 
-      mockPrisma.message.findMany.mockResolvedValue(mockMessages);
+      mockPrisma.message.findMany.mockResolvedValue(mockMessages)
 
-      const result = await messageService.getChatMessages('chat-123', 50);
+      const result = await messageService.getChatMessages('chat-123', 50)
 
-      expect(result).toEqual(mockMessages);
+      expect(result).toEqual(mockMessages)
       expect(mockPrisma.message.findMany).toHaveBeenCalledWith({
         where: { chatId: 'chat-123' },
         orderBy: { createdAt: 'desc' },
@@ -168,14 +172,14 @@ describe('MessageService', () => {
           },
           attachments: true,
         },
-      });
-    });
+      })
+    })
 
     it('should support pagination with before parameter', async () => {
-      mockPrisma.message.findMany.mockResolvedValue([]);
-      const beforeDate = '2024-01-01T00:00:00.000Z';
+      mockPrisma.message.findMany.mockResolvedValue([])
+      const beforeDate = '2024-01-01T00:00:00.000Z'
 
-      await messageService.getChatMessages('chat-123', 20, beforeDate);
+      await messageService.getChatMessages('chat-123', 20, beforeDate)
 
       expect(mockPrisma.message.findMany).toHaveBeenCalledWith({
         where: {
@@ -200,9 +204,9 @@ describe('MessageService', () => {
           },
           attachments: true,
         },
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('getUserChats', () => {
     it('should retrieve all chats for a user', async () => {
@@ -221,13 +225,13 @@ describe('MessageService', () => {
           title: 'Chat 2',
           lastMessageAt: new Date(),
         },
-      ];
+      ]
 
-      mockPrisma.chat.findMany.mockResolvedValue(mockChats);
+      mockPrisma.chat.findMany.mockResolvedValue(mockChats)
 
-      const result = await messageService.getUserChats('user-123');
+      const result = await messageService.getUserChats('user-123')
 
-      expect(result).toEqual(mockChats);
+      expect(result).toEqual(mockChats)
       expect(mockPrisma.chat.findMany).toHaveBeenCalledWith({
         where: { userId: 'user-123' },
         include: {
@@ -239,22 +243,22 @@ describe('MessageService', () => {
         },
         orderBy: { lastMessageAt: 'desc' },
         take: 50,
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('deleteChat', () => {
     it('should delete a chat (cascade deletes messages)', async () => {
-      mockPrisma.chat.delete.mockResolvedValue({});
+      mockPrisma.chat.delete.mockResolvedValue({})
 
-      await messageService.deleteChat('chat-123');
+      await messageService.deleteChat('chat-123')
 
       expect(mockPrisma.chat.delete).toHaveBeenCalledWith({
         where: { id: 'chat-123' },
-      });
+      })
       // Messages are cascade deleted by Prisma based on schema
-    });
-  });
+    })
+  })
 
   describe('getAgent', () => {
     it('should retrieve an agent by ID', async () => {
@@ -265,19 +269,19 @@ describe('MessageService', () => {
         model: 'gpt-4',
         systemPrompt: 'You are a helpful assistant',
         status: 'ACTIVE',
-      };
+      }
 
-      mockPrisma.agent.findUnique.mockResolvedValue(mockAgent);
+      mockPrisma.agent.findUnique.mockResolvedValue(mockAgent)
 
-      const result = await messageService.getAgent('agent-123');
+      const result = await messageService.getAgent('agent-123')
 
-      expect(result).toEqual(mockAgent);
+      expect(result).toEqual(mockAgent)
       expect(mockPrisma.agent.findUnique).toHaveBeenCalledWith({
         where: { id: 'agent-123' },
         include: {
           afFunction: true,
         },
-      });
-    });
-  });
-});
+      })
+    })
+  })
+})

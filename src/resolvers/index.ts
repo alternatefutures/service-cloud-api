@@ -1,19 +1,19 @@
-import { GraphQLError } from 'graphql';
-import type { PrismaClient } from '@prisma/client';
-import { generateSlug } from '../utils/slug.js';
-import { generateInvokeUrl } from '../utils/invokeUrl.js';
-import { validateRoutes } from '../utils/routeValidation.js';
-import { DeploymentService } from '../services/deployment/index.js';
-import type { StorageType } from '../services/storage/factory.js';
-import { deploymentEvents } from '../services/events/index.js';
-import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js';
-import { chatResolvers } from './chat.js';
-import { billingResolvers } from './billing.js';
-import { domainQueries, domainMutations } from './domain.js';
-import { authQueries, authMutations } from './auth.js';
-import type { Context } from './types.js';
+import { GraphQLError } from 'graphql'
+import type { PrismaClient } from '@prisma/client'
+import { generateSlug } from '../utils/slug.js'
+import { generateInvokeUrl } from '../utils/invokeUrl.js'
+import { validateRoutes } from '../utils/routeValidation.js'
+import { DeploymentService } from '../services/deployment/index.js'
+import type { StorageType } from '../services/storage/factory.js'
+import { deploymentEvents } from '../services/events/index.js'
+import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js'
+import { chatResolvers } from './chat.js'
+import { billingResolvers } from './billing.js'
+import { domainQueries, domainMutations } from './domain.js'
+import { authQueries, authMutations } from './auth.js'
+import type { Context } from './types.js'
 
-export type { Context };
+export type { Context }
 
 export const resolvers = {
   Query: {
@@ -23,55 +23,63 @@ export const resolvers = {
 
     me: async (_: unknown, __: unknown, context: Context) => {
       if (!context.userId) {
-        throw new GraphQLError('Not authenticated');
+        throw new GraphQLError('Not authenticated')
       }
       return context.prisma.user.findUnique({
         where: { id: context.userId },
-      });
+      })
     },
 
     // Projects
     project: async (_: unknown, { id }: { id: string }, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id },
-      });
+      })
     },
 
     projects: async (_: unknown, __: unknown, context: Context) => {
       if (!context.userId) {
-        throw new GraphQLError('Not authenticated');
+        throw new GraphQLError('Not authenticated')
       }
       return context.prisma.project.findMany({
         where: { userId: context.userId },
-      });
+      })
     },
 
     // Sites
     site: async (_: unknown, { id }: { id: string }, context: Context) => {
       return context.prisma.site.findUnique({
         where: { id },
-      });
+      })
     },
 
     sites: async (_: unknown, __: unknown, context: Context) => {
       if (!context.projectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
       return context.prisma.site.findMany({
         where: { projectId: context.projectId },
-      });
+      })
     },
 
-    siteBySlug: async (_: unknown, { slug }: { slug: string }, context: Context) => {
+    siteBySlug: async (
+      _: unknown,
+      { slug }: { slug: string },
+      context: Context
+    ) => {
       return context.prisma.site.findUnique({
         where: { slug },
-      });
+      })
     },
 
     // Functions
-    afFunctionByName: async (_: unknown, { name }: { name: string }, context: Context) => {
+    afFunctionByName: async (
+      _: unknown,
+      { name }: { name: string },
+      context: Context
+    ) => {
       if (!context.projectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
 
       const func = await context.prisma.aFFunction.findFirst({
@@ -79,22 +87,22 @@ export const resolvers = {
           name,
           projectId: context.projectId,
         },
-      });
+      })
 
       if (!func) {
-        throw new GraphQLError('Function not found');
+        throw new GraphQLError('Function not found')
       }
 
-      return func;
+      return func
     },
 
     afFunctions: async (_: unknown, __: unknown, context: Context) => {
       if (!context.projectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
       return context.prisma.aFFunction.findMany({
         where: { projectId: context.projectId },
-      });
+      })
     },
 
     afFunctionDeployments: async (
@@ -105,7 +113,7 @@ export const resolvers = {
       return context.prisma.aFFunctionDeployment.findMany({
         where: { afFunctionId: functionId },
         orderBy: { createdAt: 'desc' },
-      });
+      })
     },
 
     // Domains (from domain resolvers)
@@ -117,9 +125,9 @@ export const resolvers = {
       { projectId }: { projectId?: string },
       context: Context
     ) => {
-      const targetProjectId = projectId || context.projectId;
+      const targetProjectId = projectId || context.projectId
       if (!targetProjectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
 
       // Get all sites for this project
@@ -132,36 +140,36 @@ export const resolvers = {
             },
           },
         },
-      });
+      })
 
       // Calculate totals
-      let totalSize = 0;
-      let ipfsSize = 0;
-      let arweaveSize = 0;
-      let deploymentCount = 0;
+      let totalSize = 0
+      let ipfsSize = 0
+      let arweaveSize = 0
+      let deploymentCount = 0
 
-      const breakdown: any[] = [];
+      const breakdown: any[] = []
 
       for (const site of sites) {
-        let siteSize = 0;
-        let siteDeploymentCount = 0;
-        let lastDeployment: Date | null = null;
+        let siteSize = 0
+        let siteDeploymentCount = 0
+        let lastDeployment: Date | null = null
 
         for (const deployment of site.deployments) {
-          const size = deployment.pin?.size || 0;
-          siteSize += size;
-          totalSize += size;
-          deploymentCount++;
-          siteDeploymentCount++;
+          const size = deployment.pin?.size || 0
+          siteSize += size
+          totalSize += size
+          deploymentCount++
+          siteDeploymentCount++
 
           if (deployment.storageType === 'IPFS') {
-            ipfsSize += size;
+            ipfsSize += size
           } else if (deployment.storageType === 'ARWEAVE') {
-            arweaveSize += size;
+            arweaveSize += size
           }
 
           if (!lastDeployment || deployment.createdAt > lastDeployment) {
-            lastDeployment = deployment.createdAt;
+            lastDeployment = deployment.createdAt
           }
         }
 
@@ -172,9 +180,11 @@ export const resolvers = {
             type: 'SITE',
             size: siteSize,
             deploymentCount: siteDeploymentCount,
-            storageType: site.deployments[site.deployments.length - 1]?.storageType || 'IPFS',
+            storageType:
+              site.deployments[site.deployments.length - 1]?.storageType ||
+              'IPFS',
             lastDeployment,
-          });
+          })
         }
       }
 
@@ -185,7 +195,7 @@ export const resolvers = {
         deploymentCount,
         siteCount: sites.length,
         breakdown,
-      };
+      }
     },
 
     storageUsageTrend: async (
@@ -193,13 +203,13 @@ export const resolvers = {
       { projectId, days = 30 }: { projectId?: string; days?: number },
       context: Context
     ) => {
-      const targetProjectId = projectId || context.projectId;
+      const targetProjectId = projectId || context.projectId
       if (!targetProjectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
 
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - days);
+      const startDate = new Date()
+      startDate.setDate(startDate.getDate() - days)
 
       // Get all deployments for this project
       const sites = await context.prisma.site.findMany({
@@ -219,43 +229,49 @@ export const resolvers = {
             },
           },
         },
-      });
+      })
 
       // Group by date
-      const trendMap = new Map<string, { totalSize: number; deploymentCount: number }>();
+      const trendMap = new Map<
+        string,
+        { totalSize: number; deploymentCount: number }
+      >()
 
       for (const site of sites) {
         for (const deployment of site.deployments) {
-          const dateKey = deployment.createdAt.toISOString().split('T')[0];
-          const existing = trendMap.get(dateKey) || { totalSize: 0, deploymentCount: 0 };
-          const size = deployment.pin?.size || 0;
+          const dateKey = deployment.createdAt.toISOString().split('T')[0]
+          const existing = trendMap.get(dateKey) || {
+            totalSize: 0,
+            deploymentCount: 0,
+          }
+          const size = deployment.pin?.size || 0
 
           trendMap.set(dateKey, {
             totalSize: existing.totalSize + size,
             deploymentCount: existing.deploymentCount + 1,
-          });
+          })
         }
       }
 
       // Convert to array and calculate cumulative
-      const trend: any[] = [];
-      let cumulativeSize = 0;
+      const trend: any[] = []
+      let cumulativeSize = 0
 
       for (const [dateKey, data] of Array.from(trendMap.entries()).sort()) {
-        cumulativeSize += data.totalSize;
+        cumulativeSize += data.totalSize
         trend.push({
           date: new Date(dateKey),
           totalSize: cumulativeSize,
           deploymentCount: data.deploymentCount,
-        });
+        })
       }
 
-      return trend;
+      return trend
     },
 
     // System Health
     subscriptionHealth: () => {
-      return subscriptionHealthMonitor.performHealthCheck();
+      return subscriptionHealthMonitor.performHealthCheck()
     },
 
     // Chat queries (from chat resolvers)
@@ -270,12 +286,16 @@ export const resolvers = {
 
   Mutation: {
     // Projects
-    createProject: async (_: unknown, { name }: { name: string }, context: Context) => {
+    createProject: async (
+      _: unknown,
+      { name }: { name: string },
+      context: Context
+    ) => {
       if (!context.userId) {
-        throw new GraphQLError('Not authenticated');
+        throw new GraphQLError('Not authenticated')
       }
 
-      const slug = generateSlug(name);
+      const slug = generateSlug(name)
 
       return context.prisma.project.create({
         data: {
@@ -283,7 +303,7 @@ export const resolvers = {
           slug,
           userId: context.userId,
         },
-      });
+      })
     },
 
     // Sites
@@ -292,12 +312,12 @@ export const resolvers = {
       { name, projectId }: { name: string; projectId?: string },
       context: Context
     ) => {
-      const targetProjectId = projectId || context.projectId;
+      const targetProjectId = projectId || context.projectId
       if (!targetProjectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
 
-      const slug = generateSlug(name);
+      const slug = generateSlug(name)
 
       return context.prisma.site.create({
         data: {
@@ -305,7 +325,7 @@ export const resolvers = {
           slug,
           projectId: targetProjectId,
         },
-      });
+      })
     },
 
     // Deployments
@@ -317,28 +337,28 @@ export const resolvers = {
         storageType = 'IPFS',
         buildOptions,
       }: {
-        siteId: string;
-        sourceDirectory: string;
-        storageType?: StorageType;
+        siteId: string
+        sourceDirectory: string
+        storageType?: StorageType
         buildOptions?: {
-          buildCommand: string;
-          installCommand?: string;
-          workingDirectory?: string;
-          outputDirectory?: string;
-        };
+          buildCommand: string
+          installCommand?: string
+          workingDirectory?: string
+          outputDirectory?: string
+        }
       },
       context: Context
     ) => {
       // Verify site exists
       const site = await context.prisma.site.findUnique({
         where: { id: siteId },
-      });
+      })
 
       if (!site) {
-        throw new GraphQLError('Site not found');
+        throw new GraphQLError('Site not found')
       }
 
-      const deploymentService = new DeploymentService(context.prisma);
+      const deploymentService = new DeploymentService(context.prisma)
 
       const result = await deploymentService.deploy({
         siteId,
@@ -346,18 +366,18 @@ export const resolvers = {
         storageType,
         buildOptions,
         outputDirectory: buildOptions?.outputDirectory,
-      });
+      })
 
       // Return the created deployment
       const deployment = await context.prisma.deployment.findUnique({
         where: { id: result.deploymentId },
-      });
+      })
 
       if (!deployment) {
-        throw new GraphQLError('Deployment not found after creation');
+        throw new GraphQLError('Deployment not found after creation')
       }
 
-      return deployment;
+      return deployment
     },
 
     // Functions
@@ -367,16 +387,16 @@ export const resolvers = {
       context: Context
     ) => {
       if (!context.projectId) {
-        throw new GraphQLError('Project ID required');
+        throw new GraphQLError('Project ID required')
       }
 
       // Validate routes if provided
       if (routes) {
-        validateRoutes(routes);
+        validateRoutes(routes)
       }
 
-      const slug = generateSlug(name);
-      const invokeUrl = generateInvokeUrl(slug);
+      const slug = generateSlug(name)
+      const invokeUrl = generateInvokeUrl(slug)
 
       return context.prisma.aFFunction.create({
         data: {
@@ -388,7 +408,7 @@ export const resolvers = {
           routes: routes || undefined,
           status: 'ACTIVE',
         },
-      });
+      })
     },
 
     deployAFFunction: async (
@@ -400,11 +420,11 @@ export const resolvers = {
         blake3Hash,
         assetsCid,
       }: {
-        functionId: string;
-        cid: string;
-        sgx?: boolean;
-        blake3Hash?: string;
-        assetsCid?: string;
+        functionId: string
+        cid: string
+        sgx?: boolean
+        blake3Hash?: string
+        assetsCid?: string
       },
       context: Context
     ) => {
@@ -416,7 +436,7 @@ export const resolvers = {
           assetsCid,
           afFunctionId: functionId,
         },
-      });
+      })
 
       // Update function's current deployment
       await context.prisma.aFFunction.update({
@@ -425,19 +445,31 @@ export const resolvers = {
           currentDeploymentId: deployment.id,
           status: 'ACTIVE',
         },
-      });
+      })
 
-      return deployment;
+      return deployment
     },
 
     updateAFFunction: async (
       _: unknown,
-      { id, name, slug, routes, status }: { id: string; name?: string; slug?: string; routes?: any; status?: string },
+      {
+        id,
+        name,
+        slug,
+        routes,
+        status,
+      }: {
+        id: string
+        name?: string
+        slug?: string
+        routes?: any
+        status?: string
+      },
       context: Context
     ) => {
       // Validate routes if provided
       if (routes !== undefined && routes !== null) {
-        validateRoutes(routes);
+        validateRoutes(routes)
       }
 
       return context.prisma.aFFunction.update({
@@ -448,14 +480,18 @@ export const resolvers = {
           ...(routes !== undefined && { routes }),
           ...(status && { status: status as any }),
         },
-      });
+      })
     },
 
-    deleteAFFunction: async (_: unknown, { id }: { id: string }, context: Context) => {
+    deleteAFFunction: async (
+      _: unknown,
+      { id }: { id: string },
+      context: Context
+    ) => {
       await context.prisma.aFFunction.delete({
         where: { id },
-      });
-      return true;
+      })
+      return true
     },
 
     // Domains (from domain resolvers)
@@ -476,7 +512,7 @@ export const resolvers = {
     projects: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findMany({
         where: { userId: parent.id },
-      });
+      })
     },
   },
 
@@ -484,17 +520,17 @@ export const resolvers = {
     user: (parent: any, _: unknown, context: Context) => {
       return context.prisma.user.findUnique({
         where: { id: parent.userId },
-      });
+      })
     },
     sites: (parent: any, _: unknown, context: Context) => {
       return context.prisma.site.findMany({
         where: { projectId: parent.id },
-      });
+      })
     },
     functions: (parent: any, _: unknown, context: Context) => {
       return context.prisma.aFFunction.findMany({
         where: { projectId: parent.id },
-      });
+      })
     },
   },
 
@@ -502,17 +538,17 @@ export const resolvers = {
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
-      });
+      })
     },
     deployments: (parent: any, _: unknown, context: Context) => {
       return context.prisma.deployment.findMany({
         where: { siteId: parent.id },
-      });
+      })
     },
     domains: (parent: any, _: unknown, context: Context) => {
       return context.prisma.domain.findMany({
         where: { siteId: parent.id },
-      });
+      })
     },
   },
 
@@ -520,19 +556,19 @@ export const resolvers = {
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
-      });
+      })
     },
     currentDeployment: (parent: any, _: unknown, context: Context) => {
-      if (!parent.currentDeploymentId) return null;
+      if (!parent.currentDeploymentId) return null
       return context.prisma.aFFunctionDeployment.findUnique({
         where: { id: parent.currentDeploymentId },
-      });
+      })
     },
     deployments: (parent: any, _: unknown, context: Context) => {
       return context.prisma.aFFunctionDeployment.findMany({
         where: { afFunctionId: parent.id },
         orderBy: { createdAt: 'desc' },
-      });
+      })
     },
   },
 
@@ -540,7 +576,7 @@ export const resolvers = {
     afFunction: (parent: any, _: unknown, context: Context) => {
       return context.prisma.aFFunction.findUnique({
         where: { id: parent.afFunctionId },
-      });
+      })
     },
   },
 
@@ -564,51 +600,58 @@ export const resolvers = {
     ...billingResolvers.Subscription,
     // GraphQL subscription operations
     deploymentLogs: {
-      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+      subscribe: async function* (
+        _: unknown,
+        { deploymentId }: { deploymentId: string },
+        context: Context
+      ) {
         // Verify deployment exists
         const deployment = await context.prisma.deployment.findUnique({
           where: { id: deploymentId },
-        });
+        })
 
         if (!deployment) {
-          subscriptionHealthMonitor.trackError('Deployment not found', deploymentId);
-          throw new GraphQLError('Deployment not found');
+          subscriptionHealthMonitor.trackError(
+            'Deployment not found',
+            deploymentId
+          )
+          throw new GraphQLError('Deployment not found')
         }
 
         // Track subscription creation
-        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId);
+        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId)
 
         // Create an async generator that yields log events
-        const queue: any[] = [];
-        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+        const queue: any[] = []
+        let resolve: ((value: IteratorResult<any>) => void) | null = null
 
         const handler = (event: any) => {
-          subscriptionHealthMonitor.trackEventEmitted();
+          subscriptionHealthMonitor.trackEventEmitted()
           if (resolve) {
-            resolve({ value: event, done: false });
-            resolve = null;
+            resolve({ value: event, done: false })
+            resolve = null
           } else {
-            queue.push(event);
+            queue.push(event)
           }
-        };
+        }
 
-        deploymentEvents.onLog(deploymentId, handler);
+        deploymentEvents.onLog(deploymentId, handler)
 
         try {
           while (true) {
             if (queue.length > 0) {
-              yield queue.shift();
+              yield queue.shift()
             } else {
-              await new Promise<void>((res) => {
-                resolve = (result) => {
+              await new Promise<void>(res => {
+                resolve = result => {
                   if (!result.done) {
-                    res();
+                    res()
                   }
-                };
-              });
+                }
+              })
 
               if (queue.length > 0) {
-                yield queue.shift();
+                yield queue.shift()
               }
             }
           }
@@ -616,62 +659,69 @@ export const resolvers = {
           subscriptionHealthMonitor.trackError(
             error instanceof Error ? error.message : 'Unknown error',
             deploymentId
-          );
-          throw error;
+          )
+          throw error
         } finally {
-          deploymentEvents.removeLogListener(deploymentId, handler);
-          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId);
+          deploymentEvents.removeLogListener(deploymentId, handler)
+          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId)
         }
       },
       resolve: (payload: any) => payload,
     },
 
     deploymentStatus: {
-      subscribe: async function* (_: unknown, { deploymentId }: { deploymentId: string }, context: Context) {
+      subscribe: async function* (
+        _: unknown,
+        { deploymentId }: { deploymentId: string },
+        context: Context
+      ) {
         // Verify deployment exists
         const deployment = await context.prisma.deployment.findUnique({
           where: { id: deploymentId },
-        });
+        })
 
         if (!deployment) {
-          subscriptionHealthMonitor.trackError('Deployment not found', deploymentId);
-          throw new GraphQLError('Deployment not found');
+          subscriptionHealthMonitor.trackError(
+            'Deployment not found',
+            deploymentId
+          )
+          throw new GraphQLError('Deployment not found')
         }
 
         // Track subscription creation
-        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId);
+        subscriptionHealthMonitor.trackSubscriptionCreated(deploymentId)
 
         // Create an async generator that yields status events
-        const queue: any[] = [];
-        let resolve: ((value: IteratorResult<any>) => void) | null = null;
+        const queue: any[] = []
+        let resolve: ((value: IteratorResult<any>) => void) | null = null
 
         const handler = (event: any) => {
-          subscriptionHealthMonitor.trackEventEmitted();
+          subscriptionHealthMonitor.trackEventEmitted()
           if (resolve) {
-            resolve({ value: event, done: false });
-            resolve = null;
+            resolve({ value: event, done: false })
+            resolve = null
           } else {
-            queue.push(event);
+            queue.push(event)
           }
-        };
+        }
 
-        deploymentEvents.onStatus(deploymentId, handler);
+        deploymentEvents.onStatus(deploymentId, handler)
 
         try {
           while (true) {
             if (queue.length > 0) {
-              yield queue.shift();
+              yield queue.shift()
             } else {
-              await new Promise<void>((res) => {
-                resolve = (result) => {
+              await new Promise<void>(res => {
+                resolve = result => {
                   if (!result.done) {
-                    res();
+                    res()
                   }
-                };
-              });
+                }
+              })
 
               if (queue.length > 0) {
-                yield queue.shift();
+                yield queue.shift()
               }
             }
           }
@@ -679,14 +729,14 @@ export const resolvers = {
           subscriptionHealthMonitor.trackError(
             error instanceof Error ? error.message : 'Unknown error',
             deploymentId
-          );
-          throw error;
+          )
+          throw error
         } finally {
-          deploymentEvents.removeStatusListener(deploymentId, handler);
-          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId);
+          deploymentEvents.removeStatusListener(deploymentId, handler)
+          subscriptionHealthMonitor.trackSubscriptionClosed(deploymentId)
         }
       },
       resolve: (payload: any) => payload,
     },
   },
-};
+}

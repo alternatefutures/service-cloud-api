@@ -50,14 +50,14 @@ The Function Runtime Service handles execution of user functions with integrated
 ### 1. Basic Runtime Server
 
 ```typescript
-import { RuntimeRouter } from '../services/routing/runtimeRouter.js';
-import { PrismaClient } from '@prisma/client';
+import { RuntimeRouter } from '../services/routing/runtimeRouter.js'
+import { PrismaClient } from '@prisma/client'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 const router = new RuntimeRouter(prisma, {
-  cacheTTL: 300000,      // 5 minutes
-  proxyTimeout: 30000,   // 30 seconds
-});
+  cacheTTL: 300000, // 5 minutes
+  proxyTimeout: 30000, // 30 seconds
+})
 
 async function handleFunctionRequest(functionId: string, request: Request) {
   // Convert to ProxyRequest format
@@ -67,24 +67,21 @@ async function handleFunctionRequest(functionId: string, request: Request) {
     headers: Object.fromEntries(request.headers),
     query: Object.fromEntries(new URL(request.url).searchParams),
     body: await request.json().catch(() => undefined),
-  };
+  }
 
   // Try routing first
-  const routedResponse = await router.handleRequest(functionId, proxyRequest);
+  const routedResponse = await router.handleRequest(functionId, proxyRequest)
 
   if (routedResponse) {
     // Route matched - return proxied response
-    return new Response(
-      JSON.stringify(routedResponse.body),
-      {
-        status: routedResponse.status,
-        headers: routedResponse.headers,
-      }
-    );
+    return new Response(JSON.stringify(routedResponse.body), {
+      status: routedResponse.status,
+      headers: routedResponse.headers,
+    })
   }
 
   // No route matched - execute user's function code
-  return executeUserFunction(functionId, request);
+  return executeUserFunction(functionId, request)
 }
 ```
 
@@ -146,6 +143,7 @@ curl http://my-gateway.localhost:3000/no-match
 ### 3. Verify Logging
 
 The runtime logs each request:
+
 ```
 📨 Request: GET /api/users [Function: my-gateway]
 🔍 Function found: my-gateway (clx...)
@@ -161,7 +159,7 @@ When routes are updated via GraphQL mutation, invalidate the cache:
 
 ```typescript
 // In updateAFFunction resolver
-await router.invalidateCache(functionId);
+await router.invalidateCache(functionId)
 ```
 
 ### Performance Monitoring
@@ -169,20 +167,20 @@ await router.invalidateCache(functionId);
 Get routing statistics:
 
 ```typescript
-const stats = router.getStats();
-console.log('Cache hit rate:', stats.cacheHitRate);
-console.log('Active cache entries:', stats.cacheSize);
+const stats = router.getStats()
+console.log('Cache hit rate:', stats.cacheHitRate)
+console.log('Active cache entries:', stats.cacheSize)
 ```
 
 ### Error Handling
 
 The router handles common errors:
 
-| Error | Status | Description |
-|-------|--------|-------------|
-| ProxyError | 502 | Failed to connect to target |
-| Timeout | 504 | Request exceeded proxy timeout |
-| Unknown | 500 | Unexpected error |
+| Error      | Status | Description                    |
+| ---------- | ------ | ------------------------------ |
+| ProxyError | 502    | Failed to connect to target    |
+| Timeout    | 504    | Request exceeded proxy timeout |
+| Unknown    | 500    | Unexpected error               |
 
 ## Production Deployment
 
@@ -196,6 +194,7 @@ npm run start:runtime
 ### 2. DNS Configuration
 
 Point function invoke URLs to runtime service:
+
 ```
 *.af-functions.dev → Runtime Service IP/Domain
 ```
@@ -213,7 +212,7 @@ services:
       - RUNTIME_PORT=3000
       - DATABASE_URL=${DATABASE_URL}
     ports:
-      - "3000:3000"
+      - '3000:3000'
 
   runtime-2:
     image: af-function-runtime
@@ -221,12 +220,12 @@ services:
       - RUNTIME_PORT=3000
       - DATABASE_URL=${DATABASE_URL}
     ports:
-      - "3001:3000"
+      - '3001:3000'
 
   nginx:
     image: nginx
     ports:
-      - "80:80"
+      - '80:80'
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf
 ```
@@ -234,6 +233,7 @@ services:
 ### 4. Monitoring
 
 Monitor key metrics:
+
 - **Route Match Rate**: Percentage of requests handled by routing
 - **Proxy Latency**: Time to proxy requests
 - **Cache Hit Rate**: Route config cache effectiveness
@@ -245,20 +245,21 @@ Control routing rollout:
 
 ```typescript
 // In runtime server
-const ROUTING_ENABLED = process.env.ENABLE_ROUTING === 'true';
+const ROUTING_ENABLED = process.env.ENABLE_ROUTING === 'true'
 
 if (ROUTING_ENABLED) {
-  const routedResponse = await router.handleRequest(functionId, proxyRequest);
-  if (routedResponse) return routedResponse;
+  const routedResponse = await router.handleRequest(functionId, proxyRequest)
+  if (routedResponse) return routedResponse
 }
 
 // Always fall through to function execution
-return executeUserFunction(functionId, request);
+return executeUserFunction(functionId, request)
 ```
 
 ## Limitations
 
 **Current Implementation:**
+
 - ✅ Route matching and proxying fully implemented
 - ✅ Caching and performance optimizations complete
 - ⏳ Function code execution from IPFS (placeholder)
@@ -266,6 +267,7 @@ return executeUserFunction(functionId, request);
 - ⏳ SGX support (future work)
 
 **Next Steps:**
+
 1. Implement IPFS code fetching
 2. Add sandboxed execution environment
 3. Support streaming responses
@@ -281,6 +283,7 @@ return executeUserFunction(functionId, request);
 ## Example: Complete Integration
 
 See `src/runtime/server.ts` for a complete reference implementation demonstrating:
+
 - Function lookup by slug
 - Request parsing and validation
 - RouterIntegration

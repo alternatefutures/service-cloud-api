@@ -1,5 +1,5 @@
-import { GraphQLError } from 'graphql';
-import { Context } from './types';
+import { GraphQLError } from 'graphql'
+import { Context } from './types'
 import {
   createCustomDomain,
   getVerificationInstructions,
@@ -12,11 +12,14 @@ import {
   updateArnsRecord,
   setEnsContentHash,
   publishIpnsRecord,
-  updateIpnsRecord
-} from '../services/dns';
-import { getSslCertificateStatus, renewSslCertificate as renewSsl } from '../jobs/sslRenewal';
-import { DomainUsageTracker } from '../services/billing/domainUsageTracker';
-import type { PrismaClient } from '@prisma/client';
+  updateIpnsRecord,
+} from '../services/dns'
+import {
+  getSslCertificateStatus,
+  renewSslCertificate as renewSsl,
+} from '../jobs/sslRenewal'
+import { DomainUsageTracker } from '../services/billing/domainUsageTracker'
+import type { PrismaClient } from '@prisma/client'
 
 /**
  * Track domain usage asynchronously without blocking the main operation
@@ -25,29 +28,37 @@ import type { PrismaClient } from '@prisma/client';
 async function trackDomainUsageAsync(
   prisma: PrismaClient,
   userId: string,
-  trackingFn: (tracker: DomainUsageTracker, customer: any, subscription: any) => Promise<void>
+  trackingFn: (
+    tracker: DomainUsageTracker,
+    customer: any,
+    subscription: any
+  ) => Promise<void>
 ): Promise<void> {
   try {
     const customer = await prisma.customer.findUnique({
       where: { userId },
-      include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } }
-    });
+      include: { subscriptions: { where: { status: 'ACTIVE' }, take: 1 } },
+    })
 
     if (!customer || customer.subscriptions.length === 0) {
       // No active subscription, skip tracking
-      return;
+      return
     }
 
-    const subscription = customer.subscriptions[0];
-    const domainUsageTracker = new DomainUsageTracker(prisma);
+    const subscription = customer.subscriptions[0]
+    const domainUsageTracker = new DomainUsageTracker(prisma)
 
-    await trackingFn(domainUsageTracker, customer, subscription);
+    await trackingFn(domainUsageTracker, customer, subscription)
   } catch (error) {
     // Log error but don't propagate to avoid blocking domain operations
-    console.error('[Domain Usage Tracking]', error instanceof Error ? error.message : 'Unknown error', {
-      userId,
-      timestamp: new Date().toISOString()
-    });
+    console.error(
+      '[Domain Usage Tracking]',
+      error instanceof Error ? error.message : 'Unknown error',
+      {
+        userId,
+        timestamp: new Date().toISOString(),
+      }
+    )
   }
 }
 
@@ -55,48 +66,56 @@ export const domainQueries = {
   /**
    * Get a single domain by ID
    */
-  domain: async (_: unknown, { id }: { id: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  domain: async (
+    _: unknown,
+    { id }: { id: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     // Check ownership
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to access this domain');
+      throw new GraphQLError('Not authorized to access this domain')
     }
 
-    return domain;
+    return domain
   },
 
   /**
    * List domains for a site
    */
-  domains: async (_: unknown, { siteId }: { siteId?: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  domains: async (
+    _: unknown,
+    { siteId }: { siteId?: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     if (siteId) {
       // Check site ownership
       const site = await prisma.site.findUnique({
         where: { id: siteId },
-        include: { project: true }
-      });
+        include: { project: true },
+      })
 
       if (!site) {
-        throw new GraphQLError('Site not found');
+        throw new GraphQLError('Site not found')
       }
 
       if (site.project.userId !== userId) {
-        throw new GraphQLError('Not authorized to access this site');
+        throw new GraphQLError('Not authorized to access this site')
       }
 
-      return await listDomainsForSite(siteId);
+      return await listDomainsForSite(siteId)
     }
 
     // Return all domains for user
@@ -104,76 +123,88 @@ export const domainQueries = {
       where: {
         site: {
           project: {
-            userId
-          }
-        }
+            userId,
+          },
+        },
       },
-      orderBy: { createdAt: 'desc' }
-    });
+      orderBy: { createdAt: 'desc' },
+    })
   },
 
   /**
    * Get domain by hostname
    */
-  domainByHostname: async (_: unknown, { hostname }: { hostname: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  domainByHostname: async (
+    _: unknown,
+    { hostname }: { hostname: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { hostname },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      return null;
+      return null
     }
 
     // Check ownership
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to access this domain');
+      throw new GraphQLError('Not authorized to access this domain')
     }
 
-    return domain;
+    return domain
   },
 
   /**
    * Get verification instructions for a domain
    */
-  domainVerificationInstructions: async (_: unknown, { domainId }: { domainId: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  domainVerificationInstructions: async (
+    _: unknown,
+    { domainId }: { domainId: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     // Check ownership
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to access this domain');
+      throw new GraphQLError('Not authorized to access this domain')
     }
 
-    return await getVerificationInstructions(domainId);
+    return await getVerificationInstructions(domainId)
   },
 
   /**
    * Get SSL certificate status for all domains
    */
-  sslCertificateStatus: async (_: unknown, __: unknown, { userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  sslCertificateStatus: async (
+    _: unknown,
+    __: unknown,
+    { userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
-    const status = await getSslCertificateStatus();
+    const status = await getSslCertificateStatus()
 
     // Filter to only domains owned by the user
     // Note: This query should be optimized with a WHERE clause in production
     return status.filter((item: any) => {
       // Add userId check when we fetch domains with user relationships
-      return true; // For now, return all (add proper filtering in production)
-    });
-  }
-};
+      return true // For now, return all (add proper filtering in production)
+    })
+  },
+}
 
 export const domainMutations = {
   /**
@@ -181,82 +212,112 @@ export const domainMutations = {
    */
   createDomain: async (
     _: unknown,
-    { input }: { input: { hostname: string; siteId: string; domainType?: string; verificationMethod?: 'TXT' | 'CNAME' | 'A' } },
+    {
+      input,
+    }: {
+      input: {
+        hostname: string
+        siteId: string
+        domainType?: string
+        verificationMethod?: 'TXT' | 'CNAME' | 'A'
+      }
+    },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     // Verify user owns the site
     const site = await prisma.site.findUnique({
       where: { id: input.siteId },
-      include: { project: true }
-    });
+      include: { project: true },
+    })
 
     if (!site) {
-      throw new GraphQLError('Site not found');
+      throw new GraphQLError('Site not found')
     }
 
     if (site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this site');
+      throw new GraphQLError('Not authorized to modify this site')
     }
 
     // Create domain
     const domain = await createCustomDomain({
       hostname: input.hostname,
       siteId: input.siteId,
-      domainType: input.domainType as 'WEB2' | 'ARNS' | 'ENS' | 'IPNS' | undefined,
-      verificationMethod: input.verificationMethod
-    });
+      domainType: input.domainType as
+        | 'WEB2'
+        | 'ARNS'
+        | 'ENS'
+        | 'IPNS'
+        | undefined,
+      verificationMethod: input.verificationMethod,
+    })
 
     // Track usage asynchronously (fire-and-forget) to avoid blocking domain creation
-    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
-      await tracker.trackDomainCreation({
-        customerId: customer.id,
-        domainId: domain.id,
-        hostname: input.hostname,
-        periodStart: subscription.currentPeriodStart,
-        periodEnd: subscription.currentPeriodEnd,
-      });
-    }).catch(() => {}); // Fire and forget
+    trackDomainUsageAsync(
+      prisma,
+      userId,
+      async (tracker, customer, subscription) => {
+        await tracker.trackDomainCreation({
+          customerId: customer.id,
+          domainId: domain.id,
+          hostname: input.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+        })
+      }
+    ).catch(() => {}) // Fire and forget
 
-    return domain;
+    return domain
   },
 
   /**
    * Verify domain ownership
    */
-  verifyDomain: async (_: unknown, { domainId }: { domainId: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  verifyDomain: async (
+    _: unknown,
+    { domainId }: { domainId: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    const verificationResult = await verifyDomainOwnership(domainId);
+    const verificationResult = await verifyDomainOwnership(domainId)
 
     // Track verification attempt asynchronously
-    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
-      await tracker.trackDomainVerification({
-        customerId: customer.id,
-        domainId,
-        hostname: domain.hostname,
-        verificationMethod: (domain.txtVerificationToken ? 'TXT' : domain.expectedCname ? 'CNAME' : 'A') as 'TXT' | 'CNAME' | 'A',
-        success: verificationResult,
-        periodStart: subscription.currentPeriodStart,
-        periodEnd: subscription.currentPeriodEnd,
-      });
-    }).catch(() => {}); // Fire and forget
+    trackDomainUsageAsync(
+      prisma,
+      userId,
+      async (tracker, customer, subscription) => {
+        await tracker.trackDomainVerification({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          verificationMethod: (domain.txtVerificationToken
+            ? 'TXT'
+            : domain.expectedCname
+              ? 'CNAME'
+              : 'A') as 'TXT' | 'CNAME' | 'A',
+          success: verificationResult,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+        })
+      }
+    ).catch(() => {}) // Fire and forget
 
-    return verificationResult;
+    return verificationResult
   },
 
   /**
@@ -267,39 +328,43 @@ export const domainMutations = {
     { domainId, email }: { domainId: string; email: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await provisionSslCertificate(domainId, email);
+    await provisionSslCertificate(domainId, email)
 
     // Track SSL provisioning asynchronously
-    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
-      await tracker.trackSslProvisioning({
-        customerId: customer.id,
-        domainId,
-        hostname: domain.hostname,
-        periodStart: subscription.currentPeriodStart,
-        periodEnd: subscription.currentPeriodEnd,
-        isRenewal: false,
-      });
-    }).catch(() => {}); // Fire and forget
+    trackDomainUsageAsync(
+      prisma,
+      userId,
+      async (tracker, customer, subscription) => {
+        await tracker.trackSslProvisioning({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+          isRenewal: false,
+        })
+      }
+    ).catch(() => {}) // Fire and forget
 
     // Return updated domain
     return await prisma.domain.findUnique({
-      where: { id: domainId }
-    });
+      where: { id: domainId },
+    })
   },
 
   /**
@@ -310,46 +375,50 @@ export const domainMutations = {
     { siteId, domainId }: { siteId: string; domainId: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const site = await prisma.site.findUnique({
       where: { id: siteId },
-      include: { project: true }
-    });
+      include: { project: true },
+    })
 
     if (!site) {
-      throw new GraphQLError('Site not found');
+      throw new GraphQLError('Site not found')
     }
 
     if (site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this site');
+      throw new GraphQLError('Not authorized to modify this site')
     }
 
-    await setPrimary(siteId, domainId);
-    return true;
+    await setPrimary(siteId, domainId)
+    return true
   },
 
   /**
    * Delete a custom domain
    */
-  deleteDomain: async (_: unknown, { id }: { id: string }, { prisma, userId }: Context) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+  deleteDomain: async (
+    _: unknown,
+    { id }: { id: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to delete this domain');
+      throw new GraphQLError('Not authorized to delete this domain')
     }
 
-    await removeCustomDomain(id);
-    return true;
+    await removeCustomDomain(id)
+    return true
   },
 
   /**
@@ -357,27 +426,31 @@ export const domainMutations = {
    */
   registerArns: async (
     _: unknown,
-    { domainId, arnsName, contentId }: { domainId: string; arnsName: string; contentId: string },
+    {
+      domainId,
+      arnsName,
+      contentId,
+    }: { domainId: string; arnsName: string; contentId: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await registerArnsName(domainId, arnsName, contentId, {});
+    await registerArnsName(domainId, arnsName, contentId, {})
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
+    return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
   /**
@@ -388,24 +461,24 @@ export const domainMutations = {
     { domainId, contentId }: { domainId: string; contentId: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await updateArnsRecord(domainId, contentId, {});
+    await updateArnsRecord(domainId, contentId, {})
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
+    return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
   /**
@@ -413,27 +486,31 @@ export const domainMutations = {
    */
   setEnsContentHash: async (
     _: unknown,
-    { domainId, ensName, contentHash }: { domainId: string; ensName: string; contentHash: string },
+    {
+      domainId,
+      ensName,
+      contentHash,
+    }: { domainId: string; ensName: string; contentHash: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await setEnsContentHash(domainId, ensName, contentHash, {});
+    await setEnsContentHash(domainId, ensName, contentHash, {})
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
+    return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
   /**
@@ -444,24 +521,24 @@ export const domainMutations = {
     { domainId, cid }: { domainId: string; cid: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await publishIpnsRecord(domainId, cid, {});
+    await publishIpnsRecord(domainId, cid, {})
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
+    return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
   /**
@@ -472,24 +549,24 @@ export const domainMutations = {
     { domainId, cid }: { domainId: string; cid: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to modify this domain');
+      throw new GraphQLError('Not authorized to modify this domain')
     }
 
-    await updateIpnsRecord(domainId, cid, {});
+    await updateIpnsRecord(domainId, cid, {})
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
+    return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
   /**
@@ -500,35 +577,39 @@ export const domainMutations = {
     { domainId }: { domainId: string },
     { prisma, userId }: Context
   ) => {
-    if (!userId) throw new GraphQLError('Authentication required');
+    if (!userId) throw new GraphQLError('Authentication required')
 
     const domain = await prisma.domain.findUnique({
       where: { id: domainId },
-      include: { site: { include: { project: true } } }
-    });
+      include: { site: { include: { project: true } } },
+    })
 
     if (!domain) {
-      throw new GraphQLError('Domain not found');
+      throw new GraphQLError('Domain not found')
     }
 
     if (domain.site.project.userId !== userId) {
-      throw new GraphQLError('Not authorized to renew SSL for this domain');
+      throw new GraphQLError('Not authorized to renew SSL for this domain')
     }
 
-    await renewSsl(domainId);
+    await renewSsl(domainId)
 
     // Track SSL renewal asynchronously
-    trackDomainUsageAsync(prisma, userId, async (tracker, customer, subscription) => {
-      await tracker.trackSslProvisioning({
-        customerId: customer.id,
-        domainId,
-        hostname: domain.hostname,
-        periodStart: subscription.currentPeriodStart,
-        periodEnd: subscription.currentPeriodEnd,
-        isRenewal: true,
-      });
-    }).catch(() => {}); // Fire and forget
+    trackDomainUsageAsync(
+      prisma,
+      userId,
+      async (tracker, customer, subscription) => {
+        await tracker.trackSslProvisioning({
+          customerId: customer.id,
+          domainId,
+          hostname: domain.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+          isRenewal: true,
+        })
+      }
+    ).catch(() => {}) // Fire and forget
 
-    return await prisma.domain.findUnique({ where: { id: domainId } });
-  }
-};
+    return await prisma.domain.findUnique({ where: { id: domainId } })
+  },
+}

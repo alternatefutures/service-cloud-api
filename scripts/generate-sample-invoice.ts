@@ -4,32 +4,32 @@
  * Quick script to generate an example invoice PDF to preview the branding
  */
 
-import { PrismaClient } from '@prisma/client';
-import { InvoiceService } from '../src/services/billing/invoiceService.js';
+import { PrismaClient } from '@prisma/client'
+import { InvoiceService } from '../src/services/billing/invoiceService.js'
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient()
 
 async function generateSampleInvoice() {
-  console.log('🎨 Generating sample invoice PDF...\n');
+  console.log('🎨 Generating sample invoice PDF...\n')
 
   try {
-    const invoiceService = new InvoiceService(prisma);
+    const invoiceService = new InvoiceService(prisma)
 
     // Find or create test customer
     let customer = await prisma.customer.findFirst({
       where: { email: 'demo@example.com' },
       include: { user: true },
-    });
+    })
 
     if (!customer) {
-      console.log('Creating test customer...');
+      console.log('Creating test customer...')
       const user = await prisma.user.create({
         data: {
           email: 'demo@example.com',
           username: 'demo-user',
           walletAddress: '0xdemo123456789',
         },
-      });
+      })
 
       customer = await prisma.customer.create({
         data: {
@@ -37,19 +37,19 @@ async function generateSampleInvoice() {
           email: 'demo@example.com',
           name: 'Acme Corporation',
         },
-      });
+      })
     }
 
     // Find or create test subscription
     let subscription = await prisma.subscription.findFirst({
       where: { customerId: customer.id, status: 'ACTIVE' },
-    });
+    })
 
     if (!subscription) {
-      console.log('Creating test subscription...');
-      const now = new Date();
-      const periodEnd = new Date(now);
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
+      console.log('Creating test subscription...')
+      const now = new Date()
+      const periodEnd = new Date(now)
+      periodEnd.setMonth(periodEnd.getMonth() + 1)
 
       subscription = await prisma.subscription.create({
         data: {
@@ -62,12 +62,12 @@ async function generateSampleInvoice() {
           currentPeriodStart: now,
           currentPeriodEnd: periodEnd,
         },
-      });
+      })
     }
 
     // Create test usage records
-    console.log('Creating test usage records...');
-    const now = new Date();
+    console.log('Creating test usage records...')
+    const now = new Date()
 
     await prisma.usageRecord.createMany({
       data: [
@@ -108,38 +108,37 @@ async function generateSampleInvoice() {
           timestamp: now,
         },
       ],
-    });
+    })
 
     // Generate invoice
-    console.log('Generating invoice...');
-    const invoiceId = await invoiceService.generateInvoice(subscription.id);
+    console.log('Generating invoice...')
+    const invoiceId = await invoiceService.generateInvoice(subscription.id)
 
     // Generate PDF
-    console.log('Generating PDF...');
-    const pdfPath = await invoiceService.generatePDF(invoiceId);
+    console.log('Generating PDF...')
+    const pdfPath = await invoiceService.generatePDF(invoiceId)
 
-    console.log('\n✅ Sample invoice PDF generated successfully!');
-    console.log(`📄 Location: ${pdfPath}`);
-    console.log('\nYou can open it with:');
-    console.log(`   open "${pdfPath}"`);
-    console.log('\nInvoice details:');
+    console.log('\n✅ Sample invoice PDF generated successfully!')
+    console.log(`📄 Location: ${pdfPath}`)
+    console.log('\nYou can open it with:')
+    console.log(`   open "${pdfPath}"`)
+    console.log('\nInvoice details:')
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
       include: { lineItems: true },
-    });
+    })
 
-    console.log(`   Invoice #: ${invoice?.invoiceNumber}`);
-    console.log(`   Customer: ${customer.name}`);
-    console.log(`   Total: $${((invoice?.total || 0) / 100).toFixed(2)}`);
-    console.log(`   Line items: ${invoice?.lineItems.length}`);
-
+    console.log(`   Invoice #: ${invoice?.invoiceNumber}`)
+    console.log(`   Customer: ${customer.name}`)
+    console.log(`   Total: $${((invoice?.total || 0) / 100).toFixed(2)}`)
+    console.log(`   Line items: ${invoice?.lineItems.length}`)
   } catch (error) {
-    console.error('❌ Error generating sample invoice:', error);
-    throw error;
+    console.error('❌ Error generating sample invoice:', error)
+    throw error
   } finally {
-    await prisma.$disconnect();
+    await prisma.$disconnect()
   }
 }
 
-generateSampleInvoice();
+generateSampleInvoice()

@@ -4,7 +4,7 @@
  * Tracks and meters usage for billing purposes
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client'
 
 export class UsageService {
   constructor(private prisma: PrismaClient) {}
@@ -23,10 +23,10 @@ export class UsageService {
   ): Promise<string> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     // Get current billing period
@@ -36,31 +36,33 @@ export class UsageService {
         status: 'ACTIVE',
       },
       orderBy: { createdAt: 'desc' },
-    });
+    })
 
-    const periodStart = subscription?.currentPeriodStart || new Date();
-    const periodEnd = subscription?.currentPeriodEnd || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const periodStart = subscription?.currentPeriodStart || new Date()
+    const periodEnd =
+      subscription?.currentPeriodEnd ||
+      new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
 
     // Get pricing from billing settings
-    const settings = await this.prisma.billingSettings.findFirst();
-    let unitPrice: number | undefined;
+    const settings = await this.prisma.billingSettings.findFirst()
+    let unitPrice: number | undefined
 
     switch (type) {
       case 'STORAGE':
-        unitPrice = settings?.storagePerGBCents;
-        break;
+        unitPrice = settings?.storagePerGBCents
+        break
       case 'BANDWIDTH':
-        unitPrice = settings?.bandwidthPerGBCents;
-        break;
+        unitPrice = settings?.bandwidthPerGBCents
+        break
       case 'COMPUTE':
-        unitPrice = settings?.computePerHourCents;
-        break;
+        unitPrice = settings?.computePerHourCents
+        break
       case 'REQUESTS':
-        unitPrice = settings?.requestsPer1000Cents;
-        break;
+        unitPrice = settings?.requestsPer1000Cents
+        break
     }
 
-    const amount = unitPrice ? Math.ceil(quantity * unitPrice) : undefined;
+    const amount = unitPrice ? Math.ceil(quantity * unitPrice) : undefined
 
     // Create usage record
     const usage = await this.prisma.usageRecord.create({
@@ -77,9 +79,9 @@ export class UsageService {
         amount,
         metadata,
       },
-    });
+    })
 
-    return usage.id;
+    return usage.id
   }
 
   /**
@@ -90,18 +92,18 @@ export class UsageService {
     periodStart: Date,
     periodEnd: Date
   ): Promise<{
-    storage: { quantity: number; amount: number };
-    bandwidth: { quantity: number; amount: number };
-    compute: { quantity: number; amount: number };
-    requests: { quantity: number; amount: number };
-    total: number;
+    storage: { quantity: number; amount: number }
+    bandwidth: { quantity: number; amount: number }
+    compute: { quantity: number; amount: number }
+    requests: { quantity: number; amount: number }
+    total: number
   }> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     // Aggregate usage by type
@@ -118,7 +120,7 @@ export class UsageService {
         quantity: true,
         amount: true,
       },
-    });
+    })
 
     const result = {
       storage: { quantity: 0, amount: 0 },
@@ -126,20 +128,20 @@ export class UsageService {
       compute: { quantity: 0, amount: 0 },
       requests: { quantity: 0, amount: 0 },
       total: 0,
-    };
+    }
 
     for (const item of usage) {
-      const key = item.type.toLowerCase() as keyof typeof result;
+      const key = item.type.toLowerCase() as keyof typeof result
       if (key !== 'total') {
         result[key] = {
           quantity: Number(item._sum.quantity || 0),
           amount: item._sum.amount || 0,
-        };
-        result.total += item._sum.amount || 0;
+        }
+        result.total += item._sum.amount || 0
       }
     }
 
-    return result;
+    return result
   }
 
   /**
@@ -148,10 +150,10 @@ export class UsageService {
   async getCurrentUsage(userId: string): Promise<any> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     // Get active subscription to determine billing period
@@ -161,7 +163,7 @@ export class UsageService {
         status: 'ACTIVE',
       },
       orderBy: { createdAt: 'desc' },
-    });
+    })
 
     if (!subscription) {
       return {
@@ -170,13 +172,13 @@ export class UsageService {
         compute: { quantity: 0, amount: 0 },
         requests: { quantity: 0, amount: 0 },
         total: 0,
-      };
+      }
     }
 
     return this.getUsageForPeriod(
       userId,
       subscription.currentPeriodStart,
       subscription.currentPeriodEnd
-    );
+    )
   }
 }

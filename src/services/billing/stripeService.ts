@@ -8,54 +8,59 @@
  * - Payment processing
  */
 
-import Stripe from 'stripe';
-import type { PrismaClient } from '@prisma/client';
+import Stripe from 'stripe'
+import type { PrismaClient } from '@prisma/client'
 
 // Lazy-load Stripe client only if API key is available
-let stripe: Stripe | null = null;
+let stripe: Stripe | null = null
 
 function getStripeClient(): Stripe {
   if (!stripe) {
-    const apiKey = process.env.STRIPE_SECRET_KEY;
+    const apiKey = process.env.STRIPE_SECRET_KEY
     if (!apiKey) {
       throw new Error(
         'STRIPE_SECRET_KEY environment variable is required for billing operations'
-      );
+      )
     }
     stripe = new Stripe(apiKey, {
       apiVersion: '2025-10-29.clover',
-    });
+    })
   }
-  return stripe;
+  return stripe
 }
 
 export class StripeService {
   constructor(private prisma: PrismaClient) {}
 
   private get stripe(): Stripe {
-    return getStripeClient();
+    return getStripeClient()
   }
 
   /**
    * Create or get Stripe customer for a user
    */
-  async getOrCreateCustomer(userId: string): Promise<{ customerId: string; stripeCustomerId: string }> {
+  async getOrCreateCustomer(
+    userId: string
+  ): Promise<{ customerId: string; stripeCustomerId: string }> {
     // Check if customer already exists
     let customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (customer && customer.stripeCustomerId) {
-      return { customerId: customer.id, stripeCustomerId: customer.stripeCustomerId };
+      return {
+        customerId: customer.id,
+        stripeCustomerId: customer.stripeCustomerId,
+      }
     }
 
     // Get user details
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-    });
+    })
 
     if (!user) {
-      throw new Error('User not found');
+      throw new Error('User not found')
     }
 
     // Create Stripe customer
@@ -65,14 +70,14 @@ export class StripeService {
       metadata: {
         userId,
       },
-    });
+    })
 
     // Create or update Customer record
     if (customer) {
       customer = await this.prisma.customer.update({
         where: { id: customer.id },
         data: { stripeCustomerId: stripeCustomer.id },
-      });
+      })
     } else {
       customer = await this.prisma.customer.create({
         data: {
@@ -81,10 +86,10 @@ export class StripeService {
           email: user.email,
           name: user.username,
         },
-      });
+      })
     }
 
-    return { customerId: customer.id, stripeCustomerId: stripeCustomer.id };
+    return { customerId: customer.id, stripeCustomerId: stripeCustomer.id }
   }
 
   /**
@@ -95,12 +100,16 @@ export class StripeService {
     paymentMethodId: string,
     setAsDefault = false
   ): Promise<{ id: string; last4: string; brand: string }> {
-    const { customerId, stripeCustomerId } = await this.getOrCreateCustomer(userId);
+    const { customerId, stripeCustomerId } =
+      await this.getOrCreateCustomer(userId)
 
     // Attach payment method to Stripe customer
-    const paymentMethod = await this.stripe.paymentMethods.attach(paymentMethodId, {
-      customer: stripeCustomerId,
-    });
+    const paymentMethod = await this.stripe.paymentMethods.attach(
+      paymentMethodId,
+      {
+        customer: stripeCustomerId,
+      }
+    )
 
     // Create payment method record
     const pm = await this.prisma.paymentMethod.create({
@@ -114,7 +123,7 @@ export class StripeService {
         cardExpYear: paymentMethod.card?.exp_year,
         isDefault: setAsDefault,
       },
-    });
+    })
 
     // Update default payment method if requested
     if (setAsDefault) {
@@ -122,12 +131,12 @@ export class StripeService {
         invoice_settings: {
           default_payment_method: paymentMethod.id,
         },
-      });
+      })
 
       await this.prisma.customer.update({
         where: { id: customerId },
         data: { defaultPaymentMethodId: pm.id },
-      });
+      })
 
       // Unset other payment methods as default
       await this.prisma.paymentMethod.updateMany({
@@ -136,73 +145,79 @@ export class StripeService {
           id: { not: pm.id },
         },
         data: { isDefault: false },
-      });
+      })
     }
 
     return {
       id: pm.id,
       last4: pm.cardLast4 || '',
       brand: pm.cardBrand || '',
-    };
+    }
   }
 
   /**
    * Remove payment method
    */
-  async removePaymentMethod(userId: string, paymentMethodId: string): Promise<void> {
+  async removePaymentMethod(
+    userId: string,
+    paymentMethodId: string
+  ): Promise<void> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     const pm = await this.prisma.paymentMethod.findUnique({
       where: { id: paymentMethodId },
-    });
+    })
 
     if (!pm || pm.customerId !== customer.id) {
-      throw new Error('Payment method not found');
+      throw new Error('Payment method not found')
     }
 
     // Detach from Stripe
     if (pm.stripePaymentMethodId) {
-      await this.stripe.paymentMethods.detach(pm.stripePaymentMethodId);
+      await this.stripe.paymentMethods.detach(pm.stripePaymentMethodId)
     }
 
     // Delete from database
     await this.prisma.paymentMethod.delete({
       where: { id: paymentMethodId },
-    });
+    })
 
     // If this was the default payment method, clear the default
     if (customer.defaultPaymentMethodId === paymentMethodId) {
       await this.prisma.customer.update({
         where: { id: customer.id },
         data: { defaultPaymentMethodId: null },
-      });
+      })
     }
   }
 
   /**
    * Set default payment method
    */
-  async setDefaultPaymentMethod(userId: string, paymentMethodId: string): Promise<void> {
+  async setDefaultPaymentMethod(
+    userId: string,
+    paymentMethodId: string
+  ): Promise<void> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer || !customer.stripeCustomerId) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     const pm = await this.prisma.paymentMethod.findUnique({
       where: { id: paymentMethodId },
-    });
+    })
 
     if (!pm || pm.customerId !== customer.id) {
-      throw new Error('Payment method not found');
+      throw new Error('Payment method not found')
     }
 
     // Update in Stripe
@@ -210,13 +225,13 @@ export class StripeService {
       invoice_settings: {
         default_payment_method: pm.stripePaymentMethodId || undefined,
       },
-    });
+    })
 
     // Update in database
     await this.prisma.customer.update({
       where: { id: customer.id },
       data: { defaultPaymentMethodId: paymentMethodId },
-    });
+    })
 
     // Unset other payment methods as default
     await this.prisma.paymentMethod.updateMany({
@@ -225,13 +240,13 @@ export class StripeService {
         id: { not: paymentMethodId },
       },
       data: { isDefault: false },
-    });
+    })
 
     // Set this payment method as default
     await this.prisma.paymentMethod.update({
       where: { id: paymentMethodId },
       data: { isDefault: true },
-    });
+    })
   }
 
   /**
@@ -242,20 +257,21 @@ export class StripeService {
     plan: 'FREE' | 'STARTER' | 'PRO' | 'ENTERPRISE',
     seats = 1
   ): Promise<string> {
-    const { customerId, stripeCustomerId } = await this.getOrCreateCustomer(userId);
+    const { customerId, stripeCustomerId } =
+      await this.getOrCreateCustomer(userId)
 
     // Get billing settings for pricing
-    const settings = await this.prisma.billingSettings.findFirst();
-    const basePricePerSeat = settings?.pricePerSeatCents || 0;
-    const usageMarkup = settings?.usageMarkupPercent || 0;
+    const settings = await this.prisma.billingSettings.findFirst()
+    const basePricePerSeat = settings?.pricePerSeatCents || 0
+    const usageMarkup = settings?.usageMarkupPercent || 0
 
     // Calculate period
-    const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
+    const now = new Date()
+    const periodEnd = new Date(now)
+    periodEnd.setMonth(periodEnd.getMonth() + 1)
 
     // For non-free plans, create Stripe subscription
-    let stripeSubscriptionId: string | undefined;
+    let stripeSubscriptionId: string | undefined
 
     if (plan !== 'FREE' && basePricePerSeat > 0) {
       // Create or get price in Stripe
@@ -282,9 +298,9 @@ export class StripeService {
           userId,
           plan,
         },
-      });
+      })
 
-      stripeSubscriptionId = subscription.id;
+      stripeSubscriptionId = subscription.id
     }
 
     // Create subscription record
@@ -300,44 +316,53 @@ export class StripeService {
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
       },
-    });
+    })
 
-    return sub.id;
+    return sub.id
   }
 
   /**
    * Cancel subscription
    */
-  async cancelSubscription(userId: string, subscriptionId: string, immediately = false): Promise<void> {
+  async cancelSubscription(
+    userId: string,
+    subscriptionId: string,
+    immediately = false
+  ): Promise<void> {
     const customer = await this.prisma.customer.findUnique({
       where: { userId },
-    });
+    })
 
     if (!customer) {
-      throw new Error('Customer not found');
+      throw new Error('Customer not found')
     }
 
     const subscription = await this.prisma.subscription.findUnique({
       where: { id: subscriptionId },
-    });
+    })
 
     if (!subscription || subscription.customerId !== customer.id) {
-      throw new Error('Subscription not found');
+      throw new Error('Subscription not found')
     }
 
     // Cancel in Stripe
     if (subscription.stripeSubscriptionId) {
       if (immediately) {
-        await this.stripe.subscriptions.cancel(subscription.stripeSubscriptionId);
+        await this.stripe.subscriptions.cancel(
+          subscription.stripeSubscriptionId
+        )
       } else {
-        await this.stripe.subscriptions.update(subscription.stripeSubscriptionId, {
-          cancel_at_period_end: true,
-        });
+        await this.stripe.subscriptions.update(
+          subscription.stripeSubscriptionId,
+          {
+            cancel_at_period_end: true,
+          }
+        )
       }
     }
 
     // Update subscription record
-    const now = new Date();
+    const now = new Date()
     await this.prisma.subscription.update({
       where: { id: subscriptionId },
       data: {
@@ -345,7 +370,7 @@ export class StripeService {
         cancelAt: immediately ? now : subscription.currentPeriodEnd,
         canceledAt: now,
       },
-    });
+    })
   }
 
   /**
@@ -357,16 +382,17 @@ export class StripeService {
     currency = 'usd',
     invoiceId?: string
   ): Promise<{ paymentId: string; status: string }> {
-    const { customerId, stripeCustomerId } = await this.getOrCreateCustomer(userId);
+    const { customerId, stripeCustomerId } =
+      await this.getOrCreateCustomer(userId)
 
     // Get default payment method
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { defaultPaymentMethod: true },
-    });
+    })
 
     if (!customer?.defaultPaymentMethod?.stripePaymentMethodId) {
-      throw new Error('No default payment method');
+      throw new Error('No default payment method')
     }
 
     // Create payment intent
@@ -381,7 +407,7 @@ export class StripeService {
         userId,
         invoiceId: invoiceId || '',
       },
-    });
+    })
 
     // Create payment record
     const payment = await this.prisma.payment.create({
@@ -392,28 +418,29 @@ export class StripeService {
         stripePaymentIntentId: paymentIntent.id,
         amount,
         currency,
-        status: paymentIntent.status === 'succeeded' ? 'SUCCEEDED' : 'PROCESSING',
+        status:
+          paymentIntent.status === 'succeeded' ? 'SUCCEEDED' : 'PROCESSING',
       },
-    });
+    })
 
     return {
       paymentId: payment.id,
       status: payment.status,
-    };
+    }
   }
 
   /**
    * Get customer portal URL
    */
   async createPortalSession(userId: string): Promise<string> {
-    const { stripeCustomerId } = await this.getOrCreateCustomer(userId);
+    const { stripeCustomerId } = await this.getOrCreateCustomer(userId)
 
     const session = await this.stripe.billingPortal.sessions.create({
       customer: stripeCustomerId,
       return_url: `${process.env.APP_URL}/billing`,
-    });
+    })
 
-    return session.url;
+    return session.url
   }
 
   /**
@@ -423,39 +450,47 @@ export class StripeService {
     switch (event.type) {
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
-        await this.handleSubscriptionEvent(event.data.object as Stripe.Subscription);
-        break;
+        await this.handleSubscriptionEvent(
+          event.data.object as Stripe.Subscription
+        )
+        break
 
       case 'invoice.payment_succeeded':
       case 'invoice.payment_failed':
-        await this.handleInvoicePaymentEvent(event.data.object as Stripe.Invoice);
-        break;
+        await this.handleInvoicePaymentEvent(
+          event.data.object as Stripe.Invoice
+        )
+        break
 
       case 'payment_intent.succeeded':
       case 'payment_intent.payment_failed':
-        await this.handlePaymentIntentEvent(event.data.object as Stripe.PaymentIntent);
-        break;
+        await this.handlePaymentIntentEvent(
+          event.data.object as Stripe.PaymentIntent
+        )
+        break
 
       default:
-        console.log(`Unhandled event type: ${event.type}`);
+        console.log(`Unhandled event type: ${event.type}`)
     }
   }
 
   /**
    * Handle subscription webhook events
    */
-  private async handleSubscriptionEvent(subscription: Stripe.Subscription): Promise<void> {
+  private async handleSubscriptionEvent(
+    subscription: Stripe.Subscription
+  ): Promise<void> {
     const sub = await this.prisma.subscription.findUnique({
       where: { stripeSubscriptionId: subscription.id },
-    });
+    })
 
     if (!sub) {
-      console.error('Subscription not found:', subscription.id);
-      return;
+      console.error('Subscription not found:', subscription.id)
+      return
     }
 
     // Type assertion for API version compatibility
-    const subAny = subscription as any;
+    const subAny = subscription as any
 
     await this.prisma.subscription.update({
       where: { id: sub.id },
@@ -465,43 +500,52 @@ export class StripeService {
         currentPeriodEnd: new Date(subAny.current_period_end * 1000),
         cancelAt: subAny.cancel_at ? new Date(subAny.cancel_at * 1000) : null,
       },
-    });
+    })
   }
 
   /**
    * Handle invoice payment webhook events
    */
-  private async handleInvoicePaymentEvent(invoice: Stripe.Invoice): Promise<void> {
+  private async handleInvoicePaymentEvent(
+    invoice: Stripe.Invoice
+  ): Promise<void> {
     const inv = await this.prisma.invoice.findUnique({
       where: { stripeInvoiceId: invoice.id },
-    });
+    })
 
     if (!inv) {
-      console.error('Invoice not found:', invoice.id);
-      return;
+      console.error('Invoice not found:', invoice.id)
+      return
     }
 
     await this.prisma.invoice.update({
       where: { id: inv.id },
       data: {
-        status: invoice.status === 'paid' ? 'PAID' : invoice.status === 'open' ? 'OPEN' : 'VOID',
+        status:
+          invoice.status === 'paid'
+            ? 'PAID'
+            : invoice.status === 'open'
+              ? 'OPEN'
+              : 'VOID',
         amountPaid: invoice.amount_paid,
         paidAt: invoice.status === 'paid' ? new Date() : null,
       },
-    });
+    })
   }
 
   /**
    * Handle payment intent webhook events
    */
-  private async handlePaymentIntentEvent(paymentIntent: Stripe.PaymentIntent): Promise<void> {
+  private async handlePaymentIntentEvent(
+    paymentIntent: Stripe.PaymentIntent
+  ): Promise<void> {
     const payment = await this.prisma.payment.findUnique({
       where: { stripePaymentIntentId: paymentIntent.id },
-    });
+    })
 
     if (!payment) {
-      console.error('Payment not found:', paymentIntent.id);
-      return;
+      console.error('Payment not found:', paymentIntent.id)
+      return
     }
 
     await this.prisma.payment.update({
@@ -511,26 +555,28 @@ export class StripeService {
         failureCode: paymentIntent.last_payment_error?.code || null,
         failureMessage: paymentIntent.last_payment_error?.message || null,
       },
-    });
+    })
   }
 
   /**
    * Map Stripe subscription status to our enum
    */
-  private mapStripeStatus(status: string): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'TRIALING' | 'PAUSED' {
+  private mapStripeStatus(
+    status: string
+  ): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | 'TRIALING' | 'PAUSED' {
     switch (status) {
       case 'active':
-        return 'ACTIVE';
+        return 'ACTIVE'
       case 'past_due':
-        return 'PAST_DUE';
+        return 'PAST_DUE'
       case 'canceled':
-        return 'CANCELED';
+        return 'CANCELED'
       case 'trialing':
-        return 'TRIALING';
+        return 'TRIALING'
       case 'paused':
-        return 'PAUSED';
+        return 'PAUSED'
       default:
-        return 'ACTIVE';
+        return 'ACTIVE'
     }
   }
 }

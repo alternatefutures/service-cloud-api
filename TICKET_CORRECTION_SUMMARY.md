@@ -1,11 +1,13 @@
 # Linear Ticket Correction Summary
 
 ## Issue
+
 The integration work for backend/auth services was accidentally attached to ticket ALT-92, which was originally about creating a GoDaddy-like deployment UX experience.
 
 ## Resolution
 
 ### ✅ Step 1: Updated ALT-92
+
 **ALT-92** has been updated to reflect the actual work completed:
 
 - **New Title:** "Integration of backend and auth services"
@@ -18,6 +20,7 @@ The integration work for backend/auth services was accidentally attached to tick
 **View ticket:** https://linear.app/alternate-futures/issue/ALT-92
 
 ### ✅ Step 2: Created New Ticket for Original Content
+
 **ALT-136** was created with the original ALT-92 content:
 
 - **Title:** "Mimic 'GoDaddy' experience for easy deployment"
@@ -32,6 +35,7 @@ The integration work for backend/auth services was accidentally attached to tick
 **Title:** mimic "godaddy" experience
 
 **Description:**
+
 > Make hosting feel as easy and understandable to deploy like quick launch sites,
 >
 > this came up with talking about ipfs pinning for first deploy experiment in the get started section.
@@ -43,6 +47,7 @@ The integration work for backend/auth services was accidentally attached to tick
 **Title:** Integration of backend and auth services
 
 **Summary:**
+
 - Complete integration of backend with auth service
 - 3-day migration timeline completed
 - Removed 1,162 lines of old PAT code
@@ -50,16 +55,19 @@ The integration work for backend/auth services was accidentally attached to tick
 - Both services operational and verified
 
 **Configuration Required:**
+
 - Backend: AUTH_SERVICE_URL, JWT_SECRET
 - Auth Service: REDIS_URL, JWT_SECRET (must match backend)
 
 **Pull Requests:**
+
 - Backend: PR #5
 - Auth Service: PR #2
 
 ## Verification
 
 You can verify the changes by visiting:
+
 - ALT-92 (Integration): https://linear.app/alternate-futures/issue/ALT-92
 - ALT-136 (GoDaddy UX): https://linear.app/alternate-futures/issue/ALT-136
 

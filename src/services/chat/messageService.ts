@@ -4,7 +4,7 @@
  * Handles database operations for chats, messages, and agents
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client'
 
 export class MessageService {
   constructor(private prisma: PrismaClient) {}
@@ -29,7 +29,7 @@ export class MessageService {
           },
         },
       },
-    });
+    })
   }
 
   /**
@@ -48,7 +48,7 @@ export class MessageService {
           },
         },
       },
-    });
+    })
   }
 
   /**
@@ -66,19 +66,19 @@ export class MessageService {
       },
       orderBy: { lastMessageAt: 'desc' },
       take: limit,
-    });
+    })
   }
 
   /**
    * Create a new message
    */
   async createMessage(data: {
-    chatId: string;
-    content: string;
-    role: 'USER' | 'AGENT' | 'SYSTEM';
-    userId?: string;
-    agentId?: string;
-    metadata?: any;
+    chatId: string
+    content: string
+    role: 'USER' | 'AGENT' | 'SYSTEM'
+    userId?: string
+    agentId?: string
+    metadata?: any
   }) {
     const message = await this.prisma.message.create({
       data: {
@@ -104,15 +104,15 @@ export class MessageService {
           },
         },
       },
-    });
+    })
 
     // Update chat's lastMessageAt
     await this.prisma.chat.update({
       where: { id: data.chatId },
       data: { lastMessageAt: new Date() },
-    });
+    })
 
-    return message;
+    return message
   }
 
   /**
@@ -142,24 +142,24 @@ export class MessageService {
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
-    });
+    })
   }
 
   /**
    * Get or create agent
    */
   async getOrCreateAgent(data: {
-    userId: string;
-    name: string;
-    slug: string;
-    description?: string;
-    systemPrompt?: string;
-    model?: string;
+    userId: string
+    name: string
+    slug: string
+    description?: string
+    systemPrompt?: string
+    model?: string
   }) {
     // Try to find existing agent
     let agent = await this.prisma.agent.findUnique({
       where: { slug: data.slug },
-    });
+    })
 
     if (!agent) {
       // Create new agent
@@ -173,10 +173,10 @@ export class MessageService {
           model: data.model || 'gpt-4',
           status: 'ACTIVE',
         },
-      });
+      })
     }
 
-    return agent;
+    return agent
   }
 
   /**
@@ -188,7 +188,7 @@ export class MessageService {
       include: {
         afFunction: true,
       },
-    });
+    })
   }
 
   /**
@@ -200,17 +200,20 @@ export class MessageService {
       include: {
         afFunction: true,
       },
-    });
+    })
   }
 
   /**
    * Update agent status
    */
-  async updateAgentStatus(agentId: string, status: 'ACTIVE' | 'INACTIVE' | 'TRAINING' | 'ERROR') {
+  async updateAgentStatus(
+    agentId: string,
+    status: 'ACTIVE' | 'INACTIVE' | 'TRAINING' | 'ERROR'
+  ) {
     return this.prisma.agent.update({
       where: { id: agentId },
       data: { status },
-    });
+    })
   }
 
   /**
@@ -219,7 +222,7 @@ export class MessageService {
   async deleteChat(chatId: string) {
     return this.prisma.chat.delete({
       where: { id: chatId },
-    });
+    })
   }
 
   /**
@@ -237,13 +240,13 @@ export class MessageService {
           lastMessageAt: true,
         },
       }),
-    ]);
+    ])
 
     return {
       messageCount,
       createdAt: chat?.createdAt,
       lastMessageAt: chat?.lastMessageAt,
-    };
+    }
   }
 
   /**
@@ -269,6 +272,6 @@ export class MessageService {
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
-    });
+    })
   }
 }
