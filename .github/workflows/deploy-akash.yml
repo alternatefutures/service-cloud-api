@@ -280,6 +280,8 @@ jobs:
       - name: Get lease status and service URIs
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
         run: |
           sleep 20
           echo "=== Lease Status ==="
@@ -289,7 +291,41 @@ jobs:
           echo "=== Service URIs ==="
           PROVIDER=$(akash query market lease list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq -r '.leases[0].lease.lease_id.provider')
           echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
-          akash provider lease-status --dseq ${{ env.DSEQ }} --provider $PROVIDER --node $AKASH_NODE --from deploy --keyring-backend test || true
+          echo "Provider: $PROVIDER"
+
+          # Get provider info to find their API endpoint
+          echo ""
+          echo "Querying provider host..."
+          PROVIDER_INFO=$(akash query provider get $PROVIDER --node $AKASH_NODE --output json)
+          PROVIDER_HOST=$(echo "$PROVIDER_INFO" | jq -r '.provider.host_uri')
+          echo "Provider Host: $PROVIDER_HOST"
+
+          # Query lease status from provider API using curl
+          echo ""
+          echo "Fetching service URIs from provider..."
+          CERT_PATH="$HOME/.akash/certs"
+
+          # Try to get lease status via provider API
+          LEASE_STATUS=$(curl -sk \
+            --cert "$CERT_PATH/client.crt" \
+            --key "$CERT_PATH/client.key" \
+            "https://$PROVIDER_HOST:8443/lease/${{ env.DSEQ }}/1/1/status" 2>/dev/null || echo "")
+
+          if [ -n "$LEASE_STATUS" ]; then
+            echo "$LEASE_STATUS" | jq '.'
+
+            # Extract and display service URIs
+            echo ""
+            echo "=== Service Endpoints ==="
+            echo "$LEASE_STATUS" | jq -r '.services // {} | to_entries[] | "Service: \(.key)\n  URIs: \(.value.uris // [])\n"'
+            echo "$LEASE_STATUS" | jq -r '.forwarded_ports // {} | to_entries[] | "Service: \(.key)\n  Host: \(.value[0].host // "N/A")\n  Port: \(.value[0].port // "N/A")\n  External Port: \(.value[0].externalPort // "N/A")\n"'
+          else
+            echo "Note: Could not fetch lease status from provider API"
+            echo "This is expected if certificate authentication is not set up"
+            echo ""
+            echo "Service endpoints will be available once the deployment is fully active."
+            echo "You can check the provider's status page or use 'akash query' commands to get service information."
+          fi
 
       - name: Setup Node.js for DNS sync
         uses: actions/setup-node@v4
