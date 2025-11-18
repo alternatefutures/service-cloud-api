@@ -228,7 +228,8 @@ profiles:
           size: 4Gi
         storage:
           # 50Gi for database data + replication
-          size: 50Gi
+          - name: data
+            size: 50Gi
 
     # YugabyteDB Node 2 (Master + TServer)
     yb-node-2:
@@ -238,7 +239,8 @@ profiles:
         memory:
           size: 4Gi
         storage:
-          size: 50Gi
+          - name: data
+            size: 50Gi
 
     # YugabyteDB Node 3 (Master + TServer)
     yb-node-3:
@@ -248,7 +250,8 @@ profiles:
         memory:
           size: 4Gi
         storage:
-          size: 50Gi
+          - name: data
+            size: 50Gi
 
     # API Service
     api:
@@ -268,8 +271,8 @@ profiles:
         memory:
           size: 4Gi
         storage:
-          # Large storage for IPFS blocks and pinned content
-          size: 100Gi
+          - name: data
+            size: 100Gi
 
   placement:
     dcloud:
