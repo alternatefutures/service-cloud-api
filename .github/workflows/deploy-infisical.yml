@@ -39,7 +39,7 @@ jobs:
           SOPS_AGE_KEY: ${{ secrets.AGE_SECRET_KEY }}
         run: |
           sops -d bootstrap.enc.env > bootstrap.env
-          echo " Decrypted bootstrap secrets"
+          echo "Decrypted bootstrap secrets"
 
       - name: Load bootstrap secrets
         run: |
@@ -86,7 +86,7 @@ jobs:
           sed -i "s|PLACEHOLDER_JWT_SECRET|${{ env.INFISICAL_JWT_SECRET }}|g" deploy-infisical-final.yaml
           sed -i "s|PLACEHOLDER_MONGO_PASSWORD|${{ env.MONGO_INITDB_ROOT_PASSWORD }}|g" deploy-infisical-final.yaml
 
-          echo " SDL prepared with secrets"
+          echo "SDL prepared with secrets"
 
       - name: Setup certificates
         env:
@@ -106,7 +106,7 @@ jobs:
             echo "$AKASH_CLIENT_CRT" | base64 -d > "$CERT_PATH/client.crt"
             echo "$AKASH_CLIENT_KEY" | base64 -d > "$CERT_PATH/client.key"
             chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
-            echo " Certificates restored"
+            echo "Certificates restored"
           else
             echo "Generating new certificates..."
             akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
@@ -248,7 +248,7 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Service Endpoint" >> $GITHUB_STEP_SUMMARY
-          echo "- **secrets.alternatefutures.ai** � Infisical UI" >> $GITHUB_STEP_SUMMARY
+          echo "- **secrets.alternatefutures.ai** -> Infisical UI" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
