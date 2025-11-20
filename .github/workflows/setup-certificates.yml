@@ -82,6 +82,12 @@ jobs:
           CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
           echo "Certificate count on blockchain: $CERT_COUNT"
 
+          # Check if files exist AFTER publish
+          echo "Checking certificate files AFTER publish..."
+          ls -la "$CERT_PATH"
+          echo "Searching entire .akash directory..."
+          find "$HOME/.akash" -type f 2>/dev/null || echo "No files found"
+
       - name: Export certificates as base64
         run: |
           CERT_PATH="$HOME/.akash/certs"
