@@ -36,8 +36,16 @@ jobs:
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
         run: |
+          # Create certificate directory
+          CERT_PATH="$HOME/.akash/certs"
+          mkdir -p "$CERT_PATH"
+
           echo "Generating certificate..."
           akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+
+          # Verify certificate files were created
+          echo "Checking certificate files..."
+          ls -la "$CERT_PATH"
 
           echo "Publishing certificate to blockchain..."
           akash tx cert publish client \
