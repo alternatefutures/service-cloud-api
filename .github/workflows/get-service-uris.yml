@@ -1,0 +1,166 @@
+name: Get Service URIs
+
+on:
+  workflow_dispatch:
+    inputs:
+      dseq:
+        description: 'Deployment Sequence (DSEQ)'
+        required: true
+        default: '24262356'
+
+jobs:
+  get-uris:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Install Akash CLI
+        run: |
+          cd /tmp
+          curl -sfL "https://github.com/akash-network/node/releases/download/v1.0.2/akash_1.0.2_linux_amd64.zip" -o akash.zip
+          unzip akash.zip
+          sudo mv akash /usr/local/bin/
+          chmod +x /usr/local/bin/akash
+          akash version
+
+      - name: Setup Akash wallet
+        env:
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+        run: |
+          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test
+          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test)
+          echo "AKASH_ADDRESS=$AKASH_ADDRESS" >> $GITHUB_ENV
+          echo "Wallet address: $AKASH_ADDRESS"
+
+      - name: Get lease and provider info
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          DSEQ: ${{ inputs.dseq }}
+        run: |
+          echo "=== Querying Lease Information ==="
+          LEASE_DATA=$(akash query market lease list \
+            --owner ${{ env.AKASH_ADDRESS }} \
+            --dseq $DSEQ \
+            --node $AKASH_NODE \
+            --output json)
+
+          echo "LEASE_DATA<<EOF" >> $GITHUB_ENV
+          echo "$LEASE_DATA" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          # Extract provider
+          PROVIDER=$(echo "$LEASE_DATA" | jq -r '.leases[0].lease.id.provider // empty')
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
+          echo "Provider: $PROVIDER"
+
+          # Get provider host
+          PROVIDER_INFO=$(akash query provider get $PROVIDER --node $AKASH_NODE --output json)
+          PROVIDER_HOST=$(echo "$PROVIDER_INFO" | jq -r '.provider.host_uri // empty')
+          echo "PROVIDER_HOST=$PROVIDER_HOST" >> $GITHUB_ENV
+          echo "Provider Host: $PROVIDER_HOST"
+
+      - name: Generate certificate
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          CERT_PATH="$HOME/.akash/certs"
+          mkdir -p "$CERT_PATH"
+
+          # Generate certificate
+          echo "Generating certificate..."
+          akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+
+          # Publish to blockchain (required for provider API access)
+          echo "Publishing certificate to blockchain..."
+          akash tx cert publish client \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas-prices 0.025uakt \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            -y
+
+          echo "Waiting for certificate to be committed..."
+          sleep 15
+
+      - name: Query service URIs from provider
+        env:
+          DSEQ: ${{ inputs.dseq }}
+        run: |
+          CERT_PATH="$HOME/.akash/certs"
+          PROVIDER_HOST="${{ env.PROVIDER_HOST }}"
+
+          echo "=== Querying Provider API ==="
+          echo "Provider: $PROVIDER_HOST"
+          echo "DSEQ: $DSEQ"
+          echo ""
+
+          # Check if certificates exist locally (they won't with v1.0.2, but try anyway)
+          if [ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]; then
+            echo "Using local certificates..."
+            LEASE_STATUS=$(curl -sk --max-time 10 \
+              --cert "$CERT_PATH/client.crt" \
+              --key "$CERT_PATH/client.key" \
+              "https://$PROVIDER_HOST/lease/$DSEQ/1/1/status" 2>&1)
+          else
+            echo "Warning: Local certificates not found (expected with CLI v1.0.2)"
+            echo "Attempting direct API call without client certs..."
+            LEASE_STATUS=$(curl -sk --max-time 10 \
+              "https://$PROVIDER_HOST/lease/$DSEQ/1/1/status" 2>&1)
+          fi
+
+          echo "=== Provider Response ==="
+          echo "$LEASE_STATUS"
+          echo ""
+
+          # Try to parse and extract service information
+          if echo "$LEASE_STATUS" | jq -e '.' >/dev/null 2>&1; then
+            echo "=== Service Endpoints ===" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract URIs
+            URIS=$(echo "$LEASE_STATUS" | jq -r '
+              .services // {} | to_entries[] |
+              "**\(.key)**\n\(.value.uris // [] | map("- `\(.)`") | join("\n"))\n"
+            ')
+
+            if [ -n "$URIS" ]; then
+              echo "$URIS" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "No service URIs found in response" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            # Extract forwarded ports
+            PORTS=$(echo "$LEASE_STATUS" | jq -r '
+              .forwarded_ports // {} | to_entries[] |
+              "**\(.key)**\n- Host: `\(.value[0].host // "N/A")`\n- Port: `\(.value[0].port // "N/A")`\n- External Port: `\(.value[0].externalPort // "N/A")`\n"
+            ')
+
+            if [ -n "$PORTS" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### Forwarded Ports" >> $GITHUB_STEP_SUMMARY
+              echo "$PORTS" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "⚠️ **Could not retrieve service URIs**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Provider response:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$LEASE_STATUS" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Also add lease info to summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Lease Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **DSEQ**: $DSEQ" >> $GITHUB_STEP_SUMMARY
+          echo "- **Owner**: ${{ env.AKASH_ADDRESS }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider**: ${{ env.PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Provider Host**: $PROVIDER_HOST" >> $GITHUB_STEP_SUMMARY
