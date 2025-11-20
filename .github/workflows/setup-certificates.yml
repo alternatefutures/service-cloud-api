@@ -74,27 +74,37 @@ jobs:
             exit 1
           fi
 
-          # Encode certificates as base64 for storing in secrets
-          CLIENT_CRT_BASE64=$(cat "$CERT_PATH/client.crt" | base64 -w 0)
-          CLIENT_KEY_BASE64=$(cat "$CERT_PATH/client.key" | base64 -w 0)
+          # Create a directory for certificate exports
+          EXPORT_DIR="$HOME/cert-export"
+          mkdir -p "$EXPORT_DIR"
+
+          # Encode certificates as base64 and save to files (not logs!)
+          cat "$CERT_PATH/client.crt" | base64 -w 0 > "$EXPORT_DIR/AKASH_CLIENT_CRT.txt"
+          cat "$CERT_PATH/client.key" | base64 -w 0 > "$EXPORT_DIR/AKASH_CLIENT_KEY.txt"
+
+          echo "Certificates encoded and saved to artifact"
 
           echo "## Certificate Setup Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Add these as GitHub Secrets:" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Certificates have been generated and published to blockchain" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### AKASH_CLIENT_CRT" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "$CLIENT_CRT_BASE64" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### AKASH_CLIENT_KEY" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "$CLIENT_KEY_BASE64" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "⬇️ **Download the artifact** from this workflow run" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
-          echo "1. Go to Settings → Secrets and variables → Actions" >> $GITHUB_STEP_SUMMARY
-          echo "2. Add new repository secrets:" >> $GITHUB_STEP_SUMMARY
-          echo "   - Name: \`AKASH_CLIENT_CRT\`, Value: (copy from above)" >> $GITHUB_STEP_SUMMARY
-          echo "   - Name: \`AKASH_CLIENT_KEY\`, Value: (copy from above)" >> $GITHUB_STEP_SUMMARY
-          echo "3. These certificates will now persist across deployments" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download the \`akash-certificates\` artifact from this workflow run" >> $GITHUB_STEP_SUMMARY
+          echo "2. Extract the files: \`AKASH_CLIENT_CRT.txt\` and \`AKASH_CLIENT_KEY.txt\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Go to Settings → Secrets and variables → Actions" >> $GITHUB_STEP_SUMMARY
+          echo "4. Add new repository secrets:" >> $GITHUB_STEP_SUMMARY
+          echo "   - Name: \`AKASH_CLIENT_CRT\`, Value: (contents of AKASH_CLIENT_CRT.txt)" >> $GITHUB_STEP_SUMMARY
+          echo "   - Name: \`AKASH_CLIENT_KEY\`, Value: (contents of AKASH_CLIENT_KEY.txt)" >> $GITHUB_STEP_SUMMARY
+          echo "5. **Delete the downloaded files** after adding them as secrets" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Security Note**: The artifact will auto-expire in 1 day" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload certificates as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: akash-certificates
+          path: ~/cert-export/
+          retention-days: 1  # Auto-delete after 1 day for security
+          if-no-files-found: error
