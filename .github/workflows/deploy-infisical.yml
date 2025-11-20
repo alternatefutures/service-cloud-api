@@ -1,3 +1,4 @@
+# Deploy Infisical secrets manager to Akash Network
 name: Deploy Infisical to Akash
 
 on:
@@ -247,7 +248,7 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Service Endpoint" >> $GITHUB_STEP_SUMMARY
-          echo "- **secrets.alternatefutures.ai** ’ Infisical UI" >> $GITHUB_STEP_SUMMARY
+          echo "- **secrets.alternatefutures.ai** ï¿½ Infisical UI" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
