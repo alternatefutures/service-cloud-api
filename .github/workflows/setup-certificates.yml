@@ -43,9 +43,26 @@ jobs:
           echo "Generating certificate..."
           akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
 
+          # Debug: Check entire .akash directory structure
+          echo "Contents of ~/.akash:"
+          ls -laR "$HOME/.akash" || echo "Directory not found"
+
           # Verify certificate files were created
-          echo "Checking certificate files..."
-          ls -la "$CERT_PATH"
+          echo "Checking certificate files in $CERT_PATH..."
+          if [ -d "$CERT_PATH" ]; then
+            ls -la "$CERT_PATH"
+          else
+            echo "ERROR: Certificate directory $CERT_PATH does not exist"
+            echo "Searching for certificate files..."
+            find "$HOME/.akash" -name "*.crt" -o -name "*.key" 2>/dev/null || echo "No certificate files found"
+          fi
+
+          # Check if files exist, if not try to find them
+          if [ ! -f "$CERT_PATH/client.crt" ]; then
+            echo "WARNING: client.crt not found in expected location"
+            echo "Searching entire .akash directory..."
+            find "$HOME/.akash" -type f 2>/dev/null
+          fi
 
           echo "Publishing certificate to blockchain..."
           akash tx cert publish client \
