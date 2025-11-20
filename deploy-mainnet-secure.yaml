@@ -1,0 +1,145 @@
+---
+# Akash SDL - Secure Production Configuration
+# This version uses Doppler for secrets management
+# DO NOT commit secrets to this file - use placeholders only
+
+version: "2.0"
+
+services:
+  # IPFS Node (Kubo) - Self-hosted decentralized storage
+  # This service can run on Akash safely (no sensitive data)
+  ipfs:
+    image: ipfs/kubo:latest
+    env:
+      - IPFS_PROFILE=server
+      - IPFS_PATH=/data/ipfs
+    expose:
+      # Gateway port (public access to IPFS content)
+      - port: 8080
+        as: 8080
+        to:
+          - global: true
+        accept:
+          - ipfs.alternatefutures.ai
+      # Swarm port (P2P connections to IPFS network)
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    params:
+      storage:
+        data:
+          mount: /data/ipfs
+          readOnly: false
+
+  # GraphQL API Service
+  # Uses Doppler for secrets, connects to managed Supabase database
+  api:
+    image: ghcr.io/alternatefutures/service-cloud-api:latest
+    env:
+      # App Config (non-sensitive)
+      - NODE_ENV=production
+      - PORT=4000
+
+      # Secrets Manager - ONLY secret in SDL
+      # Rotate this token every 30 days via Doppler dashboard
+      - DOPPLER_TOKEN=PLACEHOLDER_REPLACE_WITH_ACTUAL_TOKEN
+
+      # All other secrets fetched from Doppler at runtime:
+      # - DATABASE_URL (Supabase PostgreSQL)
+      # - JWT_SECRET
+      # - RESEND_API_KEY
+      # - SUPABASE_URL
+      # - SUPABASE_SERVICE_KEY
+      # - IPFS_GATEWAY_URL
+      # - ARWEAVE_WALLET (if using)
+      # - SENTRY_DSN (if using)
+
+      # IPFS connection (internal, non-sensitive)
+      - IPFS_API_URL=http://ipfs:5001
+
+    expose:
+      - port: 4000
+        as: 80
+        to:
+          - global: true
+        accept:
+          - api.alternatefutures.ai
+    depends_on:
+      - ipfs
+
+profiles:
+  compute:
+    # API Service - Reduced resources (no database)
+    api:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1Gi
+        storage:
+          size: 512Mi
+
+    # IPFS Node - Storage-focused
+    ipfs:
+      resources:
+        cpu:
+          units: 2.0
+        memory:
+          size: 4Gi
+        storage:
+          - name: data
+            size: 100Gi
+
+  placement:
+    dcloud:
+      pricing:
+        # Reduced pricing (~100 uakt/block = 43 AKT/month = $26/month)
+        # Much cheaper than full stack on Akash
+        api:
+          denom: uakt
+          amount: 30
+        ipfs:
+          denom: uakt
+          amount: 70
+
+deployment:
+  api:
+    dcloud:
+      profile: api
+      count: 1
+
+  ipfs:
+    dcloud:
+      profile: ipfs
+      count: 1
+
+# SECURITY NOTES:
+#
+# 1. NEVER commit real secrets to this file
+# 2. Replace DOPPLER_TOKEN with actual token before deploying
+# 3. Rotate Doppler token every 30 days
+# 4. Use Supabase/Neon for database (not on Akash)
+# 5. Use Doppler/Vault for all secrets
+# 6. Monitor Doppler audit logs for secret access
+# 7. Choose reputable Akash provider
+# 8. Keep backups off-Akash
+#
+# COST COMPARISON:
+#
+# Full Stack on Akash (deploy-mainnet.yaml):
+#   - 3x YugabyteDB nodes: 150 uakt/block
+#   - Auth service: 20 uakt/block
+#   - API service: 30 uakt/block
+#   - IPFS: 70 uakt/block
+#   Total: ~270 uakt/block = 116 AKT/month = $70/month
+#
+# Hybrid Architecture (this file):
+#   - API service: 30 uakt/block
+#   - IPFS: 70 uakt/block
+#   - Supabase (free tier): $0/month
+#   - Doppler (free tier): $0/month
+#   Total: ~100 uakt/block = 43 AKT/month = $26/month
+#
+# Savings: $44/month (63% cheaper) + better security!
