@@ -31,6 +31,7 @@
   "dependencies": {
     "@ardrive/turbo-sdk": "^1.33.0",
     "@graphql-tools/schema": "^10.0.29",
+    "@infisical/sdk": "^4.0.6",
     "@lighthouse-web3/sdk": "^0.4.3",
     "@pinata/sdk": "^2.1.0",
     "@prisma/client": "^6.19.0",

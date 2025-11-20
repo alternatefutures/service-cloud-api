@@ -1,4 +1,3 @@
-import 'dotenv/config'
 import { createYoga } from 'graphql-yoga'
 import type { Plugin } from 'graphql-yoga'
 import { createServer } from 'node:http'
@@ -19,6 +18,10 @@ import { startSslRenewalJob } from './jobs/sslRenewal.js'
 import depthLimit from 'graphql-depth-limit'
 import { createComplexityLimitRule } from 'graphql-validation-complexity'
 import helmet from 'helmet'
+import { initInfisical } from './config/infisical.js'
+
+// Initialize Infisical (or dotenv fallback) before anything else
+await initInfisical()
 
 const prisma = new PrismaClient()
 
