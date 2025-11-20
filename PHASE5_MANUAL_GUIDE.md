@@ -4,7 +4,7 @@
 
 ### 1.1 Navigate to Workflow
 
-Open: https://github.com/alternatefutures/alternatefutures-backend/actions/workflows/deploy-infisical.yml
+Open: https://github.com/alternatefutures/service-cloud-api/actions/workflows/deploy-infisical.yml
 
 ### 1.2 Trigger Deployment
 
@@ -96,7 +96,7 @@ cat .env
 ```
 
 Or check GitHub Secrets:
-https://github.com/alternatefutures/alternatefutures-backend/settings/secrets/actions
+https://github.com/alternatefutures/service-cloud-api/settings/secrets/actions
 
 ## Step 5: Generate Service Token
 
@@ -122,7 +122,7 @@ https://github.com/alternatefutures/alternatefutures-backend/settings/secrets/ac
 
 ### Option A: Via GitHub UI
 
-1. Go to: https://github.com/alternatefutures/alternatefutures-backend/settings/secrets/actions
+1. Go to: https://github.com/alternatefutures/service-cloud-api/settings/secrets/actions
 2. Click "New repository secret"
 3. Add:
    - Name: `INFISICAL_SERVICE_TOKEN`
@@ -139,11 +139,11 @@ cd /Users/wonderwomancode/Projects/alternatefutures/service-cloud-api
 gh auth login  # If not already authenticated
 
 gh secret set INFISICAL_SERVICE_TOKEN \
-  -R alternatefutures/alternatefutures-backend \
+  -R alternatefutures/service-cloud-api \
   --body "YOUR_TOKEN_HERE"
 
 gh secret set INFISICAL_PROJECT_ID \
-  -R alternatefutures/alternatefutures-backend \
+  -R alternatefutures/service-cloud-api \
   --body "YOUR_PROJECT_ID"
 ```
 
@@ -151,7 +151,7 @@ gh secret set INFISICAL_PROJECT_ID \
 
 ### 7.1 Trigger Deployment
 
-1. Go to: https://github.com/alternatefutures/alternatefutures-backend/actions/workflows/deploy-akash.yml
+1. Go to: https://github.com/alternatefutures/service-cloud-api/actions/workflows/deploy-akash.yml
 2. Click **"Run workflow"**
 3. Settings:
    - **Environment:** production
