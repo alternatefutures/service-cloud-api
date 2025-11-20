@@ -1,0 +1,258 @@
+name: Deploy Infisical to Akash
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - update
+          - close
+
+concurrency:
+  group: akash-infisical-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy-infisical:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install SOPS
+        run: |
+          cd /tmp
+          wget https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
+          chmod +x sops-v3.9.0.linux.amd64
+          sudo mv sops-v3.9.0.linux.amd64 /usr/local/bin/sops
+          sops --version
+
+      - name: Decrypt bootstrap secrets
+        env:
+          SOPS_AGE_KEY: ${{ secrets.AGE_SECRET_KEY }}
+        run: |
+          sops -d bootstrap.enc.env > bootstrap.env
+          echo " Decrypted bootstrap secrets"
+
+      - name: Load bootstrap secrets
+        run: |
+          set -a
+          source bootstrap.env
+          set +a
+          echo "INFISICAL_ENCRYPTION_KEY=$INFISICAL_ENCRYPTION_KEY" >> $GITHUB_ENV
+          echo "INFISICAL_JWT_SECRET=$INFISICAL_JWT_SECRET" >> $GITHUB_ENV
+          echo "MONGO_INITDB_ROOT_PASSWORD=$MONGO_INITDB_ROOT_PASSWORD" >> $GITHUB_ENV
+
+      - name: Install Akash CLI
+        run: |
+          cd /tmp
+          curl -sfL "https://github.com/akash-network/node/releases/download/v1.0.2/akash_1.0.2_linux_amd64.zip" -o akash.zip
+          unzip akash.zip
+          sudo mv akash /usr/local/bin/
+          chmod +x /usr/local/bin/akash
+          akash version
+
+      - name: Setup Akash wallet
+        env:
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+        run: |
+          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test
+          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test)
+          echo "AKASH_ADDRESS=$AKASH_ADDRESS" >> $GITHUB_ENV
+          echo "Wallet address: $AKASH_ADDRESS"
+
+      - name: Check wallet balance
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+        run: |
+          akash query bank balances ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE
+
+      - name: Substitute secrets in SDL
+        run: |
+          cp deploy-infisical.yaml deploy-infisical-final.yaml
+
+          # Substitute bootstrap secrets
+          sed -i "s|PLACEHOLDER_ENCRYPTION_KEY|${{ env.INFISICAL_ENCRYPTION_KEY }}|g" deploy-infisical-final.yaml
+          sed -i "s|PLACEHOLDER_JWT_SECRET|${{ env.INFISICAL_JWT_SECRET }}|g" deploy-infisical-final.yaml
+          sed -i "s|PLACEHOLDER_MONGO_PASSWORD|${{ env.MONGO_INITDB_ROOT_PASSWORD }}|g" deploy-infisical-final.yaml
+
+          echo " SDL prepared with secrets"
+
+      - name: Setup certificates
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_CLIENT_CRT: ${{ secrets.AKASH_CLIENT_CRT }}
+          AKASH_CLIENT_KEY: ${{ secrets.AKASH_CLIENT_KEY }}
+        run: |
+          CERT_PATH="$HOME/.akash/certs"
+          mkdir -p "$CERT_PATH"
+
+          # Check if certificates are stored in secrets
+          if [ -n "$AKASH_CLIENT_CRT" ] && [ -n "$AKASH_CLIENT_KEY" ]; then
+            echo "Restoring certificates from GitHub Secrets..."
+            echo "$AKASH_CLIENT_CRT" | base64 -d > "$CERT_PATH/client.crt"
+            echo "$AKASH_CLIENT_KEY" | base64 -d > "$CERT_PATH/client.key"
+            chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
+            echo " Certificates restored"
+          else
+            echo "Generating new certificates..."
+            akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+            akash tx cert publish client \
+              --from $AKASH_KEY_NAME \
+              --keyring-backend test \
+              --node $AKASH_NODE \
+              --chain-id $AKASH_CHAIN_ID \
+              --gas-prices 0.025uakt \
+              --gas auto \
+              --gas-adjustment 1.5 \
+              -y
+            sleep 15
+          fi
+
+      - name: Create deployment
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          TX_OUTPUT=$(akash tx deployment create deploy-infisical-final.yaml \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            --gas-prices 0.025uakt \
+            -y \
+            --output json)
+
+          echo "$TX_OUTPUT"
+          TX_HASH=$(echo "$TX_OUTPUT" | jq -r '.txhash')
+          echo "DEPLOYMENT_TX=$TX_HASH" >> $GITHUB_ENV
+          echo "Deployment transaction: $TX_HASH"
+
+          sleep 15
+
+      - name: Get deployment DSEQ
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+        run: |
+          TX_RESULT=$(akash query tx ${{ env.DEPLOYMENT_TX }} --node $AKASH_NODE --chain-id $AKASH_CHAIN_ID --output json)
+
+          DSEQ=$(echo "$TX_RESULT" | jq -r '
+            .events[]?
+            | select(.type=="akash.deployment.v1.EventDeploymentCreated")
+            | .attributes[]?
+            | select(.key=="id")
+            | .value
+            | fromjson
+            | .dseq
+          ' 2>/dev/null || echo "")
+
+          if [ -z "$DSEQ" ] || [ "$DSEQ" == "null" ]; then
+            sleep 10
+            DSEQ=$(akash query deployment list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq -r '.deployments[]?.deployment?.deployment_id?.dseq' 2>/dev/null | head -n1)
+          fi
+
+          echo "DSEQ=$DSEQ" >> $GITHUB_ENV
+          echo "Deployment DSEQ: $DSEQ"
+
+      - name: Wait for bids
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+        run: |
+          echo "Waiting for provider bids..."
+          ATTEMPTS=12
+          for i in $(seq 1 $ATTEMPTS); do
+            BID_COUNT=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json | jq '.bids | length')
+            echo "Attempt $i/$ATTEMPTS: $BID_COUNT bids received"
+
+            if [ "$BID_COUNT" -gt "0" ]; then
+              echo "Bids received!"
+              break
+            fi
+
+            sleep 10
+          done
+
+      - name: Accept best bid
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
+
+          echo "=== Bids received ==="
+          echo "$BIDS" | jq -r '.bids[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
+
+          LOWEST_BID=$(echo "$BIDS" | jq '.bids | sort_by(.bid.price.amount | tonumber) | .[0]')
+          PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.id.provider')
+          PRICE=$(echo "$LOWEST_BID" | jq -r '.bid.price.amount')
+
+          echo "Accepting bid from provider: $PROVIDER (Price: $PRICE uakt)"
+
+          akash tx market lease create \
+            --dseq ${{ env.DSEQ }} \
+            --provider $PROVIDER \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            --gas-prices 0.025uakt \
+            -y
+
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
+
+      - name: Wait for lease to be ready
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          echo "Waiting for lease to be active..."
+          sleep 30
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "## Infisical Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Wallet**: ${{ env.AKASH_ADDRESS }}" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "${{ env.DSEQ }}" ]; then
+            echo "- **DSEQ**: ${{ env.DSEQ }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Provider**: ${{ env.PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Transaction**: ${{ env.DEPLOYMENT_TX }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Service Endpoint" >> $GITHUB_STEP_SUMMARY
+          echo "- **secrets.alternatefutures.ai** ’ Infisical UI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Access Infisical at https://secrets.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          echo "3. Create initial admin user" >> $GITHUB_STEP_SUMMARY
+          echo "4. Create project and add secrets" >> $GITHUB_STEP_SUMMARY
+          echo "5. Generate service token for main app deployment" >> $GITHUB_STEP_SUMMARY
+          echo "6. Add INFISICAL_SERVICE_TOKEN and INFISICAL_PROJECT_ID to GitHub Secrets" >> $GITHUB_STEP_SUMMARY

@@ -23,7 +23,15 @@ on:
         description: 'SDL file to deploy'
         required: true
         default: 'deploy-mainnet.yaml'
-        type: string
+        type: choice
+        options:
+          - deploy-mainnet.yaml
+          - deploy-mainnet-with-infisical.yaml
+      use_infisical:
+        description: 'Use Infisical for secrets management'
+        required: false
+        default: false
+        type: boolean
 
 # Prevent multiple deployments from running simultaneously
 # Cancel in-progress runs when a new deployment is triggered
@@ -76,19 +84,34 @@ jobs:
           ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
           FILECOIN_WALLET_KEY: ${{ secrets.FILECOIN_WALLET_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_SERVICE_TOKEN }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           SDL_FILE: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}
+          USE_INFISICAL: ${{ inputs.use_infisical || 'false' }}
         run: |
           cp $SDL_FILE deploy-final.yaml
 
-          # Substitute secrets
-          sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
-          sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
-          sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
-          sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
-          sed -i "s|your_filecoin_wallet_key|${FILECOIN_WALLET_KEY:-placeholder}|g" deploy-final.yaml
-          sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+          if [ "$USE_INFISICAL" == "true" ] || [ "$SDL_FILE" == "deploy-mainnet-with-infisical.yaml" ]; then
+            echo "Using Infisical for secrets management"
+            # Substitute Infisical tokens
+            sed -i "s|PLACEHOLDER_INFISICAL_SERVICE_TOKEN|$INFISICAL_SERVICE_TOKEN|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_PROJECT_ID|$INFISICAL_PROJECT_ID|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_CLIENT_ID|$INFISICAL_CLIENT_ID|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_CLIENT_SECRET|$INFISICAL_CLIENT_SECRET|g" deploy-final.yaml
+          else
+            echo "Using direct secrets substitution"
+            # Substitute secrets directly
+            sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
+            sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
+            sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_filecoin_wallet_key|${FILECOIN_WALLET_KEY:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+          fi
 
-          echo "SDL prepared with secrets"
+          echo "✅ SDL prepared with secrets"
 
       - name: Setup certificates
         env:
