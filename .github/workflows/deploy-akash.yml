@@ -90,36 +90,56 @@ jobs:
 
           echo "SDL prepared with secrets"
 
-      - name: Generate and publish certificate
+      - name: Setup certificates
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
+          AKASH_CLIENT_CRT: ${{ secrets.AKASH_CLIENT_CRT }}
+          AKASH_CLIENT_KEY: ${{ secrets.AKASH_CLIENT_KEY }}
         run: |
-          # Always generate certificate locally (GitHub Actions runners are ephemeral)
-          echo "Generating certificate locally..."
-          akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+          CERT_PATH="$HOME/.akash/certs"
+          mkdir -p "$CERT_PATH"
 
-          # Always publish the certificate to ensure local cert matches blockchain
-          # This replaces any existing certificate
-          echo "Publishing certificate to blockchain..."
-          akash tx cert publish client \
-            --from $AKASH_KEY_NAME \
-            --keyring-backend test \
-            --node $AKASH_NODE \
-            --chain-id $AKASH_CHAIN_ID \
-            --gas-prices 0.025uakt \
-            --gas auto \
-            --gas-adjustment 1.5 \
-            -y
+          # Check if certificates are stored in secrets
+          if [ -n "$AKASH_CLIENT_CRT" ] && [ -n "$AKASH_CLIENT_KEY" ]; then
+            echo "Restoring certificates from GitHub Secrets..."
+            echo "$AKASH_CLIENT_CRT" | base64 -d > "$CERT_PATH/client.crt"
+            echo "$AKASH_CLIENT_KEY" | base64 -d > "$CERT_PATH/client.key"
+            chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
+            echo "✓ Certificates restored"
 
-          echo "Waiting for certificate to be committed..."
-          sleep 15
+            # Verify certificate exists on blockchain
+            CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
+            echo "Certificate count on blockchain: $CERT_COUNT"
+          else
+            echo "No certificates found in secrets. Generating new ones..."
+            echo "⚠️  After this deployment, run the 'Setup Akash Certificates' workflow to store certificates as secrets"
 
-          # Verify certificate exists on blockchain
-          CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
-          echo "Certificate count on blockchain: $CERT_COUNT"
+            # Generate certificate locally
+            echo "Generating certificate locally..."
+            akash tx cert generate client --from $AKASH_KEY_NAME --keyring-backend test
+
+            # Publish the certificate to blockchain
+            echo "Publishing certificate to blockchain..."
+            akash tx cert publish client \
+              --from $AKASH_KEY_NAME \
+              --keyring-backend test \
+              --node $AKASH_NODE \
+              --chain-id $AKASH_CHAIN_ID \
+              --gas-prices 0.025uakt \
+              --gas auto \
+              --gas-adjustment 1.5 \
+              -y
+
+            echo "Waiting for certificate to be committed..."
+            sleep 15
+
+            # Verify certificate exists on blockchain
+            CERT_COUNT=$(akash query cert list --owner ${{ env.AKASH_ADDRESS }} --node $AKASH_NODE --output json | jq '.certificates | length')
+            echo "Certificate count on blockchain: $CERT_COUNT"
+          fi
 
       - name: Create deployment
         env:
