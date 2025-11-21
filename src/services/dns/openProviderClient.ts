@@ -79,6 +79,34 @@ export class OpenProviderClient {
   }
 
   /**
+   * Create a DNS zone
+   */
+  async createDNSZone(
+    domain: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const parts = domain.split('.')
+      const extension = parts.pop()
+      const name = parts.join('.')
+
+      await this.request('/v1beta/dns/zones', 'POST', {
+        domain: {
+          extension,
+          name,
+        },
+        type: 'master',
+      })
+
+      return { success: true }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  /**
    * Get all DNS records for a domain
    */
   async listDNSRecords(domain: string): Promise<DNSRecord[]> {

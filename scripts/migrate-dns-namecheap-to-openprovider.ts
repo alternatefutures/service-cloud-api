@@ -106,7 +106,7 @@ async function updateNamecheapNameservers(
   url.searchParams.set('SLD', sld)
   url.searchParams.set('TLD', tld!)
   nameservers.forEach((ns, index) => {
-    url.searchParams.set(`Nameservers`, ns)
+    url.searchParams.set(`Nameserver${index + 1}`, ns)
   })
 
   console.log(`Updating Namecheap nameservers to Openprovider...`)
@@ -137,6 +137,26 @@ async function migrateToOpenprovider(
 
   const client = new OpenProviderClient(config)
 
+  // Step 1: Create DNS zone in Openprovider
+  console.log(`\nCreating DNS zone for ${domain} in Openprovider...`)
+  const zoneResult = await client.createDNSZone(domain)
+
+  if (!zoneResult.success) {
+    // Zone might already exist, which is fine
+    if (
+      zoneResult.error?.includes('already exists') ||
+      zoneResult.error?.includes('Zone already')
+    ) {
+      console.log('✓ DNS zone already exists, continuing with migration...')
+    } else {
+      console.error(`Failed to create DNS zone: ${zoneResult.error}`)
+      throw new Error(`DNS zone creation failed: ${zoneResult.error}`)
+    }
+  } else {
+    console.log('✓ DNS zone created successfully')
+  }
+
+  // Step 2: Migrate DNS records
   console.log(`\nMigrating ${records.length} DNS records to Openprovider...`)
 
   let successCount = 0
