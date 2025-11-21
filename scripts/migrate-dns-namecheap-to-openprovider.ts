@@ -67,11 +67,23 @@ async function getNamecheapRecords(domain: string): Promise<DNSRecord[]> {
 
   for (const match of hostMatches) {
     const [, , name, type, address, mxPref, ttl] = match
+    const recordName = name === '@' ? '' : name
+    const recordType = type as 'A' | 'AAAA' | 'CNAME' | 'MX' | 'TXT'
+
+    // Skip root CNAME records (DNS doesn't allow CNAME at root)
+    if (recordName === '' && recordType === 'CNAME') {
+      console.log(`Skipping root CNAME record (not allowed by DNS spec)`)
+      continue
+    }
+
+    // Enforce minimum TTL of 600 (Openprovider requirement)
+    const recordTTL = Math.max(parseInt(ttl), 600)
+
     records.push({
-      name: name === '@' ? '' : name,
-      type: type as 'A' | 'AAAA' | 'CNAME' | 'MX' | 'TXT',
+      name: recordName,
+      type: recordType,
       value: address,
-      ttl: parseInt(ttl),
+      ttl: recordTTL,
       priority: type === 'MX' ? parseInt(mxPref) : undefined,
     })
   }
@@ -105,9 +117,8 @@ async function updateNamecheapNameservers(
   url.searchParams.set('Command', 'namecheap.domains.dns.setCustom')
   url.searchParams.set('SLD', sld)
   url.searchParams.set('TLD', tld!)
-  nameservers.forEach((ns, index) => {
-    url.searchParams.set(`Nameserver${index + 1}`, ns)
-  })
+  // Namecheap API expects comma-separated nameservers in a single parameter
+  url.searchParams.set('Nameservers', nameservers.join(','))
 
   console.log(`Updating Namecheap nameservers to Openprovider...`)
   const response = await fetch(url.toString())
