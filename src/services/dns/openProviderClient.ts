@@ -51,8 +51,9 @@ export class OpenProviderClient {
 
   /**
    * Make authenticated API request
+   * Made public to allow advanced zone operations
    */
-  private async request<T>(
+  async request<T>(
     endpoint: string,
     method: string = 'GET',
     body?: unknown
