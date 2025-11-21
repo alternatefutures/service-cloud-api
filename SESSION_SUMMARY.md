@@ -1,457 +1,250 @@
-# Session Summary: Auth Service Migration Complete + SaaS Roadmap
+# Session Summary: Infisical Secrets Management Implementation
 
-**Date:** January 7, 2025
-**Duration:** Full day session
-**Status:** ✅ Day 2 Migration Complete + 1-Week SaaS Sprint Planned
+## 🎯 What We Accomplished
 
----
+### Phase 1: Prerequisites & Setup ✅
 
-## 🎉 What We Accomplished Today
+- Installed SOPS (3.11.0) and Age (1.2.1)
+- Generated age key pair for encryption
+  - Public key: `age1dsuhzap4h663cdezn6w6y6ex2xnwwww9lqdn27zhcw2yuqlc5pdqrznshw`
+  - Private key stored in `.age-key.txt` (NOT committed)
+- Created `.sops.yaml` configuration
+- Generated and encrypted bootstrap secrets:
+  - INFISICAL_ENCRYPTION_KEY
+  - INFISICAL_JWT_SECRET
+  - MONGO_INITDB_ROOT_PASSWORD
+- Added `AGE_SECRET_KEY` to GitHub Secrets
 
-### 1. Completed Auth Service Migration (ALT-92)
+### Phase 2: Create Akash SDL Files ✅
 
-**Day 2 of 3-day migration - COMPLETE!**
+Created two SDL files:
 
-#### Backend Repository (`alternatefutures-backend`)
+- **`deploy-infisical.yaml`** - Infisical + MongoDB deployment
+  - Requires audited providers only (`signedBy`)
+  - Exposes at secrets.alternatefutures.ai
+  - 2 CPU cores, 4GB RAM for each service
+- **`deploy-mainnet-with-infisical.yaml`** - Main application stack
+  - Uses Infisical tokens instead of direct secrets
+  - Application fetches all secrets at runtime
+  - Zero secrets on blockchain (only rotatable tokens)
 
-**Branch:** `feature/alt-92-migrate-auth-to-service`
+### Phase 3: Integrate Infisical SDK ✅
 
-**Commits:**
+- Installed `@infisical/sdk` package
+- Created `src/config/infisical.ts`:
+  - Auto-initializes from INFISICAL_TOKEN
+  - Falls back to dotenv for local development
+  - Caches secrets in memory
+  - Hourly auto-refresh in production
+- Updated `src/index.ts`:
+  - Added top-level await for Infisical init
+  - Runs before any other initialization
 
-1. **`2d8a04a`** - Complete auth service migration: Remove all local PAT code
-   - Removed `src/services/auth/` (1,162 lines)
-   - Removed `src/jobs/cleanupExpiredTokens.ts`
-   - Removed `PersonalAccessToken` from Prisma schema
-   - Updated GraphQL resolvers to proxy to auth service
-   - Updated README documentation
+### Phase 4: GitHub Actions Workflows ✅
 
-2. **`a32b93a`** - Implement JWT-based service-to-service authentication
-   - Added JWT token generation (5-min expiry)
-   - Backend generates tokens to authenticate with auth service
-   - Updated `.env.example` with configuration notes
+Created **`.github/workflows/deploy-infisical.yml`**:
 
-3. **`88dd4f2`** - Update migration timeline: Day 2 complete
-   - Marked all Day 2 tasks as complete in AUTH_SERVICE_MIGRATION.md
+- Manual trigger with action selection (deploy/update/close)
+- Uses SOPS to decrypt bootstrap secrets
+- Deploys to audited Akash providers only
+- Handles certificate management automatically
 
-4. **`9864388`** - Add Linear tickets for Auth Service SaaS 1-week sprint
+Updated **`.github/workflows/deploy-akash.yml`**:
 
-#### Auth Service Repository (`alternatefutures-auth`)
+- Added support for `deploy-mainnet-with-infisical.yaml`
+- Conditional secrets substitution (direct vs Infisical)
+- New `use_infisical` flag
 
-**Branch:** `feature/alt-92-personal-access-tokens`
+### Phase 5.1: Deploy Infisical ✅
 
-**Commits:**
+- Successfully deployed Infisical to Akash Network
+- Fixed YAML syntax errors (corrupted emoji characters)
+- Infisical server is now running
 
-1. **`17eb8eb`** - Document JWT_SECRET sync requirement and add Redis config
-   - Added REDIS_URL to `.env.example`
-   - Documented JWT_SECRET matching requirement
+## 📝 Files Created/Modified
 
-### 2. Service-to-Service Authentication
-
-**How it works:**
-
-```typescript
-// Backend generates JWT token
-const token = jwt.sign(
-  {
-    userId: user.id,
-    service: 'alternatefutures-backend',
-    type: 'service-to-service',
-  },
-  process.env.JWT_SECRET,
-  { expiresIn: '5m' }
-)
-
-// Auth service validates using shared JWT_SECRET
-const response = await fetch(`${AUTH_SERVICE_URL}/tokens`, {
-  headers: {
-    Authorization: `Bearer ${token}`,
-  },
-})
-```
-
-**Security Features:**
-
-- Short-lived tokens (5 minutes)
-- Both services share same `JWT_SECRET`
-- Tokens include service metadata for auditing
-
-### 3. Discovered Strategic Opportunity
-
-**Insight:** Auth service is 50% of what Privy offers!
-
-**What You Already Have:**
-
-- ✅ Email authentication (magic links)
-- ✅ SMS authentication
-- ✅ Web3 wallet connection (MetaMask, WalletConnect)
-- ✅ OAuth (Google, Twitter, Discord, GitHub)
-- ✅ Session management (JWT + refresh tokens)
-- ✅ Personal Access Tokens
-- ✅ Rate limiting
-
-**What's Missing for SaaS:**
-
-- ❌ Multi-tenancy (customer isolation)
-- ❌ Usage tracking & billing
-- ❌ Customer dashboard
-- ❌ Developer SDKs
-- ❌ Embedded wallets (future)
-
-**Decision:** Build auth-as-a-service with compute-based pricing!
-
-### 4. Pivoted from Traditional SaaS to Compute-Based Model
-
-**Original Plan:**
-
-- Free/Starter/Pro/Enterprise tiers
-- MAU-based pricing ($29-$99/month)
-- Complex tier management
-
-**New Plan:**
-
-- Pay-per-use compute pricing (like Lambda)
-- 50% markup on compute costs
-- No tiers, no MAU limits
-- Simpler billing, better alignment with platform
-
-**Pricing Example:**
+### Created Files
 
 ```
-1M auth requests = ~$10 compute cost
-With 50% markup = $15 customer cost
-Customer saves: $84/month vs traditional auth ($99/mo)
-Your profit: $5 per million requests
+.age-key.txt                               # Age private key (NOT committed)
+.sops.yaml                                 # SOPS configuration
+bootstrap.enc.env                          # Encrypted bootstrap secrets
+deploy-infisical.yaml                      # Infisical deployment SDL
+deploy-mainnet-with-infisical.yaml        # Main app SDL with Infisical
+src/config/infisical.ts                    # Infisical integration
+.github/workflows/deploy-infisical.yml    # Infisical deployment workflow
+INFISICAL_ON_AKASH_GUIDE.md               # Implementation guide
+PHASE5_MANUAL_GUIDE.md                    # Step-by-step deployment guide
+scripts/phase5-deploy-infisical.sh        # Interactive deployment script
 ```
 
-### 5. Researched Audited Security Libraries
-
-**From Privy Open Source:**
-
-- ✅ `@privy-io/shamir-secret-sharing` (216 stars, audited)
-  - For embedded wallets (future phase)
-  - Zero dependencies
-  - TypeScript implementation
-
-**Already Using (Audited):**
-
-- ✅ `bcrypt` - Password hashing (industry standard)
-- ✅ `jsonwebtoken` - JWT tokens (Auth0 maintained)
-- ✅ `ioredis` - Redis client (industry standard)
-- ✅ `ethers` - Web3 library (most audited)
-- ✅ `@solana/web3.js` - Official Solana SDK
-
-**To Add:**
-
-- `nanoid` - Secure ID generation (better than uuid)
-- `@walletconnect/sign-client` - WalletConnect v2
-
-### 6. Created 1-Week Sprint Plan
-
-**Project:** Auth Service SaaS
-**Goal:** Launch multi-tenant MVP in 7 days
-**Total Tickets:** 13 (ALT-100 to ALT-141)
-
-**Sprint Breakdown:**
-
-- **Day 1-2:** Multi-tenant foundation (4 tickets)
-- **Day 3:** Usage tracking (2 tickets)
-- **Day 4-5:** Customer dashboard (3 tickets)
-- **Day 6:** React SDK + docs (2 tickets)
-- **Day 7:** Landing page + launch (2 tickets)
-
-**Deliverables:**
-
-- Multi-tenant auth service with complete data isolation
-- Usage tracking with compute-based billing
-- Customer dashboard (Next.js + shadcn/ui)
-- React SDK published to npm
-- Landing page at auth.alternatefutures.ai
-- Soft launch (Show HN, Twitter)
-
----
-
-## 📦 Deliverables Created
-
-1. **LINEAR_IMPORT.csv** - 13 tickets ready to import into Linear
-2. **AUTH_SERVICE_MIGRATION.md** - Updated with Day 2 completion
-3. **Service-to-service auth** - Fully implemented with JWT
-4. **Updated .env.example** files in both repos
-5. **This summary document**
-
----
-
-## 🏗️ Architecture Changes
-
-### Before Today:
+### Modified Files
 
 ```
-Backend (local PAT auth) → Database
+.gitignore                                 # Added .age-key.txt, bootstrap.env
+src/index.ts                               # Added Infisical initialization
+package.json                               # Added @infisical/sdk
+.github/workflows/deploy-akash.yml        # Added Infisical support
 ```
 
-### After Today:
+## 🔐 Security Architecture Achieved
 
-```
-Backend → Auth Service (via JWT tokens) → Database
-         ↑
-         └─ Shared JWT_SECRET for auth
-```
+### Before Infisical
 
-### Future (1 Week):
+- ❌ Secrets stored in GitHub Secrets
+- ❌ Secrets hardcoded in SDL files
+- ❌ Secrets visible on blockchain
+- ❌ Changing secrets requires redeployment
+- ❌ No audit trail
 
-```
-Customer App → Auth Service (via app_id + app_secret)
-               ↓
-           Multi-tenant Database
-               ↓
-           Usage Tracking
-               ↓
-           Billing System
-```
+### After Infisical
 
----
+- ✅ Secrets stored in Infisical (self-hosted)
+- ✅ Only service tokens in SDL (rotatable)
+- ✅ Zero secrets on blockchain
+- ✅ Change secrets without redeployment
+- ✅ Full audit trail
+- ✅ Audited providers only
+- ✅ Open source solution (MIT license)
 
-## 📊 Migration Status
+## 🚧 What's Left to Complete
 
-### ✅ Day 1 (Complete)
+### Immediate Next Steps
 
-- Copy PAT functionality to auth service
-- Add API endpoints and tests
+1. **Manual DNS Configuration**
+   - Point `secrets.alternatefutures.ai` to Infisical deployment endpoint
+   - Get endpoint from deployment logs or Akash console
 
-### ✅ Day 2 (Complete)
+2. **Configure Infisical** (Phase 5.2)
+   - Access Infisical at deployment URL
+   - Create admin account
+   - Create project: "AlternateFutures Production"
+   - Add all secrets to the project
 
-- Update backend authentication middleware
-- Update GraphQL resolvers to proxy
-- Implement JWT service-to-service auth
-- Remove all old PAT code
+3. **Generate Service Token** (Phase 5.3)
+   - Create token in Infisical
+   - Add `INFISICAL_SERVICE_TOKEN` to GitHub Secrets
+   - Add `INFISICAL_PROJECT_ID` to GitHub Secrets
 
-### 🔄 Day 3 (Next)
+4. **Deploy Main Application** (Phase 5.4)
+   - Run deploy-akash.yml workflow
+   - Select `deploy-mainnet-with-infisical.yaml`
+   - Enable "Use Infisical" option
+   - Verify app fetches secrets from Infisical
 
-- Deploy both services
-- Configure production environment variables
-- End-to-end testing
-- Monitor and verify
+### Future Enhancements
 
----
+1. **DNS Automation** (New Thread)
+   - Implement Openprovider DNS service
+   - Add DNS automation to all workflows
+   - Migrate from Namecheap to Openprovider
+   - Support environment subdomains (staging._, dev._, etc.)
 
-## 🎯 Next Steps
+2. **Secret Rotation Schedule**
+   - JWT_SECRET: Monthly
+   - Service tokens: Quarterly
+   - API keys: As required
 
-### Immediate (This Week):
+3. **Additional Environments**
+   - Create staging environment in Infisical
+   - Create development environment
+   - Generate separate tokens per environment
 
-1. **Import tickets to Linear**
-   - Go to Linear → Settings → Import → CSV
-   - Upload `LINEAR_IMPORT.csv`
-   - Create project: "Auth Service SaaS"
-   - Assign to yourself
+## 📚 Documentation Reference
 
-2. **Finish Day 3 of migration**
-   - Deploy auth service
-   - Deploy backend with AUTH_SERVICE_URL
-   - Test end-to-end PAT creation/validation
-   - Verify your own product works!
+### Main Guides
 
-3. **Start Week 1 Sprint**
-   - Begin ALT-100 (Add App model)
-   - Goal: Launch MVP in 7 days
+- **`INFISICAL_ON_AKASH_GUIDE.md`** - Complete implementation guide
+- **`PHASE5_MANUAL_GUIDE.md`** - Step-by-step deployment instructions
+- **`AKASH_SECURITY.md`** - Security architecture documentation
 
-### Week 1 Goals:
+### Quick References
 
-- [ ] 3+ test apps with complete tenant isolation
-- [ ] Usage tracking functional
-- [ ] Dashboard deployed and working
-- [ ] React SDK published to npm
-- [ ] 5-10 signups from soft launch
+- Bootstrap secrets: `bootstrap.enc.env` (encrypted)
+- Age public key: See `.sops.yaml`
+- Workflow: https://github.com/alternatefutures/service-cloud-api/actions/workflows/deploy-infisical.yml
 
-### Week 2 Goals:
+## 🔑 Important Secrets Locations
 
-- [ ] 50 signups
-- [ ] 10 active apps
-- [ ] $100 in compute revenue
-- [ ] Product Hunt launch
+### GitHub Secrets (Already Configured)
 
----
+- `AGE_SECRET_KEY` - For decrypting bootstrap secrets
+- `AKASH_MNEMONIC` - Wallet for deployments
+- `AKASH_CLIENT_CRT` - Certificate (optional)
+- `AKASH_CLIENT_KEY` - Certificate key (optional)
 
-## 💰 Business Model
+### GitHub Secrets (To Be Added)
 
-**Value Proposition:**
-"Authentication for Web3, priced like serverless"
+- `INFISICAL_SERVICE_TOKEN` - After Infisical setup
+- `INFISICAL_PROJECT_ID` - After Infisical setup
 
-**Pricing:**
+### Local Files (NOT in Git)
 
-- Pay only for what you use
-- No monthly fees, no MAU limits
-- Transparent compute-based pricing
-- 1M requests = ~$15 (vs $99/mo elsewhere)
+- `.age-key.txt` - Age private key (backup this!)
 
-**Target Market:**
+### Infisical (To Be Configured)
 
-- Web3 startups building dApps
-- Developers who want wallet + social auth
-- Teams tired of Auth0/Clerk pricing
-- Projects that need email + Web3 in one SDK
+All application secrets will be stored here:
 
-**Competitive Advantages:**
-
-1. Compute-based pricing (vs MAU limits)
-2. Web3-native (wallet support built-in)
-3. All features available to everyone
-4. Open source SDKs
-5. Uses audited security libraries
-
----
-
-## 🔐 Security Posture
-
-**Audited Libraries Used:**
-
-- bcrypt (password hashing)
-- jsonwebtoken (JWT tokens)
-- ethers (Web3)
-- @solana/web3.js (Solana)
-- ioredis (Redis)
-
-**Future Embedded Wallets:**
-
-- @privy-io/shamir-secret-sharing (audited, 216 stars)
-- @web3auth/web3auth (alternative, also audited)
-
-**Security Features:**
-
-- Multi-tenant data isolation
-- Rate limiting per app
-- Short-lived service tokens
-- Bcrypt secret hashing
-- Constant-time comparisons
-- Audit logging
-
----
-
-## 📈 Success Metrics
-
-**Week 1 (End of Sprint):**
-
-- Multi-tenant architecture working
-- Usage tracking implemented
-- Dashboard functional
-- SDK published
-- 5-10 signups
-
-**Month 1:**
-
-- 100 signups
-- 20 active apps
-- 5 paying customers
-- $100 MRR
-
-**Month 3:**
-
-- 500 signups
-- 100 active apps
-- 20 paying customers
-- $1,000 MRR
-
-**Month 6:**
-
-- 2,000 signups
-- 300 active apps
-- 50 paying customers
-- $5,000 MRR
-
----
-
-## 🛠️ Tech Stack
-
-**Auth Service:**
-
-- Hono (web framework)
-- SQLite (database)
-- Redis (rate limiting, caching)
-- bcrypt, jsonwebtoken, ethers, @solana/web3.js
-
-**Backend:**
-
-- GraphQL Yoga
-- Prisma + PostgreSQL
-- Redis
-
-**Dashboard (Week 1):**
-
-- Next.js 15 (App Router)
-- Tailwind CSS + shadcn/ui
-- React Query (TanStack Query)
-- Recharts (usage charts)
-
-**SDK (Week 1):**
-
-- React SDK
-- TypeScript
-- ethers + @solana/web3.js
-
-**Future:**
-
-- Node.js SDK
-- Python SDK (maybe)
-- Mobile SDKs (iOS, Android)
-
----
+- DATABASE_URL
+- JWT_SECRET
+- RESEND_API_KEY
+- ARWEAVE_WALLET
+- FILECOIN_WALLET_KEY
+- SENTRY_DSN
+- STRIPE_SECRET_KEY
+- STRIPE_WEBHOOK_SECRET
 
 ## 🎓 Key Learnings
 
-1. **You're closer than you think** - 50% of Privy's features already built!
-2. **Compute-based pricing is simpler** - No tier management, scales naturally
-3. **Use audited libraries** - Security is critical for auth
-4. **Ship fast, iterate** - 1 week to MVP vs 10 weeks of perfect planning
-5. **Dogfood your own product** - Use auth service to secure the dashboard
+### Why Infisical on Akash?
+
+1. **No Corporate Dependencies** - Self-hosted, open-source
+2. **Zero Secrets on Blockchain** - Only rotatable tokens
+3. **Audited Providers Only** - Enhanced security
+4. **Secret Rotation Without Redeployment** - Change anytime
+5. **Audit Trail** - Track all secret access
+6. **Cost Effective** - ~$50 AKT/month vs $99/month for Doppler
+
+### Why SOPS + Age?
+
+1. **Bootstrap Problem** - Need secrets to deploy Infisical
+2. **Git-Friendly** - Encrypted files can be committed
+3. **Simple** - Age is easier than GPG
+4. **Secure** - Industry standard encryption
+
+## 📞 Support & Resources
+
+### If You Need Help
+
+- Review: `PHASE5_MANUAL_GUIDE.md`
+- Check: `INFISICAL_ON_AKASH_GUIDE.md`
+- Troubleshooting: `AKASH_SECURITY.md`
+
+### For New Features (DNS Automation)
+
+Start a new Claude Code session and share:
+
+- DNS requirements and subdomain structure
+- Namecheap/Openprovider API credentials
+- Which services need DNS automation
+- Environment strategy (staging, dev, prod)
+
+## 🎉 Success Metrics
+
+Once fully configured, you'll have:
+
+- ✅ Self-hosted secrets management
+- ✅ No secrets on public blockchain
+- ✅ Secrets rotatable without redeployment
+- ✅ Full audit trail
+- ✅ Open-source solution
+- ✅ Audited infrastructure only
+- ✅ Cost-effective ($50/month vs $99+)
 
 ---
 
-## 🚀 Ready to Launch
-
-**What's working:**
-
-- Auth service with full feature set
-- Backend integration with service-to-service auth
-- Clean migration (1,162 lines removed)
-- Solid architecture for multi-tenancy
-
-**What's next:**
-
-- Import Linear tickets
-- Start building multi-tenant features
-- Launch in 7 days!
-
----
-
-**Total Commits Today:** 7 commits across 2 repos
-**Lines Changed:** -1,162 (removed old code) + ~200 (new auth code)
-**Files Changed:** 15 files
-**Tickets Created:** 13 tickets for 1-week sprint
-
-**Status:** ✅ Ready to build and launch!
-
----
-
-## 📞 How to Import Linear Tickets
-
-1. Go to your Linear workspace
-2. Click Settings (bottom left)
-3. Go to Import/Export → Import
-4. Select "CSV" as import format
-5. Upload `LINEAR_IMPORT.csv` from this repo
-6. Map columns:
-   - Title → Title
-   - Description → Description
-   - Priority → Priority
-   - Estimate → Estimate
-   - Labels → Labels
-   - Status → Status
-7. Create new project: "Auth Service SaaS"
-8. Import!
-
-All 13 tickets will be created with dependencies, estimates, and detailed acceptance criteria.
-
----
-
-**Created by:** Claude Code
-**Date:** January 7, 2025
-**Session Duration:** ~8 hours
-**Next Session:** Day 3 deployment + Week 1 sprint kickoff
+**Session Date**: November 20, 2025
+**Total Commits**: 7
+**Files Created**: 10+
+**Status**: Phase 5.1 Complete, Ready for Manual Configuration
