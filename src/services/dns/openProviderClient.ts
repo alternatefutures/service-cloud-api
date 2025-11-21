@@ -119,19 +119,29 @@ export class OpenProviderClient {
 
   /**
    * Create a new DNS record
+   * Note: Openprovider uses PUT to modify zones, not POST to create individual records
    */
   async createDNSRecord(
     domain: string,
     record: Omit<DNSRecord, 'id'>
   ): Promise<DNSUpdateResult> {
     try {
-      const data = await this.request<{
-        data: DNSRecord
-      }>(`/v1beta/dns/zones/${domain}/records`, 'POST', record)
+      // First, get the zone to get its ID
+      const zone = await this.request<{
+        data: { id: number; name: { extension: string; name: string } }
+      }>(`/v1beta/dns/zones/${domain}`)
+
+      // Use PUT to modify the zone and add the record
+      await this.request(`/v1beta/dns/zones/${domain}`, 'PUT', {
+        id: zone.data.id,
+        name: zone.data.name,
+        records: {
+          add: [record],
+        },
+      })
 
       return {
         success: true,
-        recordId: data.data.id,
       }
     } catch (error) {
       return {
