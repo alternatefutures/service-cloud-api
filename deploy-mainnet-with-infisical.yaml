@@ -180,10 +180,11 @@ services:
 
 profiles:
   compute:
+    # Beta configuration: 1 CPU per node (TODO: increase to 2 CPUs for production)
     yb-node-1:
       resources:
         cpu:
-          units: 2.0
+          units: 1.0
         memory:
           size: 4Gi
         storage:
@@ -193,7 +194,7 @@ profiles:
     yb-node-2:
       resources:
         cpu:
-          units: 2.0
+          units: 1.0
         memory:
           size: 4Gi
         storage:
@@ -203,7 +204,7 @@ profiles:
     yb-node-3:
       resources:
         cpu:
-          units: 2.0
+          units: 1.0
         memory:
           size: 4Gi
         storage:
