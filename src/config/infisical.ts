@@ -8,16 +8,16 @@ export async function initInfisical() {
   if (process.env.INFISICAL_TOKEN) {
     console.log('🔐 Initializing Infisical client...')
 
+    // Initialize client with service token authentication
     client = new InfisicalClient({
       siteUrl:
         process.env.INFISICAL_SITE_URL || 'https://secrets.alternatefutures.ai',
-      auth: {
-        universalAuth: {
-          clientId: process.env.INFISICAL_CLIENT_ID!,
-          clientSecret: process.env.INFISICAL_CLIENT_SECRET!,
-        },
-      },
       logLevel: LogLevel.Error,
+    })
+
+    // Authenticate with service token
+    await client.auth().serviceToken({
+      serviceToken: process.env.INFISICAL_TOKEN,
     })
 
     // Fetch all secrets
