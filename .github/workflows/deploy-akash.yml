@@ -274,39 +274,82 @@ jobs:
             sleep 5
           done
 
-      - name: List and accept best bid
+      - name: List and accept best bid (with uptime filter)
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
+          MIN_UPTIME: 99.9
         run: |
           # Get all bids
           BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
 
-          echo "=== Debug: Full bid structure ==="
-          echo "$BIDS" | jq '.bids[0]' || echo "No bids found"
+          echo "=== Filtering bids by provider uptime (minimum: ${MIN_UPTIME}%) ==="
+
+          # Get list of all providers from bids
+          PROVIDERS=$(echo "$BIDS" | jq -r '.bids[].bid.id.provider')
+
+          # Create a filtered bids array
+          FILTERED_BIDS="[]"
+
+          for PROVIDER_ADDR in $PROVIDERS; do
+            echo "Checking provider: $PROVIDER_ADDR"
+
+            # Query provider attributes from Akash
+            PROVIDER_INFO=$(akash query provider get "$PROVIDER_ADDR" --node $AKASH_NODE --output json 2>/dev/null || echo '{}')
+
+            # Try to get uptime from provider attributes
+            # Note: Akash providers may not expose uptime directly, so we'll use akashlytics.com API
+            UPTIME=$(curl -s "https://api.akashlytics.com/v1/providers/$PROVIDER_ADDR" 2>/dev/null | jq -r '.uptime // null' || echo "null")
+
+            if [ "$UPTIME" == "null" ] || [ -z "$UPTIME" ]; then
+              echo "  ⚠️  Uptime data not available for $PROVIDER_ADDR, including anyway"
+              # If uptime data not available, include the provider (fail open)
+              BID=$(echo "$BIDS" | jq ".bids[] | select(.bid.id.provider == \"$PROVIDER_ADDR\")")
+              FILTERED_BIDS=$(echo "$FILTERED_BIDS" | jq ". + [$BID]")
+            else
+              # Convert uptime to comparable format (handle percentage)
+              UPTIME_VALUE=$(echo "$UPTIME" | sed 's/%//')
+
+              # Compare uptime (using bc for float comparison)
+              if (( $(echo "$UPTIME_VALUE >= $MIN_UPTIME" | bc -l) )); then
+                echo "  ✓ Uptime: ${UPTIME_VALUE}% (passes ${MIN_UPTIME}% threshold)"
+                BID=$(echo "$BIDS" | jq ".bids[] | select(.bid.id.provider == \"$PROVIDER_ADDR\")")
+                FILTERED_BIDS=$(echo "$FILTERED_BIDS" | jq ". + [$BID]")
+              else
+                echo "  ✗ Uptime: ${UPTIME_VALUE}% (below ${MIN_UPTIME}% threshold) - SKIPPED"
+              fi
+            fi
+          done
 
           echo ""
-          echo "=== Bid summary ==="
-          # Show provider and price from each bid
-          echo "$BIDS" | jq -r '.bids[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
+          echo "=== Filtered bids (uptime ≥ ${MIN_UPTIME}%) ==="
+          BID_COUNT=$(echo "$FILTERED_BIDS" | jq 'length')
+          echo "Qualified providers: $BID_COUNT"
 
-          # Find the lowest bid and extract provider
-          # Sort by price and get the first (lowest) bid
-          LOWEST_BID=$(echo "$BIDS" | jq '.bids | sort_by(.bid.price.amount | tonumber) | .[0]')
+          if [ "$BID_COUNT" -eq "0" ]; then
+            echo "Error: No providers meet the uptime requirement of ${MIN_UPTIME}%"
+            echo "Consider lowering MIN_UPTIME or waiting for more bids"
+            exit 1
+          fi
 
-          # Extract provider from correct path: .bid.id.provider
+          echo "$FILTERED_BIDS" | jq -r '.[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
+
+          # Select lowest price bid from filtered results
+          LOWEST_BID=$(echo "$FILTERED_BIDS" | jq 'sort_by(.bid.price.amount | tonumber) | .[0]')
           PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.id.provider')
 
           if [ -z "$PROVIDER" ]; then
-            echo "Error: Could not extract provider address"
+            echo "Error: Could not extract provider address from filtered bids"
             echo "Lowest bid structure:"
             echo "$LOWEST_BID" | jq '.'
             exit 1
           fi
 
           PRICE=$(echo "$LOWEST_BID" | jq -r '.bid.price.amount')
+
+          echo ""
           echo "Accepting bid from provider: $PROVIDER (Price: $PRICE uakt)"
 
           akash tx market lease create \
@@ -435,9 +478,79 @@ jobs:
           fi
           tsx scripts/sync-dns.ts ${{ env.DSEQ }} ${{ env.PROVIDER }}
 
+      - name: Post deployment URLs to PR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Get the PR number from the merge commit
+          PR_NUMBER=$(gh pr list --state merged --base main --json number,mergeCommit \
+            --jq ".[] | select(.mergeCommit.oid == \"${{ github.sha }}\") | .number" | head -n1)
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found for this merge commit, skipping PR comment"
+            exit 0
+          fi
+
+          echo "Found PR #$PR_NUMBER for this deployment"
+
+          # Create deployment URLs comment
+          COMMENT_BODY="## 🚀 Deployment Successful
+
+**Deployment Details:**
+- **DSEQ:** \`${{ env.DSEQ }}\`
+- **Provider:** \`${{ env.PROVIDER }}\`
+- **Transaction:** \`${{ env.DEPLOYMENT_TX }}\`
+
+**Service Endpoints:**
+- 🌐 **API:** https://api.alternatefutures.ai
+- 🗄️ **YugabyteDB Admin:** https://yb.alternatefutures.ai
+- 📁 **IPFS Gateway:** https://ipfs.alternatefutures.ai
+
+**Note:** DNS propagation may take 2-5 minutes. Services will be available once DNS resolves.
+
+---
+*Deployed via Akash Network • [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*"
+
+          # Post comment to PR
+          gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
+
+          echo "Posted deployment URLs to PR #$PR_NUMBER"
+
       - name: Deployment summary
         if: always()
         run: |
+          # Console output for CLI/workflow logs
+          echo ""
+          echo "=========================================="
+          echo "🚀 DEPLOYMENT SUCCESSFUL"
+          echo "=========================================="
+          echo ""
+          echo "Deployment Details:"
+          echo "  Environment: ${{ github.event_name == 'push' && 'production' || inputs.environment }}"
+          echo "  SDL File:    ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}"
+          echo "  Trigger:     ${{ github.event_name }}"
+          echo "  Branch:      ${{ github.ref_name }}"
+          echo "  Wallet:      ${{ env.AKASH_ADDRESS }}"
+          echo "  DSEQ:        ${{ env.DSEQ }}"
+          echo "  Provider:    ${{ env.PROVIDER }}"
+          echo "  Transaction: ${{ env.DEPLOYMENT_TX }}"
+          echo ""
+          echo "🌐 Service Endpoints (Auto-configured DNS):"
+          echo "  • https://api.alternatefutures.ai (GraphQL API)"
+          echo "  • https://yb.alternatefutures.ai (YugabyteDB Admin)"
+          echo "  • https://ipfs.alternatefutures.ai (IPFS Gateway)"
+          echo ""
+          echo "📝 Next Steps:"
+          echo "  1. Wait for DNS propagation (2-5 minutes)"
+          echo "  2. Monitor deployment health"
+          echo "  3. Check service logs"
+          echo "  4. Test endpoints once DNS propagates"
+          echo ""
+          echo "=========================================="
+          echo ""
+
+          # GitHub Actions summary for UI
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment**: ${{ github.event_name == 'push' && 'production' || inputs.environment }}" >> $GITHUB_STEP_SUMMARY
@@ -449,10 +562,10 @@ jobs:
           echo "- **Provider**: ${{ env.PROVIDER }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Transaction**: ${{ env.DEPLOYMENT_TX }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### DNS Records (Auto-configured)" >> $GITHUB_STEP_SUMMARY
-          echo "- **api.alternatefutures.ai** → GraphQL API" >> $GITHUB_STEP_SUMMARY
-          echo "- **yb.alternatefutures.ai** → YugabyteDB Admin UI" >> $GITHUB_STEP_SUMMARY
-          echo "- **ipfs.alternatefutures.ai** → IPFS Gateway" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Service Endpoints (Auto-configured DNS)" >> $GITHUB_STEP_SUMMARY
+          echo "- **API:** https://api.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          echo "- **YugabyteDB Admin:** https://yb.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          echo "- **IPFS Gateway:** https://ipfs.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY

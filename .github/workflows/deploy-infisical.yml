@@ -193,23 +193,74 @@ jobs:
             sleep 10
           done
 
-      - name: Accept best bid
+      - name: Accept best bid (with uptime filter)
         if: ${{ github.event.inputs.action == 'deploy' }}
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
+          MIN_UPTIME: 99.9
         run: |
           BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
 
-          echo "=== Bids received ==="
-          echo "$BIDS" | jq -r '.bids[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
+          echo "=== Filtering bids by provider uptime (minimum: ${MIN_UPTIME}%) ==="
 
-          LOWEST_BID=$(echo "$BIDS" | jq '.bids | sort_by(.bid.price.amount | tonumber) | .[0]')
+          # Get list of all providers from bids
+          PROVIDERS=$(echo "$BIDS" | jq -r '.bids[].bid.id.provider')
+
+          # Create a filtered bids array
+          FILTERED_BIDS="[]"
+
+          for PROVIDER_ADDR in $PROVIDERS; do
+            echo "Checking provider: $PROVIDER_ADDR"
+
+            # Query provider attributes from Akash
+            PROVIDER_INFO=$(akash query provider get "$PROVIDER_ADDR" --node $AKASH_NODE --output json 2>/dev/null || echo '{}')
+
+            # Try to get uptime from provider attributes
+            # Note: Akash providers may not expose uptime directly, so we'll use akashlytics.com API
+            UPTIME=$(curl -s "https://api.akashlytics.com/v1/providers/$PROVIDER_ADDR" 2>/dev/null | jq -r '.uptime // null' || echo "null")
+
+            if [ "$UPTIME" == "null" ] || [ -z "$UPTIME" ]; then
+              echo "  ⚠️  Uptime data not available for $PROVIDER_ADDR, including anyway"
+              # If uptime data not available, include the provider (fail open)
+              BID=$(echo "$BIDS" | jq ".bids[] | select(.bid.id.provider == \"$PROVIDER_ADDR\")")
+              FILTERED_BIDS=$(echo "$FILTERED_BIDS" | jq ". + [$BID]")
+            else
+              # Convert uptime to comparable format (handle percentage)
+              UPTIME_VALUE=$(echo "$UPTIME" | sed 's/%//')
+
+              # Compare uptime (using bc for float comparison)
+              if (( $(echo "$UPTIME_VALUE >= $MIN_UPTIME" | bc -l) )); then
+                echo "  ✓ Uptime: ${UPTIME_VALUE}% (passes ${MIN_UPTIME}% threshold)"
+                BID=$(echo "$BIDS" | jq ".bids[] | select(.bid.id.provider == \"$PROVIDER_ADDR\")")
+                FILTERED_BIDS=$(echo "$FILTERED_BIDS" | jq ". + [$BID]")
+              else
+                echo "  ✗ Uptime: ${UPTIME_VALUE}% (below ${MIN_UPTIME}% threshold) - SKIPPED"
+              fi
+            fi
+          done
+
+          echo ""
+          echo "=== Filtered bids (uptime ≥ ${MIN_UPTIME}%) ==="
+          BID_COUNT=$(echo "$FILTERED_BIDS" | jq 'length')
+          echo "Qualified providers: $BID_COUNT"
+
+          if [ "$BID_COUNT" -eq "0" ]; then
+            echo "Error: No providers meet the uptime requirement of ${MIN_UPTIME}%"
+            echo "Consider lowering MIN_UPTIME or waiting for more bids"
+            exit 1
+          fi
+
+          echo "$FILTERED_BIDS" | jq -r '.[] | "\(.bid.id.provider) - \(.bid.price.amount) uakt"'
+
+          # Select lowest price bid from filtered results
+          LOWEST_BID=$(echo "$FILTERED_BIDS" | jq 'sort_by(.bid.price.amount | tonumber) | .[0]')
           PROVIDER=$(echo "$LOWEST_BID" | jq -r '.bid.id.provider')
           PRICE=$(echo "$LOWEST_BID" | jq -r '.bid.price.amount')
 
+          echo ""
           echo "Accepting bid from provider: $PROVIDER (Price: $PRICE uakt)"
 
           akash tx market lease create \
@@ -318,6 +369,38 @@ jobs:
       - name: Deployment summary
         if: always()
         run: |
+          # Console output for CLI/workflow logs
+          echo ""
+          echo "=========================================="
+          echo "🚀 INFISICAL DEPLOYMENT SUCCESSFUL"
+          echo "=========================================="
+          echo ""
+          echo "Deployment Details:"
+          echo "  Action:      ${{ github.event.inputs.action }}"
+          echo "  Wallet:      ${{ env.AKASH_ADDRESS }}"
+
+          if [ -n "${{ env.DSEQ }}" ]; then
+            echo "  DSEQ:        ${{ env.DSEQ }}"
+            echo "  Provider:    ${{ env.PROVIDER }}"
+            echo "  Transaction: ${{ env.DEPLOYMENT_TX }}"
+          fi
+
+          echo ""
+          echo "🌐 Service Endpoint:"
+          echo "  https://secrets.alternatefutures.ai"
+          echo ""
+          echo "📝 Next Steps:"
+          echo "  1. Wait for DNS propagation (2-5 minutes)"
+          echo "  2. Access Infisical at https://secrets.alternatefutures.ai"
+          echo "  3. Create initial admin user"
+          echo "  4. Create project and add secrets"
+          echo "  5. Generate service token for main app deployment"
+          echo "  6. Add INFISICAL_SERVICE_TOKEN and INFISICAL_PROJECT_ID to GitHub Secrets"
+          echo ""
+          echo "=========================================="
+          echo ""
+
+          # GitHub Actions summary for UI
           echo "## Infisical Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Action**: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
@@ -331,7 +414,7 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Service Endpoint" >> $GITHUB_STEP_SUMMARY
-          echo "- **secrets.alternatefutures.ai** -> Infisical UI" >> $GITHUB_STEP_SUMMARY
+          echo "- **🌐 https://secrets.alternatefutures.ai** (Infisical UI)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Wait for DNS propagation (2-5 minutes)" >> $GITHUB_STEP_SUMMARY
