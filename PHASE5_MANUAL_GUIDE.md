@@ -1,5 +1,42 @@
 # Phase 5: Deploy and Configure Infisical - Manual Guide
 
+## Prerequisites: DNS Setup
+
+### Option 1: Migrate DNS to Openprovider (Recommended)
+
+If your domain is currently on Namecheap, use the migration script:
+
+```bash
+cd /Users/wonderwomancode/Projects/alternatefutures/service-cloud-api
+
+# Set environment variables
+export NAMECHEAP_API_USER="your-api-user"
+export NAMECHEAP_API_KEY="your-api-key"
+export NAMECHEAP_USERNAME="your-username"
+export OPENPROVIDER_USERNAME="your-openprovider-username"
+export OPENPROVIDER_PASSWORD="your-openprovider-password"
+
+# Dry run (shows what will be migrated)
+tsx scripts/migrate-dns-namecheap-to-openprovider.ts alternatefutures.ai
+
+# Actually migrate
+CONFIRM=yes tsx scripts/migrate-dns-namecheap-to-openprovider.ts alternatefutures.ai
+```
+
+This will:
+
+1. Fetch all DNS records from Namecheap
+2. Create them in Openprovider
+3. Update Namecheap nameservers to point to Openprovider
+4. Enable automatic DNS management for all deployments
+
+### Option 2: Use Existing DNS Provider
+
+If you're already using Openprovider or another provider, ensure:
+
+- OPENPROVIDER_USERNAME and OPENPROVIDER_PASSWORD are in GitHub Secrets
+- Domain is properly delegated to Openprovider nameservers
+
 ## Step 1: Deploy Infisical to Akash (via GitHub UI)
 
 ### 1.1 Navigate to Workflow
@@ -27,32 +64,58 @@ Open: https://github.com/alternatefutures/service-cloud-api/actions/workflows/de
 - ✓ Create deployment on Akash
 - ✓ Wait for bids from audited providers
 - ✓ Accept best bid and create lease
+- ✓ Configure DNS automatically (secrets.alternatefutures.ai)
 - ✓ Deployment summary with DSEQ
 
-## Step 2: Configure DNS (if needed)
+## Step 2: Verify DNS Configuration
 
-If DNS auto-configuration didn't work:
+DNS is now **automatically configured** by the deployment workflow.
 
-1. Check deployment logs for provider endpoint
-2. Create DNS record:
+The workflow automatically:
+
+- Retrieves the Infisical deployment IP from Akash
+- Creates/updates the A record: `secrets.alternatefutures.ai`
+- Uses the existing DNSManager with Openprovider API
+
+**Manual DNS configuration is only needed if automation fails.**
+
+### If DNS automation fails:
+
+1. Check deployment logs for the Infisical IP address
+2. Manually create DNS record:
    ```
-   Type: CNAME
-   Name: secrets.alternatefutures.ai
-   Value: [provider-endpoint-from-logs]
+   Type: A
+   Name: secrets
+   Value: [infisical-ip-from-logs]
+   TTL: 3600
    ```
+
+### Verify DNS propagation:
+
+```bash
+# Check DNS resolution
+dig secrets.alternatefutures.ai
+
+# Test HTTPS access
+curl -I https://secrets.alternatefutures.ai
+```
 
 ## Step 3: Access Infisical and Create Account
 
 ### 3.1 Wait for DNS Propagation
 
-Wait 2-5 minutes after deployment, then:
+DNS is configured automatically during deployment. Wait 2-5 minutes for propagation:
 
 ```bash
-# Test DNS
+# Test DNS resolution
 dig secrets.alternatefutures.ai
 
-# Test HTTPS
+# Should show A record pointing to Infisical deployment IP
+
+# Test HTTPS access
 curl -I https://secrets.alternatefutures.ai
+
+# Should return HTTP/2 200
 ```
 
 ### 3.2 Create Admin Account
