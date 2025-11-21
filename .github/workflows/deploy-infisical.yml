@@ -232,6 +232,89 @@ jobs:
           echo "Waiting for lease to be active..."
           sleep 30
 
+      - name: Setup Node.js for DNS sync
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies for DNS sync
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          npm install -g tsx
+          npm install
+
+      - name: Sync DNS for Infisical
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        continue-on-error: true
+        env:
+          OPENPROVIDER_USERNAME: ${{ secrets.OPENPROVIDER_USERNAME }}
+          OPENPROVIDER_PASSWORD: ${{ secrets.OPENPROVIDER_PASSWORD }}
+          DOMAIN: alternatefutures.ai
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+        run: |
+          echo "Configuring DNS: secrets.alternatefutures.ai"
+          if [ -z "${{ env.PROVIDER }}" ] || [ "${{ env.PROVIDER }}" == "null" ]; then
+            echo "Warning: Provider address not available, skipping DNS sync"
+            echo "You can manually configure DNS using the deployment info from the logs above"
+            exit 0
+          fi
+
+          # Create custom sync script for Infisical
+          cat > scripts/sync-infisical-dns.ts << 'EOF'
+          #!/usr/bin/env tsx
+          import { DNSManager } from '../src/services/dns/dnsManager.js'
+
+          const config = {
+            username: process.env.OPENPROVIDER_USERNAME || '',
+            password: process.env.OPENPROVIDER_PASSWORD || '',
+          }
+
+          const domain = process.env.DOMAIN || 'alternatefutures.ai'
+          const dseq = process.argv[2]
+          const provider = process.argv[3]
+
+          async function main() {
+            console.log('Setting up DNS for Infisical...')
+            console.log(`DSEQ: ${dseq}`)
+            console.log(`Provider: ${provider}`)
+
+            // Get provider IP from Akash
+            const { execSync } = await import('child_process')
+            const leaseStatus = execSync(
+              `akash provider lease-status --dseq ${dseq} --provider ${provider} --node ${process.env.AKASH_NODE} --chain-id ${process.env.AKASH_CHAIN_ID} --output json`,
+              { encoding: 'utf-8' }
+            )
+
+            const data = JSON.parse(leaseStatus)
+            const infisicalIP = data.forwarded_ports?.infisical?.[0]?.host
+
+            if (!infisicalIP) {
+              console.error('Could not find Infisical IP from lease status')
+              process.exit(1)
+            }
+
+            console.log(`Infisical IP: ${infisicalIP}`)
+
+            const dns = new DNSManager(config, domain)
+            const result = await dns.ensureSubdomain('secrets', infisicalIP)
+
+            if (result.success) {
+              console.log('DNS configured successfully!')
+              console.log(`secrets.${domain} -> ${infisicalIP}`)
+            } else {
+              console.error('DNS configuration failed:', result.error)
+              process.exit(1)
+            }
+          }
+
+          main()
+          EOF
+
+          chmod +x scripts/sync-infisical-dns.ts
+          tsx scripts/sync-infisical-dns.ts ${{ env.DSEQ }} ${{ env.PROVIDER }}
+
       - name: Deployment summary
         if: always()
         run: |
