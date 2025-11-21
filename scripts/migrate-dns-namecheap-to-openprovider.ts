@@ -67,6 +67,8 @@ async function getNamecheapRecords(domain: string): Promise<DNSRecord[]> {
 
   for (const match of hostMatches) {
     const [, , name, type, address, mxPref, ttl] = match
+    // Namecheap returns '@' for root, or subdomain name
+    // Openprovider expects empty string for root, or just the subdomain (no domain suffix)
     const recordName = name === '@' ? '' : name
     const recordType = type as 'A' | 'AAAA' | 'CNAME' | 'MX' | 'TXT'
 
@@ -79,10 +81,16 @@ async function getNamecheapRecords(domain: string): Promise<DNSRecord[]> {
     // Enforce minimum TTL of 600 (Openprovider requirement)
     const recordTTL = Math.max(parseInt(ttl), 600)
 
+    // Ensure CNAME and other values end with a dot if they're FQDNs
+    let recordValue = address
+    if (recordType === 'CNAME' && !address.endsWith('.')) {
+      recordValue = address + '.'
+    }
+
     records.push({
       name: recordName,
       type: recordType,
-      value: address,
+      value: recordValue,
       ttl: recordTTL,
       priority: type === 'MX' ? parseInt(mxPref) : undefined,
     })
