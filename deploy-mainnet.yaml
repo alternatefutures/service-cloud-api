@@ -190,6 +190,13 @@ services:
       # Frontend URL - for redirects after auth
       - FRONTEND_URL=https://alternatefutures.ai
 
+      # OpenTelemetry Configuration
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=alternatefutures-auth
+      - OTEL_TRACES_SAMPLER=always_on
+      - OTEL_METRICS_EXPORTER=otlp
+      - OTEL_LOGS_EXPORTER=otlp
+
     expose:
       # Internal port for API service
       - port: 3000
@@ -243,8 +250,12 @@ services:
       - FILECOIN_RPC_URL=https://api.node.glif.io/rpc/v0
       - FILECOIN_WALLET_KEY=your_filecoin_wallet_key
 
-      # Optional: Analytics
-      - SENTRY_DSN=your_sentry_dsn
+      # OpenTelemetry Configuration
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=alternatefutures-api
+      - OTEL_TRACES_SAMPLER=always_on
+      - OTEL_METRICS_EXPORTER=otlp
+      - OTEL_LOGS_EXPORTER=otlp
 
     expose:
       - port: 4000
@@ -259,6 +270,77 @@ services:
       - yb-node-3
       - ipfs
       - auth
+      - otel-collector
+
+  # Jaeger - Distributed Tracing UI and Storage
+  # All-in-one deployment for beta (includes collector, query, UI)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    env:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    expose:
+      # Jaeger UI - Web interface for viewing traces
+      - port: 16686
+        as: 80
+        to:
+          - global: true
+        accept:
+          - jaeger.alternatefutures.ai
+      # OTLP gRPC receiver (from collector)
+      - port: 4317
+        as: 4317
+        to:
+          - service: otel-collector
+      # OTLP HTTP receiver (from collector)
+      - port: 4318
+        as: 4318
+        to:
+          - service: otel-collector
+    params:
+      storage:
+        data:
+          mount: /badger
+          readOnly: false
+
+  # OpenTelemetry Collector - Receives and processes telemetry
+  # Forwards to Jaeger for storage
+  # NOTE: Using custom image with config - build with: docker build -t ghcr.io/alternatefutures/otel-collector:latest docker/otel-collector
+  otel-collector:
+    image: ghcr.io/alternatefutures/otel-collector:latest
+    env:
+      - JAEGER_ENDPOINT=jaeger:4317
+    expose:
+      # OTLP gRPC receiver (from applications)
+      - port: 4317
+        as: 4317
+        to:
+          - service: api
+          - service: auth
+      # OTLP HTTP receiver (from applications)
+      - port: 4318
+        as: 4318
+        to:
+          - service: api
+          - service: auth
+      # Prometheus metrics endpoint
+      - port: 8888
+        as: 8888
+        to:
+          - global: true
+        accept:
+          - otel-metrics.alternatefutures.ai
+      # Health check
+      - port: 13133
+        as: 13133
+        to:
+          - service: api
+          - service: auth
+    depends_on:
+      - jaeger
 
 profiles:
   compute:
@@ -328,6 +410,27 @@ profiles:
           - name: data
             size: 100Gi
 
+    # Jaeger - Tracing storage and UI
+    jaeger:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1.5Gi
+        storage:
+          - name: data
+            size: 10Gi
+
+    # OpenTelemetry Collector
+    otel-collector:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          size: 256Mi
+
   placement:
     dcloud:
       pricing:
@@ -351,6 +454,12 @@ profiles:
         ipfs:
           denom: uakt
           amount: 70
+        jaeger:
+          denom: uakt
+          amount: 35
+        otel-collector:
+          denom: uakt
+          amount: 15
 
 deployment:
   yb-node-1:
@@ -381,4 +490,14 @@ deployment:
   ipfs:
     dcloud:
       profile: ipfs
+      count: 1
+
+  jaeger:
+    dcloud:
+      profile: jaeger
+      count: 1
+
+  otel-collector:
+    dcloud:
+      profile: otel-collector
       count: 1
