@@ -331,33 +331,19 @@ jobs:
             console.log(`DSEQ: ${dseq}`)
             console.log(`Provider: ${provider}`)
 
-            // Get provider IP from Akash
-            const { execSync } = await import('child_process')
-            const leaseStatus = execSync(
-              `akash query provider lease-status --dseq ${dseq} --provider ${provider} --node ${process.env.AKASH_NODE} --chain-id ${process.env.AKASH_CHAIN_ID} --output json`,
-              { encoding: 'utf-8' }
-            )
+            // Automatic DNS configuration is currently disabled due to Akash CLI changes
+            // You can manually configure DNS using the lease information from the deployment logs
 
-            const data = JSON.parse(leaseStatus)
-            const infisicalIP = data.forwarded_ports?.infisical?.[0]?.host
+            console.log('\n⚠️  Automatic DNS configuration is currently disabled')
+            console.log('Please manually configure DNS for secrets.alternatefutures.ai')
+            console.log(`DSEQ: ${dseq}`)
+            console.log(`Provider: ${provider}`)
+            console.log('\nTo get the service IP, run:')
+            console.log(`akash provider lease-status --dseq ${dseq} --from deploy --provider ${provider}`)
+            console.log('\nThen add an A record: secrets.alternatefutures.ai -> <service-ip>')
 
-            if (!infisicalIP) {
-              console.error('Could not find Infisical IP from lease status')
-              process.exit(1)
-            }
-
-            console.log(`Infisical IP: ${infisicalIP}`)
-
-            const dns = new DNSManager(config, domain)
-            const result = await dns.ensureSubdomain('secrets', infisicalIP)
-
-            if (result.success) {
-              console.log('DNS configured successfully!')
-              console.log(`secrets.${domain} -> ${infisicalIP}`)
-            } else {
-              console.error('DNS configuration failed:', result.error)
-              process.exit(1)
-            }
+            // Skip DNS configuration for now
+            process.exit(0)
           }
 
           main()
