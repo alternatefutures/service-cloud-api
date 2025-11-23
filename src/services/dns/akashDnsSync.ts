@@ -88,9 +88,26 @@ export class AkashDNSSync {
           const pemPath = path.join(akashDir, pemFiles[0])
           console.log(`Using Akash client certificate (PEM): ${pemFiles[0]}`)
           // Combined PEM file contains both cert and key
-          const pemData = fs.readFileSync(pemPath)
-          cert = pemData
-          key = pemData
+          const pemData = fs.readFileSync(pemPath, 'utf-8')
+
+          // Extract certificate (between BEGIN CERTIFICATE and END CERTIFICATE)
+          const certMatch = pemData.match(
+            /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/
+          )
+          // Extract private key (between BEGIN.*PRIVATE KEY and END.*PRIVATE KEY)
+          const keyMatch = pemData.match(
+            /-----BEGIN .*PRIVATE KEY-----[\s\S]+?-----END .*PRIVATE KEY-----/
+          )
+
+          if (certMatch && keyMatch) {
+            cert = Buffer.from(certMatch[0])
+            key = Buffer.from(keyMatch[0])
+            console.log('Extracted certificate and key from PEM file')
+          } else {
+            console.warn(
+              'Could not parse PEM file (missing cert or key sections)'
+            )
+          }
         } else {
           console.warn('No client certificates found, attempting without auth')
         }
