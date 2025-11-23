@@ -495,12 +495,13 @@ jobs:
           echo "Found PR #$PR_NUMBER for this deployment"
 
           # Create deployment URLs comment
-          COMMENT_BODY="## 🚀 Deployment Successful
+          COMMENT_BODY=$(cat <<'EOF'
+## 🚀 Deployment Successful
 
 **Deployment Details:**
-- **DSEQ:** \`${{ env.DSEQ }}\`
-- **Provider:** \`${{ env.PROVIDER }}\`
-- **Transaction:** \`${{ env.DEPLOYMENT_TX }}\`
+- **DSEQ:** `${{ env.DSEQ }}`
+- **Provider:** `${{ env.PROVIDER }}`
+- **Transaction:** `${{ env.DEPLOYMENT_TX }}`
 
 **Service Endpoints:**
 - 🌐 **API:** https://api.alternatefutures.ai
@@ -510,7 +511,9 @@ jobs:
 **Note:** DNS propagation may take 2-5 minutes. Services will be available once DNS resolves.
 
 ---
-*Deployed via Akash Network • [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*"
+*Deployed via Akash Network • [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+EOF
+)
 
           # Post comment to PR
           gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
