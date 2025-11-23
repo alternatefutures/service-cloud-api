@@ -331,19 +331,79 @@ jobs:
             console.log(`DSEQ: ${dseq}`)
             console.log(`Provider: ${provider}`)
 
-            // Automatic DNS configuration is currently disabled due to Akash CLI changes
-            // You can manually configure DNS using the lease information from the deployment logs
+            // Get provider IP from Akash by querying the provider's REST API
+            const { execSync } = await import('child_process')
 
-            console.log('\n⚠️  Automatic DNS configuration is currently disabled')
-            console.log('Please manually configure DNS for secrets.alternatefutures.ai')
-            console.log(`DSEQ: ${dseq}`)
-            console.log(`Provider: ${provider}`)
-            console.log('\nTo get the service IP, run:')
-            console.log(`akash provider lease-status --dseq ${dseq} --from deploy --provider ${provider}`)
-            console.log('\nThen add an A record: secrets.alternatefutures.ai -> <service-ip>')
+            console.log('Getting lease information...')
 
-            // Skip DNS configuration for now
-            process.exit(0)
+            // Get owner address
+            const ownerAddr = execSync(
+              'akash keys show deploy -a --keyring-backend test',
+              { encoding: 'utf-8' }
+            ).trim()
+
+            console.log(`Owner: ${ownerAddr}`)
+
+            // Get lease info from blockchain - gseq and oseq are typically 1 for main deployments
+            const leaseInfo = execSync(
+              `akash query market lease get --owner ${ownerAddr} --dseq ${dseq} --gseq 1 --oseq 1 --provider ${provider} --node ${process.env.AKASH_NODE} --chain-id ${process.env.AKASH_CHAIN_ID} --output json`,
+              { encoding: 'utf-8' }
+            )
+
+            console.log('Lease info retrieved')
+
+            // Query provider for service status via provider's REST API
+            // Provider typically runs on port 8443
+            const providerHost = provider // Provider address
+
+            // Use akash provider service-status command
+            let serviceInfo
+            try {
+              serviceInfo = execSync(
+                `akash provider service-status --dseq ${dseq} --gseq 1 --oseq 1 --from deploy --keyring-backend test --provider ${provider} --node ${process.env.AKASH_NODE}`,
+                { encoding: 'utf-8' }
+              )
+            } catch (error) {
+              console.error('Could not get service status from provider')
+              console.error('Error:', error.message)
+              console.log('\nLease Info:', leaseInfo)
+              throw error
+            }
+
+            console.log('Service status:', serviceInfo)
+
+            // Parse service info to extract IP
+            // The service info should contain the forwarded ports and IPs
+            const serviceData = JSON.parse(serviceInfo)
+            const infisicalService = serviceData.services?.infisical || serviceData.forwarded_ports?.infisical
+
+            if (!infisicalService) {
+              console.error('Could not find Infisical service in provider response')
+              console.log('Available services:', Object.keys(serviceData.services || serviceData.forwarded_ports || {}))
+              throw new Error('Infisical service not found')
+            }
+
+            const infisicalIP = infisicalService[0]?.host || infisicalService.host || infisicalService.externalIP
+
+            if (!infisicalIP) {
+              console.error('Could not extract IP from service info')
+              console.log('Service data:', JSON.stringify(infisicalService, null, 2))
+              throw new Error('Could not determine Infisical IP')
+            }
+
+            console.log(`Infisical IP: ${infisicalIP}`)
+
+            // Configure DNS
+            const dns = new DNSManager(config, domain)
+            const result = await dns.ensureSubdomain('secrets', infisicalIP)
+
+            if (result.success) {
+              console.log('✅ DNS configured successfully!')
+              console.log(`secrets.${domain} -> ${infisicalIP}`)
+            } else {
+              console.error('❌ DNS configuration failed:', result.error)
+              throw new Error('DNS configuration failed')
+            }
           }
 
           main()
