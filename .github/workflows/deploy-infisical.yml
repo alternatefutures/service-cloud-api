@@ -334,7 +334,7 @@ jobs:
             // Get provider IP from Akash
             const { execSync } = await import('child_process')
             const leaseStatus = execSync(
-              `akash provider lease-status --dseq ${dseq} --provider ${provider} --node ${process.env.AKASH_NODE} --chain-id ${process.env.AKASH_CHAIN_ID} --output json`,
+              `akash query provider lease-status --dseq ${dseq} --provider ${provider} --node ${process.env.AKASH_NODE} --chain-id ${process.env.AKASH_CHAIN_ID} --output json`,
               { encoding: 'utf-8' }
             )
 
