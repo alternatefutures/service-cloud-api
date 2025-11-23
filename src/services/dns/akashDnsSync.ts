@@ -44,7 +44,7 @@ export class AkashDNSSync {
     provider: string
   ): Promise<AkashDeployment | null> {
     try {
-      // Step 1: Get provider info to find the host URI
+      // Get provider info to determine service hostnames
       const { stdout: providerInfo } = await execAsync(
         `akash query provider get ${provider} --node ${this.akashNode} --chain-id ${this.akashChainId} --output json`
       )
@@ -58,10 +58,49 @@ export class AkashDNSSync {
         return null
       }
 
-      console.log(`Querying provider at ${providerUri}`)
+      console.log(`Provider: ${providerUri}`)
 
-      // Step 2: Query provider's REST API for lease status with client certs
-      // Default gseq and oseq are 1 for most deployments
+      // Try Cloudmos API first (no auth required)
+      console.log('Trying Cloudmos API...')
+      try {
+        const cloudmosResponse = await globalThis.fetch(
+          `https://api.cloudmos.io/v1/deployments/${dseq}`
+        )
+
+        if (cloudmosResponse.ok) {
+          const cloudmosData = (await cloudmosResponse.json()) as {
+            services?: Array<{ name: string; uris?: string[] }>
+          }
+          console.log('Got deployment info from Cloudmos')
+
+          // Extract service URIs from Cloudmos data
+          const services: AkashService[] = []
+          if (cloudmosData.services) {
+            for (const service of cloudmosData.services) {
+              if (service.uris && service.uris.length > 0) {
+                const uri = service.uris[0]
+                const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
+                if (match) {
+                  services.push({
+                    name: service.name,
+                    externalIP: match[1],
+                    port: match[2] ? parseInt(match[2]) : 80,
+                    subdomain: '',
+                  })
+                }
+              }
+            }
+          }
+
+          if (services.length > 0) {
+            return { dseq, provider, services }
+          }
+        }
+      } catch {
+        console.warn('Cloudmos API failed, falling back to provider query')
+      }
+
+      // Fallback: Query provider API (requires client certs)
       const leaseStatusPath = `/lease/${dseq}/1/1/status`
 
       // Check for Akash client certificates
