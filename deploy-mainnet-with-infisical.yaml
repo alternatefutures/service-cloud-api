@@ -44,8 +44,9 @@ services:
       - "--tserver_flags=ysql_enable_auth=true"
       - "--daemon=false"
     env:
-      # Infisical connection
-      - INFISICAL_TOKEN=PLACEHOLDER_INFISICAL_SERVICE_TOKEN
+      # Infisical connection (Universal Auth)
+      - INFISICAL_CLIENT_ID=PLACEHOLDER_INFISICAL_CLIENT_ID
+      - INFISICAL_CLIENT_SECRET=PLACEHOLDER_INFISICAL_CLIENT_SECRET
       - INFISICAL_SITE_URL=https://secrets.alternatefutures.ai
     expose:
       - port: 5433
@@ -153,8 +154,9 @@ services:
       - NODE_ENV=production
       - PORT=4000
 
-      # Infisical connection (service token is rotatable)
-      - INFISICAL_TOKEN=PLACEHOLDER_INFISICAL_SERVICE_TOKEN
+      # Infisical connection (Universal Auth - Machine Identity)
+      - INFISICAL_CLIENT_ID=PLACEHOLDER_INFISICAL_CLIENT_ID
+      - INFISICAL_CLIENT_SECRET=PLACEHOLDER_INFISICAL_CLIENT_SECRET
       - INFISICAL_SITE_URL=https://secrets.alternatefutures.ai
       - INFISICAL_PROJECT_ID=PLACEHOLDER_PROJECT_ID
       - INFISICAL_ENVIRONMENT=production

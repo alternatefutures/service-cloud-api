@@ -1,41 +1,43 @@
-import { InfisicalClient, LogLevel } from '@infisical/sdk'
+import { InfisicalSDK, type Secret } from '@infisical/sdk'
 import { setInterval } from 'node:timers'
 
-let client: InfisicalClient | null = null
+let client: InfisicalSDK | null = null
 const secretsCache: Record<string, string> = {}
 
 export async function initInfisical() {
-  if (process.env.INFISICAL_TOKEN) {
+  if (process.env.INFISICAL_CLIENT_ID && process.env.INFISICAL_CLIENT_SECRET) {
     console.log('🔐 Initializing Infisical client...')
 
-    // Initialize client with service token authentication
-    client = new InfisicalClient({
+    // Initialize client
+    client = new InfisicalSDK({
       siteUrl:
         process.env.INFISICAL_SITE_URL || 'https://secrets.alternatefutures.ai',
-      logLevel: LogLevel.Error,
     })
 
-    // Authenticate with service token
-    await client.auth().serviceToken({
-      serviceToken: process.env.INFISICAL_TOKEN,
+    // Authenticate with Universal Auth (Machine Identity)
+    await client.auth().universalAuth.login({
+      clientId: process.env.INFISICAL_CLIENT_ID,
+      clientSecret: process.env.INFISICAL_CLIENT_SECRET,
     })
 
     // Fetch all secrets
-    const secrets = await client.listSecrets({
+    const result = await client.secrets().listSecrets({
       environment: process.env.INFISICAL_ENVIRONMENT || 'production',
       projectId: process.env.INFISICAL_PROJECT_ID!,
     })
 
     // Cache in memory
-    secrets.forEach(secret => {
+    result.secrets.forEach((secret: Secret) => {
       secretsCache[secret.secretKey] = secret.secretValue
       // Inject into process.env for compatibility
       process.env[secret.secretKey] = secret.secretValue
     })
 
-    console.log(`✅ Loaded ${secrets.length} secrets from Infisical`)
+    console.log(`✅ Loaded ${result.secrets.length} secrets from Infisical`)
   } else {
-    console.log('⚠️  No INFISICAL_TOKEN found, using local .env file')
+    console.log(
+      '⚠️  No INFISICAL_CLIENT_ID/SECRET found, using local .env file'
+    )
     // Fall back to .env for local development
     const dotenv = await import('dotenv')
     dotenv.config()
