@@ -6,6 +6,10 @@
 /* eslint-disable no-console */
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import * as https from 'https'
+import * as fs from 'fs'
+import * as path from 'path'
+import * as os from 'os'
 import { DNSManager } from './dnsManager.js'
 import type {
   AkashDeployment,
@@ -56,22 +60,74 @@ export class AkashDNSSync {
 
       console.log(`Querying provider at ${providerUri}`)
 
-      // Step 2: Query provider's REST API for lease status
+      // Step 2: Query provider's REST API for lease status with client certs
       // Default gseq and oseq are 1 for most deployments
-      const leaseStatusUrl = `${providerUri}/lease/${dseq}/1/1/status`
+      const leaseStatusPath = `/lease/${dseq}/1/1/status`
 
-      // Use global fetch (Node 18+)
-      const response = await globalThis.fetch(leaseStatusUrl)
-      if (!response.ok) {
-        throw new Error(
-          `Provider API returned ${response.status}: ${response.statusText}`
-        )
+      // Check for Akash client certificates
+      const certPath = path.join(os.homedir(), '.akash', 'certs')
+      const clientCert = path.join(certPath, 'client.crt')
+      const clientKey = path.join(certPath, 'client.key')
+
+      let cert: Buffer | undefined
+      let key: Buffer | undefined
+
+      if (fs.existsSync(clientCert) && fs.existsSync(clientKey)) {
+        console.log('Using Akash client certificates')
+        cert = fs.readFileSync(clientCert)
+        key = fs.readFileSync(clientKey)
+      } else {
+        console.warn('No client certificates found, attempting without auth')
       }
 
-      const data = (await response.json()) as {
+      // Parse provider URI
+      const providerUrl = new URL(providerUri)
+
+      // Make authenticated request using https module
+      const data = await new Promise<{
         forwarded_ports?: Record<string, Array<{ host: string; port: number }>>
         services?: Record<string, { uris?: string[] }>
-      }
+      }>((resolve, reject) => {
+        const options: https.RequestOptions = {
+          hostname: providerUrl.hostname,
+          port: providerUrl.port || 8443,
+          path: leaseStatusPath,
+          method: 'GET',
+          cert,
+          key,
+          rejectUnauthorized: false, // Provider certs are often self-signed
+        }
+
+        const req = https.request(options, res => {
+          if (res.statusCode !== 200) {
+            reject(
+              new Error(
+                `Provider API returned ${res.statusCode}: ${res.statusMessage}`
+              )
+            )
+            return
+          }
+
+          let body = ''
+          res.on('data', chunk => {
+            body += chunk
+          })
+          res.on('end', () => {
+            try {
+              resolve(JSON.parse(body))
+            } catch (error) {
+              reject(new Error(`Failed to parse response: ${error}`))
+            }
+          })
+        })
+
+        req.on('error', error => {
+          reject(error)
+        })
+
+        req.end()
+      })
+
       const services: AkashService[] = []
 
       // Parse forwarded ports and extract service info
