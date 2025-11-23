@@ -40,11 +40,38 @@ export class AkashDNSSync {
     provider: string
   ): Promise<AkashDeployment | null> {
     try {
-      const { stdout } = await execAsync(
-        `akash provider lease-status --dseq ${dseq} --provider ${provider} --node ${this.akashNode} --chain-id ${this.akashChainId} --output json`
+      // Step 1: Get provider info to find the host URI
+      const { stdout: providerInfo } = await execAsync(
+        `akash query provider get ${provider} --node ${this.akashNode} --chain-id ${this.akashChainId} --output json`
       )
 
-      const data = JSON.parse(stdout)
+      const providerData = JSON.parse(providerInfo)
+      const providerUri =
+        providerData.provider?.host_uri || providerData.host_uri
+
+      if (!providerUri) {
+        console.error('Provider URI not found in provider info')
+        return null
+      }
+
+      console.log(`Querying provider at ${providerUri}`)
+
+      // Step 2: Query provider's REST API for lease status
+      // Default gseq and oseq are 1 for most deployments
+      const leaseStatusUrl = `${providerUri}/lease/${dseq}/1/1/status`
+
+      // Use global fetch (Node 18+)
+      const response = await globalThis.fetch(leaseStatusUrl)
+      if (!response.ok) {
+        throw new Error(
+          `Provider API returned ${response.status}: ${response.statusText}`
+        )
+      }
+
+      const data = (await response.json()) as {
+        forwarded_ports?: Record<string, Array<{ host: string; port: number }>>
+        services?: Record<string, { uris?: string[] }>
+      }
       const services: AkashService[] = []
 
       // Parse forwarded ports and extract service info
@@ -60,6 +87,27 @@ export class AkashDNSSync {
               port: portInfo[0].port,
               subdomain: '', // Will be set based on service name
             })
+          }
+        }
+      }
+
+      // Also check for services array if forwarded_ports is not present
+      if (services.length === 0 && data.services) {
+        for (const [serviceName, serviceData] of Object.entries(
+          data.services
+        )) {
+          if (serviceData.uris && serviceData.uris.length > 0) {
+            // Extract IP and port from URI
+            const uri = serviceData.uris[0]
+            const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
+            if (match) {
+              services.push({
+                name: serviceName,
+                externalIP: match[1],
+                port: match[2] ? parseInt(match[2]) : 80,
+                subdomain: '', // Will be set based on service name
+              })
+            }
           }
         }
       }
