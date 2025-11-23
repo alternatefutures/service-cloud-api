@@ -120,6 +120,25 @@ jobs:
               --gas-adjustment 1.5 \
               -y
             sleep 15
+
+            # Copy generated certificates to expected location
+            if [ -f "$HOME/.akash/client.crt" ] && [ -f "$HOME/.akash/client.key" ]; then
+              cp "$HOME/.akash/client.crt" "$CERT_PATH/client.crt"
+              cp "$HOME/.akash/client.key" "$CERT_PATH/client.key"
+              chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
+              echo "Certificates copied to $CERT_PATH"
+            else
+              echo "Warning: Generated certificates not found in expected location"
+            fi
+          fi
+
+          # Verify certificates exist
+          if [ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]; then
+            echo "✓ Client certificates ready at $CERT_PATH"
+            ls -lh "$CERT_PATH"
+          else
+            echo "✗ Client certificates not found at $CERT_PATH"
+            ls -lha "$HOME/.akash" || true
           fi
 
       - name: Create deployment
