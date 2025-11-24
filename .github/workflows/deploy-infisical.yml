@@ -64,9 +64,8 @@ jobs:
       - name: Install provider-services CLI
         run: |
           cd /tmp
-          curl -sfL "https://github.com/akash-network/provider/releases/download/v0.6.5/provider-services_0.6.5_linux_amd64.zip" -o provider-services.zip
-          unzip provider-services.zip
-          sudo mv provider-services /usr/local/bin/
+          curl -sfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | bash
+          sudo mv ./bin/provider-services /usr/local/bin/
           chmod +x /usr/local/bin/provider-services
           provider-services version
 
