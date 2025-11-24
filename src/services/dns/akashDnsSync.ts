@@ -9,6 +9,7 @@ import { promisify } from 'util'
 import { DNSManager } from './dnsManager.js'
 import type {
   AkashDeployment,
+  AkashService,
   DNSUpdateResult,
   OpenProviderConfig,
 } from './types.js'
@@ -55,80 +56,107 @@ export class AkashDNSSync {
 
       console.log(`Provider: ${providerUri}`)
 
-      // Use Akash blockchain to get deployment info
-      // This is secure (public blockchain data) and doesn't require API keys or TLS connections
-      console.log('Fetching deployment info from Akash blockchain...')
+      // Use provider-services CLI to get deployment info
+      // This queries the provider directly using proper authentication (not TLS bypass)
+      console.log(
+        'Fetching deployment info from provider using provider-services...'
+      )
 
-      // Get deployment details using akash CLI
       try {
-        const { stdout: leaseListOutput } = await execAsync(
-          `akash query market lease list ` +
-            `--owner ${this.akashNode.includes('testnet') ? process.env.AKASH_TESTNET_ADDRESS : process.env.AKASH_ADDRESS || ''} ` +
+        // Use provider-services lease-status to get service hostnames
+        // This uses proper Akash client certificates (already set up in workflow)
+        const keyName = process.env.AKASH_KEY_NAME || 'deploy'
+        const { stdout: leaseStatusOutput } = await execAsync(
+          `provider-services lease-status ` +
             `--dseq ${dseq} ` +
+            `--from ${keyName} ` +
+            `--provider ${provider} ` +
+            `--home $HOME/.akash ` +
             `--node ${this.akashNode} ` +
             `--chain-id ${this.akashChainId} ` +
-            `--output json`
+            `--keyring-backend test`
         )
 
-        const leaseData = JSON.parse(leaseListOutput)
-        const lease = leaseData.leases?.[0]?.lease
+        console.log('Got lease status from provider')
 
-        if (!lease) {
-          console.error('No lease found for deployment')
-          return null
+        // Parse the output to extract service hostnames
+        // Format is typically JSON with services and their URIs
+        const leaseStatus = JSON.parse(leaseStatusOutput)
+        const services: AkashService[] = []
+
+        // Extract service information
+        if (leaseStatus.services) {
+          for (const [serviceName, serviceData] of Object.entries(
+            leaseStatus.services
+          ) as Array<[string, any]>) {
+            const uris = serviceData.uris || []
+            if (uris.length > 0) {
+              // Get the first URI and extract hostname/IP
+              const uri = uris[0]
+              const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
+              if (match) {
+                const hostname = match[1]
+                const port = match[2] ? parseInt(match[2]) : 80
+
+                // Check if hostname is already an IP or needs DNS resolution
+                const ipMatch = hostname.match(/^(\d+\.){3}\d+$/)
+                if (ipMatch) {
+                  // Already an IP
+                  services.push({
+                    name: serviceName,
+                    externalIP: hostname,
+                    port,
+                    subdomain: '',
+                  })
+                } else {
+                  // It's a hostname - resolve it to get IP
+                  try {
+                    const { stdout: digOutput } = await execAsync(
+                      `dig +short ${hostname} A | head -1`
+                    )
+                    const ip = digOutput.trim()
+                    if (ip && ip.match(/^(\d+\.){3}\d+$/)) {
+                      services.push({
+                        name: serviceName,
+                        externalIP: ip,
+                        port,
+                        subdomain: '',
+                      })
+                      console.log(
+                        `Resolved ${serviceName}: ${hostname} -> ${ip}`
+                      )
+                    } else {
+                      console.warn(
+                        `Could not resolve ${hostname} to IP address`
+                      )
+                    }
+                  } catch (dnsError) {
+                    console.error(
+                      `DNS resolution failed for ${hostname}:`,
+                      dnsError
+                    )
+                  }
+                }
+              }
+            }
+          }
         }
 
-        console.log('Lease found on blockchain')
-
-        // For Akash deployments, services are exposed via provider ingress
-        // The service hostname pattern is typically: <service>.<dseq>.<provider-domain>
-        // We'll return instructions for manual DNS configuration since service endpoints
-        // aren't stored on-chain - they're managed by providers
-
-        console.warn(
-          '\n' +
-            '═══════════════════════════════════════════════════════════════\n' +
-            'MANUAL DNS CONFIGURATION REQUIRED\n' +
-            '═══════════════════════════════════════════════════════════════\n' +
-            '\n' +
-            'Deployment created successfully, but automatic DNS sync is not available.\n' +
-            '\n' +
-            'To get your service URLs:\n' +
-            '1. Visit: https://console.akash.network\n' +
-            '2. Find deployment: ' +
-            dseq +
-            '\n' +
-            '3. Copy the service URI(s)\n' +
-            '4. Configure DNS manually:\n' +
-            '   - Extract IP from service URI\n' +
-            '   - Point your DNS records to that IP\n' +
-            '\n' +
-            'Alternative: Get Akash Console API key for automatic sync\n' +
-            '- Generate API key at: https://console.akash.network/settings/authorizations\n' +
-            '- Add AKASH_CONSOLE_API_KEY to GitHub Secrets\n' +
-            '- Update akashDnsSync.ts to use authenticated API calls\n' +
-            '\n' +
-            'Deployment Info:\n' +
-            '  DSEQ: ' +
-            dseq +
-            '\n' +
-            '  Provider: ' +
-            provider +
-            '\n' +
-            '  Provider URI: ' +
-            providerUri +
-            '\n' +
-            '═══════════════════════════════════════════════════════════════\n'
-        )
-
-        // Return empty services array to indicate manual configuration needed
-        return {
-          dseq,
-          provider,
-          services: [],
+        if (services.length > 0) {
+          console.log(
+            `Successfully retrieved ${services.length} service(s) with IPs`
+          )
+          return { dseq, provider, services }
         }
+
+        console.warn('No services found in lease status')
+        return null
       } catch (error) {
-        console.error('Failed to query Akash blockchain:', error)
+        console.error('Failed to get lease status from provider:', error)
+        console.warn(
+          '\nFalling back to manual DNS configuration.\n' +
+            'Visit https://console.akash.network to find your deployment service URLs.'
+        )
         return null
       }
 

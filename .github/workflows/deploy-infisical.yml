@@ -61,6 +61,15 @@ jobs:
           chmod +x /usr/local/bin/akash
           akash version
 
+      - name: Install provider-services CLI
+        run: |
+          cd /tmp
+          curl -sfL "https://github.com/akash-network/provider/releases/download/v0.6.5/provider-services_0.6.5_linux_amd64.zip" -o provider-services.zip
+          unzip provider-services.zip
+          sudo mv provider-services /usr/local/bin/
+          chmod +x /usr/local/bin/provider-services
+          provider-services version
+
       - name: Setup Akash wallet
         env:
           AKASH_KEYRING_BACKEND: test
@@ -332,6 +341,9 @@ jobs:
           DOMAIN: alternatefutures.ai
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
+          AKASH_ADDRESS: ${{ env.AKASH_ADDRESS }}
+          AKASH_KEY_NAME: deploy
+          AKASH_KEYRING_BACKEND: test
         run: |
           echo "Configuring DNS: secrets.alternatefutures.ai"
           if [ -z "${{ env.PROVIDER }}" ] || [ "${{ env.PROVIDER }}" == "null" ]; then
