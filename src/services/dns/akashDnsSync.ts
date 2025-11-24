@@ -169,7 +169,8 @@ export class AkashDNSSync {
           cert,
           key,
           passphrase: '', // Akash certs are not passphrase-protected
-          rejectUnauthorized: false, // Provider certs are often self-signed
+          // For self-signed certificates, specify the CA cert explicitly:
+          // ca: fs.readFileSync(pathToTrustedProviderCert)
         }
 
         const req = https.request(options, res => {
