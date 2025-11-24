@@ -1,4 +1,6 @@
 name: Setup Akash Certificates
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
