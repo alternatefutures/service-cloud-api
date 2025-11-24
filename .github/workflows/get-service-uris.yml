@@ -1,4 +1,6 @@
 name: Get Service URIs
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
