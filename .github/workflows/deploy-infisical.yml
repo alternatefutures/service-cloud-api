@@ -138,6 +138,13 @@ jobs:
           if [ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]; then
             echo "✓ Client certificates ready at $CERT_PATH"
             ls -lh "$CERT_PATH"
+
+            # Remove any old PEM files to avoid conflicts with separate cert/key files
+            # PEM files may have encrypted keys that require passphrases
+            if [ -f "$HOME/.akash"/*.pem ]; then
+              echo "Removing old PEM files to avoid conflicts..."
+              rm -f "$HOME/.akash"/*.pem
+            fi
           else
             echo "✗ Client certificates not found at $CERT_PATH"
             ls -lha "$HOME/.akash" || true
