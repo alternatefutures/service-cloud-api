@@ -6,6 +6,7 @@
 /* eslint-disable no-console */
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { setTimeout } from 'timers/promises'
 import { DNSManager } from './dnsManager.js'
 import type {
   AkashDeployment,
@@ -57,58 +58,116 @@ export class AkashDNSSync {
       console.log(`Provider: ${providerUri}`)
 
       // Query Cloudmos API for deployment info (secure, no direct provider connection)
+      // Cloudmos is owned by Akash, so this is first-party infrastructure
       console.log('Fetching deployment info from Cloudmos API...')
-      try {
-        const cloudmosResponse = await globalThis.fetch(
-          `https://api.cloudmos.io/v1/deployments/${dseq}`
-        )
 
-        if (cloudmosResponse.ok) {
-          const cloudmosData = (await cloudmosResponse.json()) as {
-            services?: Array<{ name: string; uris?: string[] }>
-          }
-          console.log('Got deployment info from Cloudmos')
+      // Retry configuration for new deployments that may not be indexed yet
+      const maxRetries = 5
+      const baseDelay = 5000 // 5 seconds
+      let lastError: Error | null = null
 
-          // Extract service URIs from Cloudmos data
-          const services: AkashService[] = []
-          if (cloudmosData.services) {
-            for (const service of cloudmosData.services) {
-              if (service.uris && service.uris.length > 0) {
-                const uri = service.uris[0]
-                const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
-                if (match) {
-                  services.push({
-                    name: service.name,
-                    externalIP: match[1],
-                    port: match[2] ? parseInt(match[2]) : 80,
-                    subdomain: '',
-                  })
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        if (attempt > 0) {
+          const delay = baseDelay * Math.pow(2, attempt - 1) // 5s, 10s, 20s, 40s, 80s
+          console.log(
+            `Waiting ${delay / 1000}s before retry ${attempt + 1}/${maxRetries}...`
+          )
+          await setTimeout(delay)
+        }
+
+        try {
+          const cloudmosResponse = await globalThis.fetch(
+            `https://api.cloudmos.io/v1/deployments/${dseq}`
+          )
+
+          if (cloudmosResponse.ok) {
+            const cloudmosData = (await cloudmosResponse.json()) as {
+              services?: Array<{ name: string; uris?: string[] }>
+            }
+            console.log('Got deployment info from Cloudmos')
+
+            // Extract service URIs from Cloudmos data
+            const services: AkashService[] = []
+            if (cloudmosData.services) {
+              for (const service of cloudmosData.services) {
+                if (service.uris && service.uris.length > 0) {
+                  const uri = service.uris[0]
+                  const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
+                  if (match) {
+                    services.push({
+                      name: service.name,
+                      externalIP: match[1],
+                      port: match[2] ? parseInt(match[2]) : 80,
+                      subdomain: '',
+                    })
+                  }
                 }
               }
             }
+
+            if (services.length > 0) {
+              console.log(
+                `Successfully retrieved ${services.length} service(s) from Cloudmos`
+              )
+              return { dseq, provider, services }
+            }
+
+            // Deployment found but no services available yet - retry
+            console.warn(
+              `Deployment ${dseq} found but no service URIs available yet (attempt ${attempt + 1}/${maxRetries})`
+            )
+            if (attempt === maxRetries - 1) {
+              console.error(
+                'Deployment exists but services not available after all retries. ' +
+                  'This may indicate the deployment is still starting up.'
+              )
+              return null
+            }
+            // Continue to next retry
+            continue
           }
 
-          if (services.length > 0) {
-            return { dseq, provider, services }
+          // API returned non-OK status
+          if (cloudmosResponse.status === 404) {
+            console.warn(
+              `Deployment ${dseq} not found in Cloudmos (attempt ${attempt + 1}/${maxRetries})`
+            )
+            if (attempt === maxRetries - 1) {
+              console.error(
+                'Deployment not found after all retries. It may be too new or may not exist.'
+              )
+              return null
+            }
+            // Continue to next retry
+            continue
           }
 
-          // Deployment found but no services available yet
-          console.warn(
-            `Deployment ${dseq} found but no service URIs available yet. ` +
-              'This is normal for new deployments - they may take a few minutes to appear in Cloudmos.'
+          // Other error status
+          console.error(
+            `Cloudmos API returned ${cloudmosResponse.status}: ${cloudmosResponse.statusText}`
           )
-          return null
+          lastError = new Error(
+            `API returned ${cloudmosResponse.status}: ${cloudmosResponse.statusText}`
+          )
+        } catch (error) {
+          console.error(
+            `Failed to fetch from Cloudmos API (attempt ${attempt + 1}/${maxRetries}):`,
+            error
+          )
+          lastError = error as Error
+          // Continue to next retry unless it's the last attempt
+          if (attempt === maxRetries - 1) {
+            return null
+          }
         }
-
-        // API returned non-OK status
-        console.error(
-          `Cloudmos API returned ${cloudmosResponse.status}: ${cloudmosResponse.statusText}`
-        )
-        return null
-      } catch (error) {
-        console.error('Failed to fetch from Cloudmos API:', error)
-        return null
       }
+
+      // All retries exhausted
+      console.error(
+        'Failed to get deployment info after all retries:',
+        lastError
+      )
+      return null
 
       // SECURITY NOTE: Removed insecure fallback to direct provider queries
       //
