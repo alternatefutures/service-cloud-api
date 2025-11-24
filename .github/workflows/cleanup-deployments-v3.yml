@@ -1,4 +1,6 @@
 name: Cleanup Akash Deployments (v3)
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
