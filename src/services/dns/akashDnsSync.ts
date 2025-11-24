@@ -6,11 +6,9 @@
 /* eslint-disable no-console */
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { setTimeout } from 'timers/promises'
 import { DNSManager } from './dnsManager.js'
 import type {
   AkashDeployment,
-  AkashService,
   DNSUpdateResult,
   OpenProviderConfig,
 } from './types.js'
@@ -57,117 +55,82 @@ export class AkashDNSSync {
 
       console.log(`Provider: ${providerUri}`)
 
-      // Query Cloudmos API for deployment info (secure, no direct provider connection)
-      // Cloudmos is owned by Akash, so this is first-party infrastructure
-      console.log('Fetching deployment info from Cloudmos API...')
+      // Use Akash blockchain to get deployment info
+      // This is secure (public blockchain data) and doesn't require API keys or TLS connections
+      console.log('Fetching deployment info from Akash blockchain...')
 
-      // Retry configuration for new deployments that may not be indexed yet
-      const maxRetries = 5
-      const baseDelay = 5000 // 5 seconds
-      let lastError: Error | null = null
+      // Get deployment details using akash CLI
+      try {
+        const { stdout: leaseListOutput } = await execAsync(
+          `akash query market lease list ` +
+            `--owner ${this.akashNode.includes('testnet') ? process.env.AKASH_TESTNET_ADDRESS : process.env.AKASH_ADDRESS || ''} ` +
+            `--dseq ${dseq} ` +
+            `--node ${this.akashNode} ` +
+            `--chain-id ${this.akashChainId} ` +
+            `--output json`
+        )
 
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        if (attempt > 0) {
-          const delay = baseDelay * Math.pow(2, attempt - 1) // 5s, 10s, 20s, 40s, 80s
-          console.log(
-            `Waiting ${delay / 1000}s before retry ${attempt + 1}/${maxRetries}...`
-          )
-          await setTimeout(delay)
+        const leaseData = JSON.parse(leaseListOutput)
+        const lease = leaseData.leases?.[0]?.lease
+
+        if (!lease) {
+          console.error('No lease found for deployment')
+          return null
         }
 
-        try {
-          const cloudmosResponse = await globalThis.fetch(
-            `https://api.cloudmos.io/v1/deployments/${dseq}`
-          )
+        console.log('Lease found on blockchain')
 
-          if (cloudmosResponse.ok) {
-            const cloudmosData = (await cloudmosResponse.json()) as {
-              services?: Array<{ name: string; uris?: string[] }>
-            }
-            console.log('Got deployment info from Cloudmos')
+        // For Akash deployments, services are exposed via provider ingress
+        // The service hostname pattern is typically: <service>.<dseq>.<provider-domain>
+        // We'll return instructions for manual DNS configuration since service endpoints
+        // aren't stored on-chain - they're managed by providers
 
-            // Extract service URIs from Cloudmos data
-            const services: AkashService[] = []
-            if (cloudmosData.services) {
-              for (const service of cloudmosData.services) {
-                if (service.uris && service.uris.length > 0) {
-                  const uri = service.uris[0]
-                  const match = uri.match(/^(?:https?:\/\/)?([^:/]+):?(\d+)?/)
-                  if (match) {
-                    services.push({
-                      name: service.name,
-                      externalIP: match[1],
-                      port: match[2] ? parseInt(match[2]) : 80,
-                      subdomain: '',
-                    })
-                  }
-                }
-              }
-            }
+        console.warn(
+          '\n' +
+            '═══════════════════════════════════════════════════════════════\n' +
+            'MANUAL DNS CONFIGURATION REQUIRED\n' +
+            '═══════════════════════════════════════════════════════════════\n' +
+            '\n' +
+            'Deployment created successfully, but automatic DNS sync is not available.\n' +
+            '\n' +
+            'To get your service URLs:\n' +
+            '1. Visit: https://console.akash.network\n' +
+            '2. Find deployment: ' +
+            dseq +
+            '\n' +
+            '3. Copy the service URI(s)\n' +
+            '4. Configure DNS manually:\n' +
+            '   - Extract IP from service URI\n' +
+            '   - Point your DNS records to that IP\n' +
+            '\n' +
+            'Alternative: Get Akash Console API key for automatic sync\n' +
+            '- Generate API key at: https://console.akash.network/settings/authorizations\n' +
+            '- Add AKASH_CONSOLE_API_KEY to GitHub Secrets\n' +
+            '- Update akashDnsSync.ts to use authenticated API calls\n' +
+            '\n' +
+            'Deployment Info:\n' +
+            '  DSEQ: ' +
+            dseq +
+            '\n' +
+            '  Provider: ' +
+            provider +
+            '\n' +
+            '  Provider URI: ' +
+            providerUri +
+            '\n' +
+            '═══════════════════════════════════════════════════════════════\n'
+        )
 
-            if (services.length > 0) {
-              console.log(
-                `Successfully retrieved ${services.length} service(s) from Cloudmos`
-              )
-              return { dseq, provider, services }
-            }
-
-            // Deployment found but no services available yet - retry
-            console.warn(
-              `Deployment ${dseq} found but no service URIs available yet (attempt ${attempt + 1}/${maxRetries})`
-            )
-            if (attempt === maxRetries - 1) {
-              console.error(
-                'Deployment exists but services not available after all retries. ' +
-                  'This may indicate the deployment is still starting up.'
-              )
-              return null
-            }
-            // Continue to next retry
-            continue
-          }
-
-          // API returned non-OK status
-          if (cloudmosResponse.status === 404) {
-            console.warn(
-              `Deployment ${dseq} not found in Cloudmos (attempt ${attempt + 1}/${maxRetries})`
-            )
-            if (attempt === maxRetries - 1) {
-              console.error(
-                'Deployment not found after all retries. It may be too new or may not exist.'
-              )
-              return null
-            }
-            // Continue to next retry
-            continue
-          }
-
-          // Other error status
-          console.error(
-            `Cloudmos API returned ${cloudmosResponse.status}: ${cloudmosResponse.statusText}`
-          )
-          lastError = new Error(
-            `API returned ${cloudmosResponse.status}: ${cloudmosResponse.statusText}`
-          )
-        } catch (error) {
-          console.error(
-            `Failed to fetch from Cloudmos API (attempt ${attempt + 1}/${maxRetries}):`,
-            error
-          )
-          lastError = error as Error
-          // Continue to next retry unless it's the last attempt
-          if (attempt === maxRetries - 1) {
-            return null
-          }
+        // Return empty services array to indicate manual configuration needed
+        return {
+          dseq,
+          provider,
+          services: [],
         }
+      } catch (error) {
+        console.error('Failed to query Akash blockchain:', error)
+        return null
       }
-
-      // All retries exhausted
-      console.error(
-        'Failed to get deployment info after all retries:',
-        lastError
-      )
-      return null
 
       // SECURITY NOTE: Removed insecure fallback to direct provider queries
       //
