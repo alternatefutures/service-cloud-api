@@ -1,5 +1,7 @@
 # Deploy Infisical secrets manager to Akash Network
 name: Deploy Infisical to Akash
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
