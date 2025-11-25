@@ -317,6 +317,7 @@ jobs:
         if: ${{ github.event.inputs.action == 'deploy' }}
         env:
           AKASH_KEY_NAME: deploy
+          AKASH_KEYRING_BACKEND: test
         run: |
           echo "Monitoring deployment events until ready..."
 
@@ -329,6 +330,8 @@ jobs:
             --dseq ${{ env.DSEQ }} \
             --provider ${{ env.PROVIDER }} \
             --from $AKASH_KEY_NAME \
+            --keyring-backend $AKASH_KEYRING_BACKEND \
+            --home $HOME/.akash \
             --follow > /tmp/lease-events.log 2>&1 &
 
           EVENT_PID=$!
