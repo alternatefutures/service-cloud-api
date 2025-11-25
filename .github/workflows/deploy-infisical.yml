@@ -313,11 +313,58 @@ jobs:
 
           echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
 
-      - name: Wait for lease to be ready
+      - name: Wait for deployment to be ready
         if: ${{ github.event.inputs.action == 'deploy' }}
+        env:
+          AKASH_KEY_NAME: deploy
         run: |
-          echo "Waiting for lease to be active..."
-          sleep 30
+          echo "Monitoring deployment events until ready..."
+
+          TIMEOUT=300  # 5 minutes max
+          ELAPSED=0
+          INTERVAL=5
+
+          # Start monitoring lease events in background
+          provider-services lease-events \
+            --dseq ${{ env.DSEQ }} \
+            --provider ${{ env.PROVIDER }} \
+            --from $AKASH_KEY_NAME \
+            --follow > /tmp/lease-events.log 2>&1 &
+
+          EVENT_PID=$!
+          echo "Started event monitoring (PID: $EVENT_PID)"
+
+          # Poll events log for readiness indicators
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            if [ -f /tmp/lease-events.log ]; then
+              # Check for deployment ready indicators
+              if grep -qiE "(deploy.*complete|service.*running|replicas.*ready|healthy)" /tmp/lease-events.log; then
+                echo "✓ Deployment is ready!"
+                kill $EVENT_PID 2>/dev/null || true
+                cat /tmp/lease-events.log
+                exit 0
+              fi
+
+              # Show progress
+              if [ $((ELAPSED % 15)) -eq 0 ]; then
+                echo "Still waiting... (${ELAPSED}s elapsed)"
+                tail -5 /tmp/lease-events.log 2>/dev/null || echo "  No events yet"
+              fi
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          # Timeout reached
+          echo "⚠ Timeout waiting for deployment (${TIMEOUT}s)"
+          echo "Latest events:"
+          tail -20 /tmp/lease-events.log 2>/dev/null || echo "  No events captured"
+          kill $EVENT_PID 2>/dev/null || true
+
+          # Don't fail - deployment might still be in progress
+          echo "Proceeding anyway - DNS sync will retry if needed"
+          exit 0
 
       - name: Setup Node.js for DNS sync
         if: ${{ github.event.inputs.action == 'deploy' }}

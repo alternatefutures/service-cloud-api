@@ -6,6 +6,7 @@
 /* eslint-disable no-console */
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import { setTimeout } from 'timers/promises'
 import { DNSManager } from './dnsManager.js'
 import type {
   AkashDeployment,
@@ -66,14 +67,47 @@ export class AkashDNSSync {
         // Use provider-services lease-status to get service hostnames
         // This uses proper Akash client certificates (already set up in workflow)
         const keyName = process.env.AKASH_KEY_NAME || 'deploy'
-        const { stdout: leaseStatusOutput } = await execAsync(
-          `provider-services lease-status ` +
-            `--dseq ${dseq} ` +
-            `--from ${keyName} ` +
-            `--provider ${provider}`
-        )
 
-        console.log('Got lease status from provider')
+        // Retry logic for transient 404s (provider may need a moment after events indicate ready)
+        const maxRetries = 3
+        const retryDelay = 5000 // 5 seconds
+        let leaseStatusOutput = ''
+        let lastError: Error | null = null
+
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+          try {
+            if (attempt > 0) {
+              console.log(
+                `Retrying lease-status query (attempt ${attempt + 1}/${maxRetries})...`
+              )
+              await new Promise(resolve => setTimeout(resolve, retryDelay))
+            }
+
+            const result = await execAsync(
+              `provider-services lease-status ` +
+                `--dseq ${dseq} ` +
+                `--from ${keyName} ` +
+                `--provider ${provider}`
+            )
+            leaseStatusOutput = result.stdout
+            console.log('Got lease status from provider')
+            break // Success
+          } catch (err) {
+            lastError = err as Error
+            const errorMessage =
+              (err as { stderr?: string }).stderr || (err as Error).message
+
+            if (errorMessage.includes('404') && attempt < maxRetries - 1) {
+              console.log('Provider returned 404, retrying...')
+              continue
+            }
+            throw err // Non-404 or final attempt
+          }
+        }
+
+        if (!leaseStatusOutput && lastError) {
+          throw lastError
+        }
 
         // Parse the output to extract service hostnames
         // Format is typically JSON with services and their URIs
@@ -84,7 +118,7 @@ export class AkashDNSSync {
         if (leaseStatus.services) {
           for (const [serviceName, serviceData] of Object.entries(
             leaseStatus.services
-          ) as Array<[string, any]>) {
+          ) as Array<[string, { uris?: string[] }]>) {
             const uris = serviceData.uris || []
             if (uris.length > 0) {
               // Get the first URI and extract hostname/IP
