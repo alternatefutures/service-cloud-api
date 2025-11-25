@@ -80,7 +80,7 @@ export class AkashDNSSync {
               console.log(
                 `Retrying lease-status query (attempt ${attempt + 1}/${maxRetries})...`
               )
-              await new Promise(resolve => setTimeout(resolve, retryDelay))
+              await setTimeout(retryDelay)
             }
 
             const result = await execAsync(
