@@ -318,6 +318,7 @@ jobs:
         env:
           AKASH_KEY_NAME: deploy
           AKASH_KEYRING_BACKEND: test
+          AKASH_NODE: https://rpc.akashnet.net:443
         run: |
           echo "Monitoring deployment events until ready..."
 
@@ -332,6 +333,7 @@ jobs:
             --from $AKASH_KEY_NAME \
             --keyring-backend $AKASH_KEYRING_BACKEND \
             --home $HOME/.akash \
+            --node $AKASH_NODE \
             --follow > /tmp/lease-events.log 2>&1 &
 
           EVENT_PID=$!
