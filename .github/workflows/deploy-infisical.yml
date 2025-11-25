@@ -317,44 +317,24 @@ jobs:
         if: ${{ github.event.inputs.action == 'deploy' }}
         env:
           AKASH_KEY_NAME: deploy
-          AKASH_KEYRING_BACKEND: test
-          AKASH_NODE: https://rpc.akashnet.net:443
         run: |
-          echo "Monitoring deployment events until ready..."
+          echo "Waiting for deployment to be accessible on provider..."
+          echo "Polling lease-status until provider responds..."
 
           TIMEOUT=300  # 5 minutes max
           ELAPSED=0
-          INTERVAL=5
+          INTERVAL=10  # Check every 10 seconds
 
-          # Start monitoring lease events in background
-          provider-services lease-events \
-            --dseq ${{ env.DSEQ }} \
-            --provider ${{ env.PROVIDER }} \
-            --from $AKASH_KEY_NAME \
-            --keyring-backend $AKASH_KEYRING_BACKEND \
-            --home $HOME/.akash \
-            --node $AKASH_NODE \
-            --follow > /tmp/lease-events.log 2>&1 &
-
-          EVENT_PID=$!
-          echo "Started event monitoring (PID: $EVENT_PID)"
-
-          # Poll events log for readiness indicators
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            if [ -f /tmp/lease-events.log ]; then
-              # Check for deployment ready indicators
-              if grep -qiE "(deploy.*complete|service.*running|replicas.*ready|healthy)" /tmp/lease-events.log; then
-                echo "✓ Deployment is ready!"
-                kill $EVENT_PID 2>/dev/null || true
-                cat /tmp/lease-events.log
-                exit 0
-              fi
+            echo "Checking lease status... (${ELAPSED}s elapsed)"
 
-              # Show progress
-              if [ $((ELAPSED % 15)) -eq 0 ]; then
-                echo "Still waiting... (${ELAPSED}s elapsed)"
-                tail -5 /tmp/lease-events.log 2>/dev/null || echo "  No events yet"
-              fi
+            # Try to get lease status
+            if provider-services lease-status \
+              --dseq ${{ env.DSEQ }} \
+              --provider ${{ env.PROVIDER }} \
+              --from $AKASH_KEY_NAME 2>&1 | grep -q "services"; then
+              echo "✓ Deployment is ready! Provider is responding with service info."
+              exit 0
             fi
 
             sleep $INTERVAL
@@ -362,13 +342,8 @@ jobs:
           done
 
           # Timeout reached
-          echo "⚠ Timeout waiting for deployment (${TIMEOUT}s)"
-          echo "Latest events:"
-          tail -20 /tmp/lease-events.log 2>/dev/null || echo "  No events captured"
-          kill $EVENT_PID 2>/dev/null || true
-
-          # Don't fail - deployment might still be in progress
-          echo "Proceeding anyway - DNS sync will retry if needed"
+          echo "⚠ Timeout after ${TIMEOUT}s - deployment may still be starting"
+          echo "DNS sync will retry if provider isn't ready yet"
           exit 0
 
       - name: Setup Node.js for DNS sync
