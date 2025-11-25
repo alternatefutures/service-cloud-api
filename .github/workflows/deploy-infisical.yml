@@ -373,6 +373,23 @@ jobs:
           echo "DNS sync will retry if provider isn't ready yet"
           exit 0
 
+      - name: Capture deployment logs for debugging
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        continue-on-error: true
+        env:
+          AKASH_KEY_NAME: deploy
+        run: |
+          echo "Capturing deployment logs from provider..."
+          echo "This helps diagnose deployment issues"
+          echo ""
+
+          # Get logs from all services (last 100 lines each)
+          provider-services lease-logs \
+            --dseq ${{ env.DSEQ }} \
+            --provider ${{ env.PROVIDER }} \
+            --from $AKASH_KEY_NAME \
+            --tail 100 || echo "Failed to retrieve logs (deployment may not be running yet)"
+
       - name: Setup Node.js for DNS sync
         if: ${{ github.event.inputs.action == 'deploy' }}
         uses: actions/setup-node@v6
