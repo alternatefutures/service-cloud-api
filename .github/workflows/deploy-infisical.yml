@@ -240,6 +240,11 @@ jobs:
         run: |
           BIDS=$(akash query market bid list --owner ${{ env.AKASH_ADDRESS }} --dseq ${{ env.DSEQ }} --node $AKASH_NODE --output json)
 
+          # Blocklist of providers with known issues
+          BLOCKLIST=(
+            "akash1r2yz5fzkk9gt0r3mk9u2c29q5mmtef050cryak"  # Never responds with service info
+          )
+
           echo "=== Filtering bids by provider uptime (minimum: ${MIN_UPTIME}%) ==="
 
           # Get list of all providers from bids
@@ -249,6 +254,21 @@ jobs:
           FILTERED_BIDS="[]"
 
           for PROVIDER_ADDR in $PROVIDERS; do
+            # Check blocklist first
+            BLOCKED=false
+            for BLOCKED_PROVIDER in "${BLOCKLIST[@]}"; do
+              if [ "$PROVIDER_ADDR" == "$BLOCKED_PROVIDER" ]; then
+                echo "Checking provider: $PROVIDER_ADDR"
+                echo "  ✗ BLOCKED - Provider has known reliability issues"
+                BLOCKED=true
+                break
+              fi
+            done
+
+            if [ "$BLOCKED" == "true" ]; then
+              continue
+            fi
+
             echo "Checking provider: $PROVIDER_ADDR"
 
             # Query provider attributes from Akash
