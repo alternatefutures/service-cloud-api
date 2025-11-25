@@ -137,11 +137,15 @@ jobs:
 
             if [ -f "$WALLET_PEM" ]; then
               echo "Found generated certificate: $WALLET_PEM"
-              # Extract cert and key from PEM file
-              openssl x509 -in "$WALLET_PEM" -out "$CERT_PATH/client.crt"
-              openssl pkey -in "$WALLET_PEM" -out "$CERT_PATH/client.key"
-              chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
-              echo "Certificates extracted to $CERT_PATH"
+              # PEM files contain both cert and key - provider-services can use them directly
+              # Just copy the PEM file to the expected cert location
+              cp "$WALLET_PEM" "$CERT_PATH/client.pem"
+              chmod 600 "$CERT_PATH/client.pem"
+              echo "Certificate copied to $CERT_PATH/client.pem"
+
+              # Also create symlinks for compatibility
+              ln -sf "$CERT_PATH/client.pem" "$CERT_PATH/client.crt" 2>/dev/null || true
+              ln -sf "$CERT_PATH/client.pem" "$CERT_PATH/client.key" 2>/dev/null || true
             elif [ -f "$HOME/.akash/client.crt" ] && [ -f "$HOME/.akash/client.key" ]; then
               cp "$HOME/.akash/client.crt" "$CERT_PATH/client.crt"
               cp "$HOME/.akash/client.key" "$CERT_PATH/client.key"
@@ -153,16 +157,9 @@ jobs:
           fi
 
           # Verify certificates exist
-          if [ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]; then
+          if [ -f "$CERT_PATH/client.pem" ] || ([ -f "$CERT_PATH/client.crt" ] && [ -f "$CERT_PATH/client.key" ]); then
             echo "✓ Client certificates ready at $CERT_PATH"
             ls -lh "$CERT_PATH"
-
-            # Remove any old PEM files to avoid conflicts with separate cert/key files
-            # PEM files may have encrypted keys that require passphrases
-            if [ -f "$HOME/.akash"/*.pem ]; then
-              echo "Removing old PEM files to avoid conflicts..."
-              rm -f "$HOME/.akash"/*.pem
-            fi
           else
             echo "✗ Client certificates not found at $CERT_PATH"
             ls -lha "$HOME/.akash" || true
