@@ -132,7 +132,17 @@ jobs:
             sleep 15
 
             # Copy generated certificates to expected location
-            if [ -f "$HOME/.akash/client.crt" ] && [ -f "$HOME/.akash/client.key" ]; then
+            # akash cert generate creates a PEM file named after the wallet address
+            WALLET_PEM="$HOME/.akash/${{ env.AKASH_ADDRESS }}.pem"
+
+            if [ -f "$WALLET_PEM" ]; then
+              echo "Found generated certificate: $WALLET_PEM"
+              # Extract cert and key from PEM file
+              openssl x509 -in "$WALLET_PEM" -out "$CERT_PATH/client.crt"
+              openssl pkey -in "$WALLET_PEM" -out "$CERT_PATH/client.key"
+              chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
+              echo "Certificates extracted to $CERT_PATH"
+            elif [ -f "$HOME/.akash/client.crt" ] && [ -f "$HOME/.akash/client.key" ]; then
               cp "$HOME/.akash/client.crt" "$CERT_PATH/client.crt"
               cp "$HOME/.akash/client.key" "$CERT_PATH/client.key"
               chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
