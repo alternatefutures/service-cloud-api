@@ -70,11 +70,7 @@ export class AkashDNSSync {
           `provider-services lease-status ` +
             `--dseq ${dseq} ` +
             `--from ${keyName} ` +
-            `--provider ${provider} ` +
-            `--home $HOME/.akash ` +
-            `--node ${this.akashNode} ` +
-            `--chain-id ${this.akashChainId} ` +
-            `--keyring-backend test`
+            `--provider ${provider}`
         )
 
         console.log('Got lease status from provider')
