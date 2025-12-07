@@ -1,0 +1,290 @@
+name: Deploy API Standalone
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image to GHCR"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AKASH_NODE: https://rpc.akashnet.net:443
+  AKASH_CHAIN_ID: akashnet-2
+  AKASH_GAS_PRICES: 0.025uakt
+  AKASH_GAS_ADJUSTMENT: "1.5"
+  # Preferred provider (europlots - reliable)
+  PREFERRED_PROVIDER: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Akash CLI
+        run: |
+          # Install akash node CLI
+          curl -sSfL https://raw.githubusercontent.com/akash-network/node/master/install.sh | sh -s -- -b /usr/local/bin
+          akash version
+
+          # Install provider-services CLI
+          PROVIDER_VERSION=$(curl -s https://api.github.com/repos/akash-network/provider/releases/latest | jq -r '.tag_name')
+          echo "Installing provider-services $PROVIDER_VERSION"
+          curl -sSfL "https://github.com/akash-network/provider/releases/download/${PROVIDER_VERSION}/provider-services_linux_amd64.zip" -o /tmp/provider.zip
+          unzip -o /tmp/provider.zip -d /usr/local/bin/
+          chmod +x /usr/local/bin/provider-services
+
+      - name: Setup Akash Wallet
+        run: |
+          mkdir -p $HOME/.akash
+          echo "${{ secrets.AKASH_MNEMONIC }}" | akash keys add deployer --recover --keyring-backend=test --home $HOME/.akash
+          export AKASH_FROM=$(akash keys show deployer -a --keyring-backend=test --home $HOME/.akash)
+          echo "AKASH_FROM=$AKASH_FROM" >> $GITHUB_ENV
+          echo "AKASH_HOME=$HOME/.akash" >> $GITHUB_ENV
+          echo "Wallet address: $AKASH_FROM"
+
+      - name: Setup Certificate
+        run: |
+          echo "Creating certificate for provider communication..."
+
+          # Generate certificate
+          akash tx cert generate client \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME
+
+          if [ -f "$AKASH_HOME/$AKASH_FROM.pem" ]; then
+            echo "Certificate file generated at $AKASH_HOME/$AKASH_FROM.pem"
+          else
+            echo "ERROR: Certificate file not found!"
+            exit 1
+          fi
+
+          # Publish certificate to chain
+          akash tx cert publish client \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME \
+            --yes \
+            --gas-prices $AKASH_GAS_PRICES \
+            --gas auto \
+            --gas-adjustment $AKASH_GAS_ADJUSTMENT || echo "Certificate may already be published"
+
+          sleep 10
+          echo "Certificate setup complete"
+
+      - name: Prepare SDL
+        run: |
+          # Create deployment SDL with secrets substituted
+          cat > /tmp/deploy.yaml << EOF
+          ---
+          version: "2.0"
+
+          services:
+            api:
+              image: ghcr.io/alternatefutures/service-cloud-api:latest
+              credentials:
+                host: ghcr.io
+                username: alternatefutures
+                password: "${{ secrets.GHCR_PAT }}"
+              expose:
+                - port: 4000
+                  as: 80
+                  to:
+                    - global: true
+                  accept:
+                    - api.alternatefutures.ai
+              env:
+                - NODE_ENV=production
+                - PORT=4000
+                - DATABASE_URL=${{ secrets.DATABASE_URL }}
+                - JWT_SECRET=${{ secrets.JWT_SECRET }}
+                - JWT_EXPIRY=7d
+                - AUTH_SERVICE_URL=https://auth.alternatefutures.ai
+                - INFISICAL_SITE_URL=https://secrets.alternatefutures.ai
+                - INFISICAL_CLIENT_ID=${{ secrets.INFISICAL_CLIENT_ID }}
+                - INFISICAL_CLIENT_SECRET=${{ secrets.INFISICAL_CLIENT_SECRET }}
+                - INFISICAL_PROJECT_ID=${{ secrets.INFISICAL_PROJECT_ID }}
+                - INFISICAL_ENVIRONMENT=prod
+                - APP_URL=*
+
+          profiles:
+            compute:
+              api:
+                resources:
+                  cpu:
+                    units: 2.0
+                  memory:
+                    size: 2Gi
+                  storage:
+                    - size: 1Gi
+
+            placement:
+              akash:
+                attributes:
+                  host: akash
+                signedBy:
+                  anyOf:
+                    - "akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63"
+                pricing:
+                  api:
+                    denom: uakt
+                    amount: 100
+
+          deployment:
+            api:
+              akash:
+                profile: api
+                count: 1
+          EOF
+
+          echo "SDL prepared"
+          cat /tmp/deploy.yaml
+
+      - name: Create Deployment
+        id: create
+        run: |
+          echo "Creating new deployment..."
+
+          # Create deployment
+          akash tx deployment create /tmp/deploy.yaml \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME \
+            --yes \
+            --gas-prices $AKASH_GAS_PRICES \
+            --gas auto \
+            --gas-adjustment $AKASH_GAS_ADJUSTMENT \
+            --output json > /tmp/tx-result.json 2>&1 || true
+
+          cat /tmp/tx-result.json
+
+          # Wait for transaction to be included
+          sleep 15
+
+          # Get all deployments and find the latest one
+          echo "Fetching deployments..."
+          akash query deployment list \
+            --owner $AKASH_FROM \
+            --state active \
+            --output json > /tmp/deployments.json
+
+          # Get the last (newest) deployment's dseq
+          DSEQ=$(cat /tmp/deployments.json | jq -r '.deployments[-1].deployment.id.dseq')
+
+          if [ "$DSEQ" = "null" ] || [ -z "$DSEQ" ]; then
+            echo "ERROR: Could not extract DSEQ from deployments"
+            cat /tmp/deployments.json
+            exit 1
+          fi
+
+          echo "New DSEQ: $DSEQ"
+          echo "DSEQ=$DSEQ" >> $GITHUB_ENV
+
+      - name: Wait for Bids
+        run: |
+          echo "Waiting for bids on DSEQ: $DSEQ"
+          sleep 30
+
+          # List bids
+          akash query market bid list \
+            --owner $AKASH_FROM \
+            --dseq $DSEQ \
+            --output json | jq '.bids'
+
+      - name: Accept Bid from Preferred Provider
+        run: |
+          echo "Accepting bid from provider: $PREFERRED_PROVIDER"
+
+          akash tx market lease create \
+            --dseq $DSEQ \
+            --provider $PREFERRED_PROVIDER \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME \
+            --yes \
+            --gas-prices $AKASH_GAS_PRICES \
+            --gas auto \
+            --gas-adjustment $AKASH_GAS_ADJUSTMENT
+
+          sleep 10
+          echo "Lease created"
+
+      - name: Send Manifest
+        run: |
+          echo "Sending manifest to provider..."
+
+          provider-services send-manifest /tmp/deploy.yaml \
+            --dseq $DSEQ \
+            --provider $PREFERRED_PROVIDER \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME
+
+          echo "Manifest sent"
+
+      - name: Get Service URIs
+        run: |
+          echo "Waiting for service to be ready..."
+          sleep 60
+
+          # Get the new ingress URL
+          INGRESS=$(provider-services lease-status \
+            --dseq $DSEQ \
+            --provider $PREFERRED_PROVIDER \
+            --from deployer \
+            --keyring-backend=test \
+            --home $AKASH_HOME 2>/dev/null | jq -r '.services["api"].uris[0]' || echo "")
+
+          if [ -n "$INGRESS" ]; then
+            echo "New ingress: $INGRESS"
+            echo "INGRESS=$INGRESS" >> $GITHUB_ENV
+          fi
+
+      - name: Update Caddy Backend
+        run: |
+          if [ -n "$INGRESS" ]; then
+            echo "Updating Caddy backend for api.alternatefutures.ai to $INGRESS"
+
+            # Update Caddy route via Admin API
+            curl -X PATCH "http://170.75.255.101:31799/id/route-api" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"handle\": [{
+                  \"handler\": \"reverse_proxy\",
+                  \"upstreams\": [{\"dial\": \"$INGRESS:443\"}],
+                  \"transport\": {
+                    \"protocol\": \"http\",
+                    \"tls\": {
+                      \"insecure_skip_verify\": true,
+                      \"server_name\": \"$INGRESS\"
+                    }
+                  },
+                  \"headers\": {
+                    \"request\": {
+                      \"set\": {
+                        \"Host\": [\"$INGRESS\"]
+                      }
+                    }
+                  }
+                }]
+              }" || echo "Caddy update may require manual intervention"
+          fi
+
+      - name: Deployment Summary
+        run: |
+          echo "## Akash API Deployment Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**DSEQ**: \`$DSEQ\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Provider**: \`$PREFERRED_PROVIDER\`" >> $GITHUB_STEP_SUMMARY
+          echo "**URL**: https://api.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          if [ -n "$INGRESS" ]; then
+            echo "**Ingress**: \`$INGRESS\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Using external Postgres database (standalone deployment)" >> $GITHUB_STEP_SUMMARY

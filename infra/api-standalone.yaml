@@ -1,0 +1,75 @@
+---
+# API Service - Standalone (uses external Postgres)
+# Connects to shared Postgres deployment (DSEQ 24520638)
+#
+# This allows independent redeployment of the API without data loss
+#
+version: '2.0'
+
+services:
+  api:
+    image: ghcr.io/alternatefutures/service-cloud-api:latest
+    credentials:
+      host: ghcr.io
+      username: alternatefutures
+      password: ${GHCR_PAT}
+    expose:
+      - port: 4000
+        as: 80
+        to:
+          - global: true
+        accept:
+          - api.alternatefutures.ai
+    env:
+      # External Postgres (standalone deployment)
+      - DATABASE_URL=${DATABASE_URL}
+
+      # Server
+      - PORT=4000
+      - NODE_ENV=production
+
+      # JWT (must match service-auth)
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRY=7d
+
+      # Auth Service
+      - AUTH_SERVICE_URL=https://auth.alternatefutures.ai
+
+      # Infisical for additional secrets
+      - INFISICAL_SITE_URL=https://secrets.alternatefutures.ai
+      - INFISICAL_CLIENT_ID=${INFISICAL_CLIENT_ID}
+      - INFISICAL_CLIENT_SECRET=${INFISICAL_CLIENT_SECRET}
+      - INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID}
+      - INFISICAL_ENVIRONMENT=prod
+
+      # CORS
+      - APP_URL=*
+
+profiles:
+  compute:
+    api:
+      resources:
+        cpu:
+          units: 2.0
+        memory:
+          size: 2Gi
+        storage:
+          - size: 1Gi
+
+  placement:
+    akash:
+      attributes:
+        host: akash
+      signedBy:
+        anyOf:
+          - 'akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63'
+      pricing:
+        api:
+          denom: uakt
+          amount: 1000
+
+deployment:
+  api:
+    akash:
+      profile: api
+      count: 1

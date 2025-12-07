@@ -1,0 +1,64 @@
+---
+# Standalone Postgres Database
+# Shared by: API, Auth, and future services
+#
+# After deployment, add connection details to Infisical:
+#   DATABASE_HOST=<ingress-url>
+#   DATABASE_PORT=5432
+#   DATABASE_USER=alternatefutures
+#   DATABASE_PASSWORD=<from-secrets>
+#   DATABASE_NAME=alternatefutures
+#
+version: '2.0'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    expose:
+      - port: 5432
+        as: 5432
+        to:
+          - global: true
+    params:
+      storage:
+        data:
+          mount: /var/lib/postgresql/data
+    env:
+      - POSTGRES_USER=alternatefutures
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=alternatefutures
+      - PGDATA=/var/lib/postgresql/data/pgdata
+
+profiles:
+  compute:
+    postgres:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1Gi
+        storage:
+          - size: 1Gi
+          - name: data
+            size: 10Gi
+            attributes:
+              persistent: true
+              class: beta3
+
+  placement:
+    akash:
+      attributes:
+        host: akash
+      signedBy:
+        anyOf:
+          - 'akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63'
+      pricing:
+        postgres:
+          denom: uakt
+          amount: 1000
+
+deployment:
+  postgres:
+    akash:
+      profile: postgres
+      count: 1
