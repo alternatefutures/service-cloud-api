@@ -170,22 +170,24 @@ jobs:
           # Extract DSEQ from transaction result (more reliable than querying deployments)
           echo "Extracting DSEQ from transaction result..."
 
-          # Try to get DSEQ from the deployment created event
+          # The dseq is nested inside the "id" attribute as a JSON string
+          # Event type: akash.deployment.v1.EventDeploymentCreated
+          # id value: {"owner":"...", "dseq":"24531519"}
           DSEQ=$(cat /tmp/tx-result.json | jq -r '
-            .logs[0].events[] |
-            select(.type=="akash.v1.EventDeploymentCreated") |
+            .events[] |
+            select(.type=="akash.deployment.v1.EventDeploymentCreated") |
             .attributes[] |
-            select(.key=="dseq") |
-            .value' 2>/dev/null)
+            select(.key=="id") |
+            .value | fromjson | .dseq' 2>/dev/null)
 
-          # Fallback: try alternate event format
+          # Fallback: try with quotes stripped (older format)
           if [ "$DSEQ" = "null" ] || [ -z "$DSEQ" ]; then
             DSEQ=$(cat /tmp/tx-result.json | jq -r '
               .events[] |
-              select(.type=="akash.v1.EventDeploymentCreated") |
+              select(.type=="akash.deployment.v1.EventDeploymentCreated") |
               .attributes[] |
-              select(.key=="dseq") |
-              .value' 2>/dev/null)
+              select(.key=="id") |
+              .value' 2>/dev/null | sed 's/.*"dseq":"\([0-9]*\)".*/\1/')
           fi
 
           # Fallback: query deployments and get highest DSEQ (newest)
