@@ -13,7 +13,7 @@ import {
   setEnsContentHash,
   publishIpnsRecord,
   updateIpnsRecord,
-} from '../services/dns'
+} from '../services/dns/index.js'
 import {
   getSslCertificateStatus,
   renewSslCertificate as renewSsl,
