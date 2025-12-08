@@ -78,6 +78,18 @@ jobs:
           sleep 10
           echo "Certificate setup complete"
 
+      - name: Get Image Tag
+        run: |
+          # Get the SHA from the triggering workflow or current commit
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            SHA="${{ github.event.workflow_run.head_sha }}"
+          else
+            SHA="${{ github.sha }}"
+          fi
+          SHORT_SHA=$(echo $SHA | cut -c1-7)
+          echo "IMAGE_TAG=main-$SHORT_SHA" >> $GITHUB_ENV
+          echo "Using image tag: main-$SHORT_SHA"
+
       - name: Prepare SDL
         run: |
           # Create deployment SDL with secrets substituted
@@ -87,7 +99,7 @@ jobs:
 
           services:
             api:
-              image: ghcr.io/alternatefutures/service-cloud-api:main
+              image: ghcr.io/alternatefutures/service-cloud-api:$IMAGE_TAG
               credentials:
                 host: ghcr.io
                 username: alternatefutures
