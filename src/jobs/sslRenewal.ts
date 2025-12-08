@@ -3,7 +3,7 @@ import { PrismaClient, SslStatus } from '@prisma/client'
 import {
   shouldRenewCertificate,
   requestSslCertificate,
-} from '../services/dns/sslCertificate'
+} from '../services/dns/sslCertificate.js'
 
 const prisma = new PrismaClient()
 

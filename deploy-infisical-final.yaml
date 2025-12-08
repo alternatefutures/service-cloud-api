@@ -1,0 +1,98 @@
+---
+# Infisical Secrets Manager on Akash
+# Deploy this FIRST, then deploy main application
+version: "2.0"
+
+services:
+  # MongoDB - Backend for Infisical
+  mongo:
+    image: mongo:7
+    env:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=fd88a9fe393bdddeed336a7f35289796
+    expose:
+      - port: 27017
+        as: 27017
+        to:
+          - service: infisical
+    params:
+      storage:
+        data:
+          mount: /data/db
+          readOnly: false
+
+  # Infisical - Open Source Secrets Manager
+  infisical:
+    image: infisical/infisical:latest
+    env:
+      - ENCRYPTION_KEY=2931120f0296358e9aaf6fe4929f5ad8
+      - JWT_SIGNUP_SECRET=36bbae0d102b24a76a93f3e90feaa2b1c38ba4eb7d8c2a95966904b6c4722ffe
+      - JWT_REFRESH_SECRET=36bbae0d102b24a76a93f3e90feaa2b1c38ba4eb7d8c2a95966904b6c4722ffe
+      - JWT_AUTH_SECRET=36bbae0d102b24a76a93f3e90feaa2b1c38ba4eb7d8c2a95966904b6c4722ffe
+      - JWT_SERVICE_SECRET=36bbae0d102b24a76a93f3e90feaa2b1c38ba4eb7d8c2a95966904b6c4722ffe
+      - MONGO_URL=mongodb://admin:fd88a9fe393bdddeed336a7f35289796@mongo:27017/infisical?authSource=admin
+      - SITE_URL=https://secrets.alternatefutures.ai
+      - HTTPS_ENABLED=false
+      - TELEMETRY_ENABLED=false
+      - SMTP_HOST=smtp.resend.com
+      - SMTP_PORT=587
+      - SMTP_SECURE=false
+      - SMTP_FROM_ADDRESS=noreply@alternatefutures.ai
+      - SMTP_FROM_NAME=Alternate Futures
+    expose:
+      - port: 8080
+        as: 80
+        to:
+          - global: true
+        accept:
+          - secrets.alternatefutures.ai
+    depends_on:
+      - mongo
+
+profiles:
+  compute:
+    mongo:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 2Gi
+        storage:
+          - name: data
+            size: 20Gi
+
+    infisical:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1Gi
+        storage:
+          size: 512Mi
+
+  placement:
+    dcloud:
+      # REQUIRE AUDITED PROVIDERS
+      signedBy:
+        anyOf:
+          - "akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63"
+      attributes:
+        host: akash
+      pricing:
+        mongo:
+          denom: uakt
+          amount: 25
+        infisical:
+          denom: uakt
+          amount: 20
+
+deployment:
+  mongo:
+    dcloud:
+      profile: mongo
+      count: 1
+
+  infisical:
+    dcloud:
+      profile: infisical
+      count: 1

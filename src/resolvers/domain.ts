@@ -1,5 +1,5 @@
 import { GraphQLError } from 'graphql'
-import { Context } from './types'
+import { Context } from './types.js'
 import {
   createCustomDomain,
   getVerificationInstructions,
@@ -17,8 +17,8 @@ import {
 import {
   getSslCertificateStatus,
   renewSslCertificate as renewSsl,
-} from '../jobs/sslRenewal'
-import { DomainUsageTracker } from '../services/billing/domainUsageTracker'
+} from '../jobs/sslRenewal.js'
+import { DomainUsageTracker } from '../services/billing/domainUsageTracker.js'
 import type { PrismaClient } from '@prisma/client'
 
 /**

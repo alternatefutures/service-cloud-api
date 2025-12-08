@@ -1,0 +1,64 @@
+# Caddy SSL Gateway Configuration
+# Automatic HTTPS via Let's Encrypt
+
+{
+    # Email for Let's Encrypt notifications
+    email admin@alternatefutures.ai
+
+    # Use Let's Encrypt production (comment out for testing with staging)
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# API Service - service-cloud-api
+api.alternatefutures.ai {
+    reverse_proxy {$API_BACKEND} {
+        header_up Host api.alternatefutures.ai
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # TLS to backend (Akash ingress uses HTTPS)
+        transport http {
+            tls
+            tls_insecure_skip_verify
+        }
+    }
+
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
+
+# Auth Service - service-auth
+auth.alternatefutures.ai {
+    reverse_proxy {$AUTH_BACKEND} {
+        header_up Host auth.alternatefutures.ai
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        transport http {
+            tls
+            tls_insecure_skip_verify
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

@@ -11,8 +11,8 @@ import {
   verifyARecord,
   getPlatformCnameTarget,
   getPlatformIpAddress,
-} from './dnsVerification'
-import { requestSslCertificate } from './sslCertificate'
+} from './dnsVerification.js'
+import { requestSslCertificate } from './sslCertificate.js'
 
 const defaultPrisma = new PrismaClient()
 

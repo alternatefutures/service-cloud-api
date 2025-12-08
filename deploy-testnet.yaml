@@ -225,6 +225,11 @@ profiles:
 
   placement:
     dcloud:
+      attributes:
+        host: akash
+      signedBy:
+        anyOf:
+          - "akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63"
       pricing:
         # Higher bids for testnet (2x increase from previous attempt)
         yb-node-1:

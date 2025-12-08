@@ -1,0 +1,185 @@
+---
+# Caddy Edge Proxy with Dynamic Domain Management
+# Uses Caddy's Admin API for instant domain updates
+# IP Lease: 170.75.255.101
+version: "2.0"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    env:
+      # Backend URLs (Akash ingress endpoints)
+      - BACKEND_API=cjrdmusuql9e34bevi8mjgj8pg.ingress.europlots.com
+      - BACKEND_AUTH=6ndirokr8hfs121h8k63mp04ig.ingress.europlots.com
+      - BACKEND_SECRETS=9tnnbebe65bvt1vd2g6k67a72g.ingress.parallelnode.de
+      # Admin API key (change this!)
+      - CADDY_ADMIN_KEY=${CADDY_ADMIN_KEY}
+      # Let's Encrypt certificate (base64 encoded) - valid Dec 3, 2025 to Mar 3, 2026
+      - SSL_CERT_B64=LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUQyRENDQTE2Z0F3SUJBZ0lTQlYyc3BybEc3SnBuWGQweGU4WEVaQmhOTUFvR0NDcUdTTTQ5QkFNRE1ESXgKQ3pBSkJnTlZCQVlUQWxWVE1SWXdGQVlEVlFRS0V3MU1aWFFuY3lCRmJtTnllWEIwTVFzd0NRWURWUVFERXdKRgpPREFlRncweU5URXlNRE13TkRBMU1EUmFGdzB5TmpBek1ETXdOREExTUROYU1DSXhJREFlQmdOVkJBTVRGMkZ3CmFTNWhiSFJsY201aGRHVm1kWFIxY21WekxtRnBNRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUUKK1dpVWJLeHRkc0hUK1lvZmZFNVl0d3ZJWVJBNTlMQnoyTXdlc3QxOVd4a1FuZldkV3plRzRRYldtM3BWMGs4dgpHei9KU2lHd2dQbUdiTXZub2Z1S0c2T0NBbUl3Z2dKZU1BNEdBMVVkRHdFQi93UUVBd0lIZ0RBZEJnTlZIU1VFCkZqQVVCZ2dyQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3REFZRFZSMFRBUUgvQkFJd0FEQWRCZ05WSFE0RUZnUVUKd2pxeThvSncxeThZRmlrc0ZXRjBnWTcxQWhRd0h3WURWUjBqQkJnd0ZvQVVqdzBUb3ZZdWZ0RlFiRE1ZT0YxWgpqaU55a2Nvd01nWUlLd1lCQlFVSEFRRUVKakFrTUNJR0NDc0dBUVVGQnpBQ2hoWm9kSFJ3T2k4dlpUZ3VhUzVzClpXNWpjaTV2Y21jdk1Ga0dBMVVkRVFSU01GQ0NGMkZ3YVM1aGJIUmxjbTVoZEdWbWRYUjFjbVZ6TG1GcGdoaGgKZFhSb0xtRnNkR1Z5Ym1GMFpXWjFkSFZ5WlhNdVlXbUNHM05sWTNKbGRITXVZV3gwWlhKdVlYUmxablYwZFhKbApjeTVoYVRBVEJnTlZIU0FFRERBS01BZ0dCbWVCREFFQ0FUQXRCZ05WSFI4RUpqQWtNQ0tnSUtBZWhoeG9kSFJ3Ck9pOHZaVGd1WXk1c1pXNWpjaTV2Y21jdk56Z3VZM0pzTUlJQkNnWUtLd1lCQkFIV2VRSUVBZ1NCK3dTQitBRDIKQUhVQVpCSEViS1FTN0tlSkhLSUNMZ0M4cTA4b0I5UWVOU2VyNnY3VkE4bDl6ZkFBQUFHYTRwZ3NLQUFBQkFNQQpSakJFQWlBTG03WGZFeENuc0twaDQ1eGZTZXpucys1L3ZTZmxMclEvQjd6NTNyR2JIQUlnWDFhMFRpMGxGNG9nCkJHdkw0eVNMd2w1RlFXZDVUK1Jod1JSb2pSYXpUSkFBZlFEakk0M3lqYUtJNEtyZ3JQRDZrTW1GOExhLzlkS2wKSjdBQi9CeEVXTVMyNkFBQUFacmltRFkwQUFnQUFBVUFKekVRdVFRREFFWXdSQUlnSExRMHlTQnQrYzg0ZFJGUgpOcTVJSExGQ2habFhnVk96eVNIOFBHMTRVdHNDSUY2NmlTM2dFbWt4UjVCMXdzY3pobFFHSVBYaDNwNUg0R01EClNHc3JVSU0xTUFvR0NDcUdTTTQ5QkFNREEyZ0FNR1VDTVFERUtDcVZITFRzcWltLzhjSHdnM01JVVNMellicXIKUlRmR1ZkdmhNSGJMMXZ1SUdPQmZiaFVaM3B0RjVVQkRJL2dDTUhidzVkcUZrNGw0K1U0UnRMaCtFQ0xzNXBYSQpRK3RQOVdJelE4a0ljQVNjeHFXZGRPKzdPcVVGd2JFWmhjeWxvUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0KCi0tLS0tQkVHSU4gQ0VSVElGSUNBVEUtLS0tLQpNSUlFVmpDQ0FqNmdBd0lCQWdJUVk1V1RZOEpPY0lKeFdSaS93OWZ0VmpBTkJna3Foa2lHOXcwQkFRc0ZBREJQCk1Rc3dDUVlEVlFRR0V3SlZVekVwTUNjR0ExVUVDaE1nU1c1MFpYSnVaWFFnVTJWamRYSnBkSGtnVW1WelpXRnkKWTJnZ1IzSnZkWEF4RlRBVEJnTlZCQU1UREVsVFVrY2dVbTl2ZENCWU1UQWVGdzB5TkRBek1UTXdNREF3TURCYQpGdzB5TnpBek1USXlNelU1TlRsYU1ESXhDekFKQmdOVkJBWVRBbFZUTVJZd0ZBWURWUVFLRXcxTVpYUW5jeUJGCmJtTnllWEIwTVFzd0NRWURWUVFERXdKRk9EQjJNQkFHQnlxR1NNNDlBZ0VHQlN1QkJBQWlBMklBQk5GbDhsN2MKUzdRTUFwelNzdnJ1Nld5ck9xNDRvZlRVT1RJenhVTFV6RE1NTk1jaElKQndYT2hpTHh4eHMwTFhlYjVHRGNIYgpSNkVUb01mZmdTWmpPOVNOSGZZOWdqTXk5dlFyNS9XV09yUVRaeGg3YXo2TlNObnEzdTJ1YlQ2SFRLT0IrRENCCjlUQU9CZ05WSFE4QkFmOEVCQU1DQVlZd0hRWURWUjBsQkJZd0ZBWUlLd1lCQlFVSEF3SUdDQ3NHQVFVRkJ3TUIKTUJJR0ExVWRFd0VCL3dRSU1BWUJBZjhDQVFBd0hRWURWUjBPQkJZRUZJOE5FNkwyTG43UlVHd3pHRGhkV1k0agpjcEhLTUI4R0ExVWRJd1FZTUJhQUZIbTBXZVo3dHVYa0FYT0FDSWpJR2xqMjZadHVNRElHQ0NzR0FRVUZCd0VCCkJDWXdKREFpQmdnckJnRUZCUWN3QW9ZV2FIUjBjRG92TDNneExta3ViR1Z1WTNJdWIzSm5MekFUQmdOVkhTQUUKRERBS01BZ0dCbWVCREFFQ0FUQW5CZ05WSFI4RUlEQWVNQnlnR3FBWWhoWm9kSFJ3T2k4dmVERXVZeTVzWlc1agpjaTV2Y21jdk1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQ0FRQm5FMGhHSU5Lc0NZV2kwWHgxeWd4RDVxaWhFalowClJJM3RUWnoxd3VBVEgzWndZUElwOTdrV0VheWFuRDFqMGNEaElZenk0Q2tEbzJqQjhENXQwYTZ6Wld6bHI5OGQKQVFGTmg4dUtKa0lIZExTaHkrblV5ZVp4YzViTmVNcDFMdTBnU3pFNE1jcWZtTk12SXBlaXdXU1lPOXc4Mk9iOApvdHZYY08ySlVZaTNzdkhJV1JtMys3MDdEVWJMNTFYTWNZMmlaZGxDcTRXYTluYnVrM1dUVTRncjZMWThNelZBCmFEUUcyKzRVM2VKNnFVRjEwYkJuUjF1dVZ5RFlzOVJocnd1Y1JWbmZ1RGoyOUNNTFRzcGxNNWY1d1NWNWhVcG0KVXdwL3ZWN000dzRhR3VudDc0a29YNzFuNEVkYWdDc0wvWWs1K21BUVUwK3R1ZTBLT2ZBVi9SNnQxaytYazlzMgpITVFGZW94cHBmekFWQzA0RmRHOU0rQUMySld4bUZTdDZCQ3VoM0NFZXkzZkU1MlFyajlZTTc1cnR2SWpzbS8xCkhsK3UvL1dxeG51MVpRNGpwYStWcHVaaUdPbFdycVNQOWVvZ2RPaENHaXNueWV3V0p3UlFPcUsxNndpR3laZVIKeHMvQmVrdzY1dndTSWFWa0JydVBpVGZNT28wWmg0Z1ZhOC9xSmdNYkpieXJ3d0c5N3ovUFJnbUxLQ0RsOHozZAp0QTBaN3FxN2Z0YTBHbDI0dXl1QjA1ZHFJNUoxTHZBekt1V2RJalQxdFA4cUNveFNFL3hwaXg4aFgyZHQzaCsvCmp1alVnRlBGWjBFVloweFN5Qk5SRjNNYm9HWm5ZWEZVeHBOalRXUEtwYWdESEpRbXFyQWNEbVdKbk1zRlkzalMKdTFpZ3YzT2VmbldqU1E9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCi0tLS0tQkVHSU4gRUMgUFJJVkFURSBLRVktLS0tLQpNSGNDQVFFRUlJM05GTTlmM2hUMXE3NDlmK0pIL0FIYUZoSFZYSUtQS0pDdVREYlVPMW5Fb0FvR0NDcUdTTTQ5CkF3RUhvVVFEUWdBRStXaVViS3h0ZHNIVCtZb2ZmRTVZdHd2SVlSQTU5TEJ6Mk13ZXN0MTlXeGtRbmZXZFd6ZUcKNFFiV20zcFYwazh2R3ovSlNpR3dnUG1HYk12bm9mdUtHdz09Ci0tLS0tRU5EIEVDIFBSSVZBVEUgS0VZLS0tLS0K
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "=== AlternateFutures Edge Node (Caddy) ==="
+
+        # Install SSL certificate
+        mkdir -p /etc/caddy/certs
+        echo "${SSL_CERT_B64}" | base64 -d > /etc/caddy/certs/alternatefutures.pem
+        chmod 600 /etc/caddy/certs/alternatefutures.pem
+
+        # Extract cert chain and key for Caddy
+        # The PEM file contains: certificate, intermediate cert, private key
+        # Use sed to extract certificates (everything except the private key)
+        sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' /etc/caddy/certs/alternatefutures.pem > /etc/caddy/certs/cert.pem
+        # Use sed to extract private key
+        sed -n '/-----BEGIN EC PRIVATE KEY-----/,/-----END EC PRIVATE KEY-----/p' /etc/caddy/certs/alternatefutures.pem > /etc/caddy/certs/key.pem
+        chmod 600 /etc/caddy/certs/*.pem
+
+        echo "Certificate file size: $(wc -c < /etc/caddy/certs/cert.pem) bytes"
+        echo "Key file size: $(wc -c < /etc/caddy/certs/key.pem) bytes"
+
+        # Create Caddyfile
+        cat > /etc/caddy/Caddyfile << 'EOF'
+        {
+            # Admin API - listen on all interfaces for external access
+            admin :2019
+
+            # Disable automatic HTTPS (we use our own cert)
+            auto_https off
+
+            # Logging
+            log {
+                output stdout
+                format console
+            }
+        }
+
+        # API Service
+        api.alternatefutures.ai {
+            tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+            reverse_proxy https://{$BACKEND_API} {
+                header_up Host {$BACKEND_API}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto https
+                transport http {
+                    tls
+                    tls_insecure_skip_verify
+                }
+            }
+
+            header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+                X-Frame-Options "DENY"
+            }
+        }
+
+        # Auth Service
+        auth.alternatefutures.ai {
+            tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+            reverse_proxy https://{$BACKEND_AUTH} {
+                header_up Host {$BACKEND_AUTH}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto https
+                transport http {
+                    tls
+                    tls_insecure_skip_verify
+                }
+            }
+
+            header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+                X-Frame-Options "DENY"
+            }
+        }
+
+        # Secrets Service (Infisical)
+        secrets.alternatefutures.ai {
+            tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+            reverse_proxy https://{$BACKEND_SECRETS} {
+                header_up Host {$BACKEND_SECRETS}
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto https
+                transport http {
+                    tls
+                    tls_insecure_skip_verify
+                }
+            }
+
+            header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+                X-Frame-Options "DENY"
+            }
+        }
+
+        # Health check endpoint (internal)
+        :8080 {
+            respond /health 200 {
+                body "OK"
+            }
+            respond /ready 200 {
+                body "Ready"
+            }
+        }
+        EOF
+
+        echo "=== Starting Caddy ==="
+        echo "Admin API available on port 2019"
+        echo "HTTPS on port 443"
+        exec caddy run --config /etc/caddy/Caddyfile
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+            ip: "caddy"
+      - port: 443
+        as: 443
+        to:
+          - global: true
+            ip: "caddy"
+      - port: 2019
+        as: 2019
+        to:
+          - global: true  # Admin API - secure with firewall or API key
+      - port: 8080
+        as: 8080
+        to:
+          - global: true  # Health checks
+
+profiles:
+  compute:
+    caddy:
+      resources:
+        cpu:
+          units: 1
+        memory:
+          size: 512Mi
+        storage:
+          size: 1Gi
+
+  placement:
+    dcloud:
+      pricing:
+        caddy:
+          denom: uakt
+          amount: 10000
+
+deployment:
+  caddy:
+    dcloud:
+      profile: caddy
+      count: 1
+
+endpoints:
+  caddy:
+    kind: ip

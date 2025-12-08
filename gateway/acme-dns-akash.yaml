@@ -1,0 +1,100 @@
+---
+# acme-dns Server for DNS-01 ACME Challenges
+# This enables Let's Encrypt certificates without needing port 80/443
+version: "2.0"
+
+services:
+  acme-dns:
+    image: joohoi/acme-dns:latest
+    expose:
+      # DNS server (UDP for queries)
+      - port: 53
+        as: 53
+        proto: udp
+        to:
+          - global: true
+      # DNS server (TCP for zone transfers)
+      - port: 53
+        as: 5353
+        proto: tcp
+        to:
+          - global: true
+      # HTTP API for registration and updates
+      - port: 80
+        as: 80
+        to:
+          - global: true
+    env:
+      - ACME_DNS_DOMAIN=acme.alternatefutures.ai
+      - ACME_DNS_NSNAME=ns.acme.alternatefutures.ai
+      - ACME_DNS_NSADMIN=admin.alternatefutures.ai
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /etc/acme-dns
+        cat > /etc/acme-dns/config.cfg << 'CONFIG'
+        [general]
+        listen = "0.0.0.0:53"
+        protocol = "both"
+        domain = "acme.alternatefutures.ai"
+        nsname = "ns.acme.alternatefutures.ai"
+        nsadmin = "admin.alternatefutures.ai"
+        records = [
+            "acme.alternatefutures.ai. A 127.0.0.1",
+            "acme.alternatefutures.ai. NS ns.acme.alternatefutures.ai.",
+        ]
+        debug = false
+
+        [database]
+        engine = "sqlite3"
+        connection = "/var/lib/acme-dns/acme-dns.db"
+
+        [api]
+        ip = "0.0.0.0"
+        port = "80"
+        disable_registration = false
+        tls = "none"
+        corsorigins = [
+            "*"
+        ]
+        use_header = false
+
+        [logconfig]
+        loglevel = "info"
+        logtype = "stdout"
+        logformat = "text"
+        CONFIG
+
+        mkdir -p /var/lib/acme-dns
+        echo "Starting acme-dns server..."
+        /root/acme-dns -c /etc/acme-dns/config.cfg
+
+profiles:
+  compute:
+    acme-dns:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 256Mi
+        storage:
+          - size: 1Gi
+
+  placement:
+    akash:
+      attributes:
+        host: akash
+      signedBy:
+        anyOf:
+          - "akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63"
+      pricing:
+        acme-dns:
+          denom: uakt
+          amount: 500
+
+deployment:
+  acme-dns:
+    akash:
+      profile: acme-dns
+      count: 1

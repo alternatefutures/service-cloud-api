@@ -1,0 +1,150 @@
+---
+# Caddy SSL Gateway with DNS-01 Challenge via OpenProvider REST API
+# Uses acme.sh with dns_openprovider_rest for certificate management
+#
+# Uses your OpenProvider control panel credentials (same as login)
+#
+version: "2.0"
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+      - port: 443
+        as: 443
+        to:
+          - global: true
+    env:
+      # Backend services (Akash ingress URLs)
+      - API_BACKEND=https://cjrdmusuql9e34bevi8mjgj8pg.ingress.europlots.com
+      - AUTH_BACKEND=https://2svb4vnmb1fkdbudldgr7p3thg.ingress.europlots.com
+      # Let's Encrypt email
+      - ACME_EMAIL=admin@alternatefutures.ai
+      # OpenProvider REST API credentials (same as control panel login)
+      - OPENPROVIDER_REST_USERNAME=system
+      - "OPENPROVIDER_REST_PASSWORD=7kdRtE2!GRVsqLP"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+
+        # Install dependencies
+        apk add --no-cache curl openssl socat bash
+
+        echo "Installing acme.sh..."
+        curl -s https://get.acme.sh | sh -s email=${ACME_EMAIL}
+
+        echo "Requesting certificates via DNS-01 with OpenProvider REST API..."
+        export OPENPROVIDER_REST_USERNAME="${OPENPROVIDER_REST_USERNAME}"
+        export OPENPROVIDER_REST_PASSWORD="${OPENPROVIDER_REST_PASSWORD}"
+
+        # Request certificates using acme.sh with OpenProvider REST API
+        # Using Let's Encrypt (more reliable DNS propagation checks)
+        ~/.acme.sh/acme.sh --issue \
+          --server letsencrypt \
+          --dns dns_openprovider_rest \
+          -d api.alternatefutures.ai \
+          -d auth.alternatefutures.ai \
+          --keylength ec-256 \
+          --dnssleep 60 \
+          --debug 2 || echo "Cert request failed, using self-signed fallback"
+
+        # Prepare certificate directory
+        mkdir -p /etc/caddy/certs
+
+        # Check if certificates were obtained
+        if [ -f ~/.acme.sh/api.alternatefutures.ai_ecc/api.alternatefutures.ai.cer ]; then
+          echo "Installing Let's Encrypt certificates..."
+          cp ~/.acme.sh/api.alternatefutures.ai_ecc/api.alternatefutures.ai.cer /etc/caddy/certs/cert.pem
+          cp ~/.acme.sh/api.alternatefutures.ai_ecc/api.alternatefutures.ai.key /etc/caddy/certs/key.pem
+          cat ~/.acme.sh/api.alternatefutures.ai_ecc/ca.cer >> /etc/caddy/certs/cert.pem
+        else
+          echo "Creating self-signed certificate as fallback..."
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout /etc/caddy/certs/key.pem \
+            -out /etc/caddy/certs/cert.pem \
+            -days 30 -nodes \
+            -subj "/CN=alternatefutures.ai"
+        fi
+
+        # Create Caddyfile
+        cat > /etc/caddy/Caddyfile << 'CADDYFILE'
+        {
+            auto_https off
+        }
+
+        api.alternatefutures.ai {
+            tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+            reverse_proxy {$API_BACKEND} {
+                header_up Host api.alternatefutures.ai
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto https
+                transport http {
+                    tls
+                    tls_insecure_skip_verify
+                }
+            }
+            header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+            }
+        }
+
+        auth.alternatefutures.ai {
+            tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+
+            reverse_proxy {$AUTH_BACKEND} {
+                header_up Host auth.alternatefutures.ai
+                header_up X-Real-IP {remote_host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto https
+                transport http {
+                    tls
+                    tls_insecure_skip_verify
+                }
+            }
+            header {
+                Strict-Transport-Security "max-age=31536000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+            }
+        }
+        CADDYFILE
+
+        echo "Starting Caddy gateway..."
+        caddy run --config /etc/caddy/Caddyfile
+
+profiles:
+  compute:
+    gateway:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          - size: 2Gi
+
+  placement:
+    akash:
+      attributes:
+        host: akash
+      signedBy:
+        anyOf:
+          - "akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63"
+      pricing:
+        gateway:
+          denom: uakt
+          amount: 1000
+
+deployment:
+  gateway:
+    akash:
+      profile: gateway
+      count: 1
