@@ -1,5 +1,4 @@
 import { GraphQLError } from 'graphql'
-import type { PrismaClient } from '@prisma/client'
 import { generateSlug } from '../utils/slug.js'
 import { generateInvokeUrl } from '../utils/invokeUrl.js'
 import { validateRoutes } from '../utils/routeValidation.js'
@@ -11,6 +10,7 @@ import { chatResolvers } from './chat.js'
 import { billingResolvers } from './billing.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
+import { dnsAdminQueries, dnsAdminMutations } from './dnsAdmin.js'
 import type { Context } from './types.js'
 
 export type { Context }
@@ -118,6 +118,9 @@ export const resolvers = {
 
     // Domains (from domain resolvers)
     ...domainQueries,
+
+    // DNS Admin (from dnsAdmin resolvers)
+    ...dnsAdminQueries,
 
     // Storage Analytics
     storageAnalytics: async (
@@ -497,6 +500,9 @@ export const resolvers = {
     // Domains (from domain resolvers)
     ...domainMutations,
 
+    // DNS Admin (from dnsAdmin resolvers)
+    ...dnsAdminMutations,
+
     // Chat mutations (from chat resolvers)
     ...chatResolvers.Mutation,
 
@@ -623,6 +629,7 @@ export const resolvers = {
 
         // Create an async generator that yields log events
         const queue: any[] = []
+        // eslint-disable-next-line no-unused-vars
         let resolve: ((value: IteratorResult<any>) => void) | null = null
 
         const handler = (event: any) => {
@@ -693,6 +700,7 @@ export const resolvers = {
 
         // Create an async generator that yields status events
         const queue: any[] = []
+        // eslint-disable-next-line no-unused-vars
         let resolve: ((value: IteratorResult<any>) => void) | null = null
 
         const handler = (event: any) => {

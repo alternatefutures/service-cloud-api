@@ -215,6 +215,56 @@ export const typeDefs = /* GraphQL */ `
     site: Site!
   }
 
+  # ============================================
+  # DNS RECORD MANAGEMENT (Admin)
+  # ============================================
+
+  type DNSRecord {
+    id: String
+    name: String!
+    type: DNSRecordType!
+    value: String!
+    ttl: Int!
+    priority: Int
+  }
+
+  enum DNSRecordType {
+    A
+    AAAA
+    CNAME
+    TXT
+    MX
+    NS
+  }
+
+  type DNSUpdateResult {
+    success: Boolean!
+    recordId: String
+    error: String
+  }
+
+  input CreateDNSRecordInput {
+    domain: String!
+    name: String!
+    type: DNSRecordType!
+    value: String!
+    ttl: Int
+    priority: Int
+  }
+
+  input UpdateDNSRecordInput {
+    domain: String!
+    recordId: String!
+    value: String
+    ttl: Int
+    priority: Int
+  }
+
+  input DeleteDNSRecordInput {
+    domain: String!
+    recordId: String!
+  }
+
   input CreateDomainInput {
     hostname: String!
     siteId: ID!
@@ -727,6 +777,10 @@ export const typeDefs = /* GraphQL */ `
     ): DomainVerificationInstructions!
     sslCertificateStatus: [SslCertificateStatusInfo!]!
 
+    # DNS Record Management (Admin)
+    dnsRecords(domain: String!): [DNSRecord!]!
+    dnsRecord(domain: String!, name: String!, type: DNSRecordType!): DNSRecord
+
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
     storageUsageTrend(projectId: ID, days: Int): [StorageUsageTrend!]!
@@ -850,6 +904,11 @@ export const typeDefs = /* GraphQL */ `
 
     # Usage Buffer Management
     flushUsageBuffer: FlushUsageBufferResult!
+
+    # DNS Record Management (Admin)
+    addDnsRecord(input: CreateDNSRecordInput!): DNSUpdateResult!
+    updateDnsRecord(input: UpdateDNSRecordInput!): DNSUpdateResult!
+    deleteDnsRecord(input: DeleteDNSRecordInput!): DNSUpdateResult!
 
     # Web3 Domains
     registerArns(domainId: ID!, arnsName: String!, contentId: String!): Domain!
