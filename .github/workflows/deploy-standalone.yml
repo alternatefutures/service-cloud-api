@@ -14,8 +14,8 @@ env:
   AKASH_CHAIN_ID: akashnet-2
   AKASH_GAS_PRICES: 0.025uakt
   AKASH_GAS_ADJUSTMENT: "1.5"
-  # Preferred provider (europlots - reliable)
-  PREFERRED_PROVIDER: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
+  # Preferred provider (akashian - no image caching issues)
+  PREFERRED_PROVIDER: "akash1r2yz5fzkk9gt0r3mk9u2c29q5mmtef050cryak"
 
 jobs:
   deploy:
@@ -87,7 +87,7 @@ jobs:
 
           services:
             api:
-              image: ghcr.io/alternatefutures/service-cloud-api:latest
+              image: ghcr.io/alternatefutures/service-cloud-api:main
               credentials:
                 host: ghcr.io
                 username: alternatefutures
