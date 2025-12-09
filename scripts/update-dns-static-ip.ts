@@ -56,7 +56,19 @@ async function main() {
         console.error(`❌ Failed to update ${subdomain}: ${result.error}`)
       }
     } catch (error) {
-      console.error(`❌ Error updating ${subdomain}:`, error)
+      console.error(`❌ Error updating ${subdomain}:`)
+      if (error instanceof Error) {
+        console.error(`   Message: ${error.message}`)
+        // Log more details for debugging
+        if (error.message.includes('Internal Server Error')) {
+          console.error('   Possible causes:')
+          console.error('   - Invalid OpenProvider credentials')
+          console.error('   - API rate limiting')
+          console.error('   - OpenProvider service outage')
+        }
+      } else {
+        console.error('   ', error)
+      }
     }
   }
 

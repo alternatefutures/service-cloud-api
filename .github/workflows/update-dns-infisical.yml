@@ -26,47 +26,18 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install Infisical CLI
+      - name: Set OpenProvider Credentials
         run: |
-          # Use the official install script
-          curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo -E bash || true
-          sudo apt-get install -y infisical || {
-            # Fallback: download binary directly
-            echo "Falling back to direct binary download..."
-            INFISICAL_VERSION=$(curl -s https://api.github.com/repos/Infisical/infisical/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-            curl -L "https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/infisical_${INFISICAL_VERSION}_linux_amd64.tar.gz" -o /tmp/infisical.tar.gz
-            sudo tar -xzf /tmp/infisical.tar.gz -C /usr/local/bin infisical
-            sudo chmod +x /usr/local/bin/infisical
-          }
-          infisical --version
+          echo "Using OpenProvider credentials from GitHub secrets..."
+          echo "OPENPROVIDER_USERNAME=${{ secrets.OPENPROVIDER_USERNAME }}" >> $GITHUB_ENV
+          echo "OPENPROVIDER_PASSWORD=${{ secrets.OPENPROVIDER_PASSWORD }}" >> $GITHUB_ENV
 
-      - name: Fetch OpenProvider Credentials from Infisical
-        env:
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
-        run: |
-          # Login to Infisical using Universal Auth
-          infisical login --method=universal-auth \
-            --client-id=$INFISICAL_CLIENT_ID \
-            --client-secret=$INFISICAL_CLIENT_SECRET \
-            --domain=https://secrets.alternatefutures.ai
-
-          # Export secrets to environment
-          echo "Fetching OpenProvider credentials..."
-          OPENPROVIDER_USERNAME=$(infisical secrets get OPENPROVIDER_USERNAME --env=prod --projectId=$INFISICAL_PROJECT_ID --domain=https://secrets.alternatefutures.ai --plain 2>/dev/null || echo "")
-          OPENPROVIDER_PASSWORD=$(infisical secrets get OPENPROVIDER_PASSWORD --env=prod --projectId=$INFISICAL_PROJECT_ID --domain=https://secrets.alternatefutures.ai --plain 2>/dev/null || echo "")
-
-          if [ -z "$OPENPROVIDER_USERNAME" ] || [ -z "$OPENPROVIDER_PASSWORD" ]; then
-            echo "Warning: Could not fetch OpenProvider credentials from Infisical"
-            echo "Falling back to GitHub secrets..."
-            echo "OPENPROVIDER_USERNAME=${{ secrets.OPENPROVIDER_USERNAME }}" >> $GITHUB_ENV
-            echo "OPENPROVIDER_PASSWORD=${{ secrets.OPENPROVIDER_PASSWORD }}" >> $GITHUB_ENV
-          else
-            echo "Successfully fetched OpenProvider credentials from Infisical"
-            echo "OPENPROVIDER_USERNAME=$OPENPROVIDER_USERNAME" >> $GITHUB_ENV
-            echo "OPENPROVIDER_PASSWORD=$OPENPROVIDER_PASSWORD" >> $GITHUB_ENV
+          # Verify credentials are set
+          if [ -z "${{ secrets.OPENPROVIDER_USERNAME }}" ] || [ -z "${{ secrets.OPENPROVIDER_PASSWORD }}" ]; then
+            echo "ERROR: OpenProvider credentials not found in GitHub secrets"
+            exit 1
           fi
+          echo "Credentials loaded successfully"
 
       - name: Install dependencies
         run: npm ci
