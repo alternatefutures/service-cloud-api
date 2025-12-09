@@ -77,6 +77,10 @@ COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/clie
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 
+# Copy entrypoint script
+COPY --chown=nodejs:nodejs docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+
 # Change ownership to non-root user
 RUN chown -R nodejs:nodejs /app
 
@@ -93,5 +97,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
 # Use dumb-init to handle signals properly
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
-# Start application
-CMD ["node", "dist/index.js"]
+# Run migrations and start application
+CMD ["./docker-entrypoint.sh"]
