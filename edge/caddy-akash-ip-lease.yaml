@@ -8,9 +8,9 @@ services:
   caddy:
     image: caddy:2-alpine
     env:
-      # Backend URLs (Akash ingress endpoints)
-      - BACKEND_API=cjrdmusuql9e34bevi8mjgj8pg.ingress.europlots.com
-      - BACKEND_AUTH=6ndirokr8hfs121h8k63mp04ig.ingress.europlots.com
+      # Backend URLs (Akash ingress endpoints) - Updated Dec 8, 2024
+      - BACKEND_API=e1i0489b8hfct0qqlcsn5it8io.ingress.gpu.subangle.com
+      - BACKEND_AUTH=rtho3ubrb9fihbmnkb3a1gea3k.ingress.gpu.subangle.com
       - BACKEND_SECRETS=9tnnbebe65bvt1vd2g6k67a72g.ingress.parallelnode.de
       # Admin API key (change this!)
       - CADDY_ADMIN_KEY=${CADDY_ADMIN_KEY}
