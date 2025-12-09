@@ -1,0 +1,59 @@
+name: Update DNS Records
+
+on:
+  workflow_dispatch:
+    inputs:
+      static_ip:
+        description: 'Static IP address for DNS A records'
+        required: true
+        default: '62.3.50.131'
+      subdomains:
+        description: 'Comma-separated list of subdomains to update'
+        required: true
+        default: 'api,auth,secrets'
+
+jobs:
+  update-dns:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update DNS Records
+        env:
+          OPENPROVIDER_USERNAME: ${{ secrets.OPENPROVIDER_USERNAME }}
+          OPENPROVIDER_PASSWORD: ${{ secrets.OPENPROVIDER_PASSWORD }}
+          STATIC_IP: ${{ inputs.static_ip }}
+          SUBDOMAINS: ${{ inputs.subdomains }}
+        run: |
+          npx tsx scripts/update-dns-static-ip.ts
+
+      - name: Verify DNS Propagation
+        run: |
+          echo "Checking DNS resolution for updated records..."
+          for subdomain in $(echo "${{ inputs.subdomains }}" | tr ',' ' '); do
+            echo "Checking ${subdomain}.alternatefutures.ai..."
+            dig +short ${subdomain}.alternatefutures.ai A || echo "Resolution pending..."
+          done
+
+      - name: Summary
+        run: |
+          echo "## DNS Update Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target IP**: \`${{ inputs.static_ip }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Subdomains Updated**:" >> $GITHUB_STEP_SUMMARY
+          for subdomain in $(echo "${{ inputs.subdomains }}" | tr ',' ' '); do
+            echo "- ${subdomain}.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Note: DNS propagation may take 5-30 minutes to complete globally._" >> $GITHUB_STEP_SUMMARY
