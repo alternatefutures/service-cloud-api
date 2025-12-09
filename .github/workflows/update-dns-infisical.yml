@@ -1,0 +1,91 @@
+name: Update DNS via Infisical
+
+on:
+  workflow_dispatch:
+    inputs:
+      static_ip:
+        description: 'Static IP address for DNS A records'
+        required: true
+        default: '62.3.50.131'
+      subdomains:
+        description: 'Comma-separated list of subdomains to update'
+        required: true
+        default: 'api,auth,secrets'
+
+jobs:
+  update-dns:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://artifacts.infisical.com/artifactory/api/gpg/key/public' | sudo gpg --dearmor -o /usr/share/keyrings/infisical-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/infisical-archive-keyring.gpg] https://artifacts.infisical.com/artifactory/debian stable main" | sudo tee /etc/apt/sources.list.d/infisical.list
+          sudo apt-get update && sudo apt-get install -y infisical
+
+      - name: Fetch OpenProvider Credentials from Infisical
+        env:
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+        run: |
+          # Login to Infisical using Universal Auth
+          infisical login --method=universal-auth \
+            --client-id=$INFISICAL_CLIENT_ID \
+            --client-secret=$INFISICAL_CLIENT_SECRET \
+            --domain=https://secrets.alternatefutures.ai
+
+          # Export secrets to environment
+          echo "Fetching OpenProvider credentials..."
+          OPENPROVIDER_USERNAME=$(infisical secrets get OPENPROVIDER_USERNAME --env=prod --projectId=$INFISICAL_PROJECT_ID --domain=https://secrets.alternatefutures.ai --plain 2>/dev/null || echo "")
+          OPENPROVIDER_PASSWORD=$(infisical secrets get OPENPROVIDER_PASSWORD --env=prod --projectId=$INFISICAL_PROJECT_ID --domain=https://secrets.alternatefutures.ai --plain 2>/dev/null || echo "")
+
+          if [ -z "$OPENPROVIDER_USERNAME" ] || [ -z "$OPENPROVIDER_PASSWORD" ]; then
+            echo "Warning: Could not fetch OpenProvider credentials from Infisical"
+            echo "Falling back to GitHub secrets..."
+            echo "OPENPROVIDER_USERNAME=${{ secrets.OPENPROVIDER_USERNAME }}" >> $GITHUB_ENV
+            echo "OPENPROVIDER_PASSWORD=${{ secrets.OPENPROVIDER_PASSWORD }}" >> $GITHUB_ENV
+          else
+            echo "Successfully fetched OpenProvider credentials from Infisical"
+            echo "OPENPROVIDER_USERNAME=$OPENPROVIDER_USERNAME" >> $GITHUB_ENV
+            echo "OPENPROVIDER_PASSWORD=$OPENPROVIDER_PASSWORD" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Update DNS Records
+        env:
+          STATIC_IP: ${{ inputs.static_ip }}
+          SUBDOMAINS: ${{ inputs.subdomains }}
+        run: |
+          npx tsx scripts/update-dns-static-ip.ts
+
+      - name: Verify DNS Propagation
+        run: |
+          echo "Checking DNS resolution for updated records..."
+          for subdomain in $(echo "${{ inputs.subdomains }}" | tr ',' ' '); do
+            echo "Checking ${subdomain}.alternatefutures.ai..."
+            dig +short ${subdomain}.alternatefutures.ai A || echo "Resolution pending..."
+          done
+
+      - name: Summary
+        run: |
+          echo "## DNS Update Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target IP**: \`${{ inputs.static_ip }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Subdomains Updated**:" >> $GITHUB_STEP_SUMMARY
+          for subdomain in $(echo "${{ inputs.subdomains }}" | tr ',' ' '); do
+            echo "- ${subdomain}.alternatefutures.ai" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Note: DNS propagation may take 5-30 minutes to complete globally._" >> $GITHUB_STEP_SUMMARY
