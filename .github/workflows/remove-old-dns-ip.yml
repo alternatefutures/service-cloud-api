@@ -1,0 +1,47 @@
+name: Remove Old DNS IP
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_ip:
+        description: 'Old IP address to remove'
+        required: true
+        default: '170.75.255.101'
+      subdomains:
+        description: 'Comma-separated list of subdomains'
+        required: true
+        default: 'api,auth,secrets'
+
+jobs:
+  remove-old-ip:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Remove Old DNS IP Records
+        env:
+          OPENPROVIDER_USERNAME: ${{ secrets.OPENPROVIDER_USERNAME }}
+          OPENPROVIDER_PASSWORD: ${{ secrets.OPENPROVIDER_PASSWORD }}
+          OLD_IP: ${{ inputs.old_ip }}
+          SUBDOMAINS: ${{ inputs.subdomains }}
+        run: |
+          npx tsx scripts/remove-old-dns-ip.ts
+
+      - name: Verify DNS
+        run: |
+          echo "Checking DNS resolution..."
+          for subdomain in $(echo "${{ inputs.subdomains }}" | tr ',' ' '); do
+            echo "Checking ${subdomain}.alternatefutures.ai..."
+            dig +short ${subdomain}.alternatefutures.ai A || echo "Resolution pending..."
+          done
