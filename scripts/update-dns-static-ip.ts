@@ -37,7 +37,7 @@ async function main() {
   const dnsManager = new DNSManager(
     { username, password },
     DOMAIN,
-    300 // 5 minute TTL
+    600 // 10 minute TTL (OpenProvider minimum)
   )
 
   console.log(`\n🌐 Updating DNS records for ${DOMAIN}`)
