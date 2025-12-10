@@ -1,16 +1,16 @@
 ---
 # Caddy Edge Proxy with Dynamic Domain Management
 # Uses Caddy's Admin API for instant domain updates
-# IP Lease: 170.75.255.101
-version: "2.0"
+# IP Lease: 77.76.13.213 (DSEQ: 24559747)
+version: '2.0'
 
 services:
   caddy:
     image: caddy:2-alpine
     env:
-      # Backend URLs (Akash ingress endpoints) - Updated Dec 8, 2024
+      # Backend URLs (Akash ingress endpoints) - Updated Dec 10, 2024
       - BACKEND_API=e1i0489b8hfct0qqlcsn5it8io.ingress.gpu.subangle.com
-      - BACKEND_AUTH=rtho3ubrb9fihbmnkb3a1gea3k.ingress.gpu.subangle.com
+      - BACKEND_AUTH=2napn78u2le0h18a3q3kfqk4kg.ingress.gpu.subangle.com
       - BACKEND_SECRETS=9tnnbebe65bvt1vd2g6k67a72g.ingress.parallelnode.de
       # Admin API key (change this!)
       - CADDY_ADMIN_KEY=${CADDY_ADMIN_KEY}
@@ -141,20 +141,20 @@ services:
         as: 80
         to:
           - global: true
-            ip: "caddy"
+            ip: 'caddy'
       - port: 443
         as: 443
         to:
           - global: true
-            ip: "caddy"
+            ip: 'caddy'
       - port: 2019
         as: 2019
         to:
-          - global: true  # Admin API - secure with firewall or API key
+          - global: true # Admin API - secure with firewall or API key
       - port: 8080
         as: 8080
         to:
-          - global: true  # Health checks
+          - global: true # Health checks
 
 profiles:
   compute:
