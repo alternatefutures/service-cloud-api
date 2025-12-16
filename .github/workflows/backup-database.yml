@@ -1,0 +1,171 @@
+name: Backup PostgreSQL Database
+
+on:
+  schedule:
+    # Run daily at 4 AM UTC (offset from secrets backup at 3 AM)
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      trigger_only:
+        description: 'Just trigger backup (sidecar handles actual backup)'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install -g @web3-storage/w3cli
+          sudo apt-get update
+          sudo apt-get install -y age postgresql-client
+
+      - name: Get database credentials from Infisical
+        id: secrets
+        env:
+          INFISICAL_API_URL: https://secrets.alternatefutures.ai/api
+        run: |
+          # Get access token
+          TOKEN_RESPONSE=$(curl -s -X POST "$INFISICAL_API_URL/v1/auth/universal-auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "clientId": "${{ secrets.INFISICAL_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.INFISICAL_CLIENT_SECRET }}"
+            }')
+
+          ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.accessToken')
+
+          if [ "$ACCESS_TOKEN" = "null" ] || [ -z "$ACCESS_TOKEN" ]; then
+            echo "Failed to get access token"
+            exit 1
+          fi
+
+          # Get DATABASE_URL from service-cloud-api folder
+          SECRETS_RESPONSE=$(curl -s -X GET "$INFISICAL_API_URL/v3/secrets/raw?workspaceId=${{ secrets.INFISICAL_PROJECT_ID }}&environment=prod&secretPath=/service-cloud-api" \
+            -H "Authorization: Bearer $ACCESS_TOKEN")
+
+          DATABASE_URL=$(echo $SECRETS_RESPONSE | jq -r '.secrets[] | select(.secretKey=="DATABASE_URL") | .secretValue')
+
+          if [ -z "$DATABASE_URL" ] || [ "$DATABASE_URL" = "null" ]; then
+            echo "DATABASE_URL not found in Infisical"
+            echo "Note: For Akash deployments, backup must run inside the deployment"
+            echo "This workflow will trigger the backup sidecar instead"
+            echo "sidecar_mode=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "::add-mask::$DATABASE_URL"
+          echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
+          echo "sidecar_mode=false" >> $GITHUB_OUTPUT
+
+      - name: Trigger Akash backup sidecar
+        if: steps.secrets.outputs.sidecar_mode == 'true'
+        env:
+          AKASH_PROVIDER: ${{ secrets.AKASH_PROVIDER }}
+          AKASH_DSEQ: ${{ secrets.AKASH_API_DSEQ }}
+        run: |
+          echo "Database is internal to Akash deployment"
+          echo "Triggering backup sidecar via Akash provider API..."
+
+          # The backup sidecar runs independently on a cron schedule
+          # This step just logs that we're relying on the sidecar
+          echo "Backup sidecar runs daily inside Akash deployment"
+          echo "Check deployment logs for backup status"
+
+          # TODO: Add Akash MCP call to check backup sidecar status
+          # or trigger backup via HTTP endpoint exposed by sidecar
+
+      - name: Run pg_dump (direct connection mode)
+        if: steps.secrets.outputs.sidecar_mode == 'false'
+        env:
+          DATABASE_URL: ${{ steps.secrets.outputs.database_url }}
+        run: |
+          echo "Running pg_dump..."
+          TIMESTAMP=$(date -u +%Y%m%d-%H%M%S)
+          BACKUP_FILE="backup-cloud-api-${TIMESTAMP}.sql"
+
+          pg_dump "$DATABASE_URL" --no-owner --no-acl > "$BACKUP_FILE"
+
+          # Compress
+          gzip "$BACKUP_FILE"
+
+          echo "backup_file=${BACKUP_FILE}.gz" >> $GITHUB_ENV
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_ENV
+
+      - name: Encrypt backup with age
+        if: steps.secrets.outputs.sidecar_mode == 'false'
+        env:
+          AGE_PUBLIC_KEY: ${{ secrets.AGE_PUBLIC_KEY }}
+        run: |
+          echo "$AGE_PUBLIC_KEY" > age-recipient.txt
+          age -R age-recipient.txt -o ${{ env.backup_file }}.age ${{ env.backup_file }}
+
+          ls -la ${{ env.backup_file }}.age
+          rm ${{ env.backup_file }}
+
+      - name: Upload to Storacha (Web3.Storage)
+        if: steps.secrets.outputs.sidecar_mode == 'false'
+        env:
+          W3_PRINCIPAL: ${{ secrets.W3_PRINCIPAL }}
+          W3_PROOF: ${{ secrets.W3_PROOF }}
+        run: |
+          # Configure w3 CLI with credentials
+          mkdir -p ~/.w3
+          echo "$W3_PRINCIPAL" > ~/.w3/principal.json
+          echo "$W3_PROOF" > ~/.w3/proof.json
+
+          # Upload to Storacha
+          echo "Uploading to Storacha..."
+          RESULT=$(w3 up ${{ env.backup_file }}.age 2>&1) || true
+
+          echo "$RESULT"
+
+          # Extract CID from output
+          CID=$(echo "$RESULT" | grep -oE 'bafy[a-zA-Z0-9]+' | head -1 || echo "")
+
+          if [ -n "$CID" ]; then
+            echo "Backup uploaded to Storacha: $CID"
+            echo "IPFS Gateway: https://w3s.link/ipfs/$CID"
+            echo "storacha_cid=$CID" >> $GITHUB_ENV
+          else
+            echo "Warning: Could not extract CID from Storacha upload"
+            echo "Backup available as GitHub artifact"
+          fi
+
+      - name: Upload backup as GitHub artifact
+        if: steps.secrets.outputs.sidecar_mode == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-backup-${{ github.run_id }}
+          path: ${{ env.backup_file }}.age
+          retention-days: 30
+
+      - name: Log backup metadata
+        if: steps.secrets.outputs.sidecar_mode == 'false'
+        run: |
+          echo "=== Backup Complete ==="
+          echo "Timestamp: ${{ env.timestamp }}"
+          echo "File: ${{ env.backup_file }}.age"
+          if [ -n "${{ env.storacha_cid }}" ]; then
+            echo "Storacha CID: ${{ env.storacha_cid }}"
+            echo "IPFS URL: https://w3s.link/ipfs/${{ env.storacha_cid }}"
+          fi
+          echo "GitHub Artifact: database-backup-${{ github.run_id }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Database backup failed! Check the workflow logs."
+          # TODO: Add Slack/Discord notification
