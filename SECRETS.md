@@ -16,6 +16,21 @@ This document lists all environment variables required for `service-cloud-api`.
 | -------------- | ---------------------------- | ------------------------------------- |
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
 
+#### 1Password Storage
+
+Store PostgreSQL credentials in 1Password:
+
+| Item Name                    | Field               | Description                                 |
+| ---------------------------- | ------------------- | ------------------------------------------- |
+| `Alternate Cloud PostgreSQL` | `password`          | Admin password for postgres user            |
+| `Alternate Cloud PostgreSQL` | `host`              | Database host (Akash provider URL)          |
+| `Alternate Cloud PostgreSQL` | `connection_string` | Full DATABASE_URL                           |
+| `Alternate Cloud PostgreSQL` | `dseq`              | Akash deployment sequence number (24520638) |
+| `Alternate Cloud PostgreSQL` | `provider`          | Akash provider address                      |
+
+**Note:** This is the standalone PostgreSQL on Akash used by service-cloud-api.
+The service-auth also connects to this database (with `auth_*` prefixed tables).
+
 ### Authentication
 
 | Variable           | Description                                   | Example                            |
