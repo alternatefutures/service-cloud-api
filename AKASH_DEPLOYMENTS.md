@@ -20,11 +20,11 @@
 
 ---
 
-### 2. Standalone Postgres Database
+### 2. Cloud API Postgres Database
 
 | Field          | Value                                                      |
 | -------------- | ---------------------------------------------------------- |
-| **Name**       | Shared Postgres                                            |
+| **Name**       | Cloud API Postgres                                         |
 | **DSEQ**       | `24520638`                                                 |
 | **Provider**   | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots) |
 | **Status**     | ✅ Active                                                  |
@@ -33,8 +33,29 @@
 | **Database**   | `alternatefutures`                                         |
 | **Resources**  | 1 CPU, 1Gi RAM, 10Gi persistent storage                    |
 | **Cost**       | ~7.0 uakt/block                                            |
-| **Used By**    | Auth Service, API Service                                  |
+| **Used By**    | API Service (service-cloud-api)                            |
 | **SDL**        | `infra/postgres-standalone.yaml`                           |
+| **1Password**  | `Alternate Cloud PostgreSQL`                               |
+
+---
+
+### 2b. Auth Postgres Database
+
+| Field          | Value                                                      |
+| -------------- | ---------------------------------------------------------- |
+| **Name**       | Auth Postgres                                              |
+| **DSEQ**       | `24677103`                                                 |
+| **Provider**   | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots) |
+| **Status**     | ✅ Active                                                  |
+| **Services**   | `postgres`                                                 |
+| **Connection** | `provider.europlots.com:31568`                             |
+| **Database**   | `auth`                                                     |
+| **User**       | `auth`                                                     |
+| **Resources**  | 0.5 CPU, 512Mi RAM, 5Gi persistent storage                 |
+| **Cost**       | ~5.1 uakt/block                                            |
+| **Used By**    | Auth Service (service-auth)                                |
+| **SDL**        | `service-auth/infra/postgres-standalone.yaml`              |
+| **1Password**  | `Alternate Auth PostgreSQL`                                |
 
 ---
 
@@ -121,7 +142,8 @@ Since Akash Console shows deployments as "unknown", use this reference:
 | DSEQ       | Service Name                 | Primary URL                                         |
 | ---------- | ---------------------------- | --------------------------------------------------- |
 | `24492663` | Auth API                     | auth.alternatefutures.ai                            |
-| `24520638` | Standalone Postgres          | provider.europlots.com:30155                        |
+| `24520638` | Cloud API Postgres           | provider.europlots.com:30155                        |
+| `24677103` | Auth Postgres                | provider.europlots.com:31568                        |
 | `24363709` | Main API + Postgres (legacy) | api.alternatefutures.ai                             |
 | `24489905` | Caddy Edge Proxy             | 170.75.255.101                                      |
 | `24452456` | Gateway Service              | d5s3eedndp9e740i6begtat6sg.ingress.akash.tagus.host |
