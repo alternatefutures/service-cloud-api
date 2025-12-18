@@ -1,19 +1,24 @@
-name: Deploy to Akash Network
+name: Deploy to Akash Network (Full Redeploy)
 permissions:
   contents: read
   pull-requests: write
 
-on:
-  # Automatically deploy to mainnet when pushing to main branch
-  push:
-    branches:
-      - main
-    # Deploy on any change to main (not just SDL/workflow changes)
-    # This ensures every merge triggers a deployment
+# IMPORTANT: This workflow creates a NEW deployment with a NEW DSEQ.
+# This means DNS records will need to be updated after deployment.
+# For code-only updates that keep the same DSEQ, use the "Update Manifest" workflow instead.
 
-  # Manual deployment trigger with environment selection
+on:
+  # Manual deployment only - no automatic deployment on push
+  # This prevents accidental redeployments that require DNS changes
   workflow_dispatch:
     inputs:
+      deployment_type:
+        description: 'Deployment type (full-redeploy creates new DSEQ, requires DNS update)'
+        required: true
+        default: 'full-redeploy'
+        type: choice
+        options:
+          - full-redeploy
       environment:
         description: 'Deployment environment'
         required: true
@@ -35,6 +40,11 @@ on:
         required: false
         default: false
         type: boolean
+      confirm_dns_update:
+        description: 'I understand this creates a new DSEQ and requires DNS update'
+        required: true
+        default: false
+        type: boolean
 
 # Prevent multiple deployments from running simultaneously
 # Cancel in-progress runs when a new deployment is triggered
@@ -43,10 +53,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  validate:
     runs-on: ubuntu-latest
-    # Use production environment for main branch, or user-selected for manual dispatch
-    environment: ${{ github.event_name == 'push' && 'production' || inputs.environment }}
+    steps:
+      - name: Validate DNS update confirmation
+        if: ${{ inputs.confirm_dns_update != true }}
+        run: |
+          echo "::error::You must confirm you understand this creates a new DSEQ and requires DNS update"
+          echo ""
+          echo "This workflow creates a FULL REDEPLOY with a new DSEQ."
+          echo "After deployment, you will need to update DNS records."
+          echo ""
+          echo "For code-only updates that keep the same DSEQ and ingress URL,"
+          echo "use the 'Update Manifest (No Redeploy)' workflow instead."
+          exit 1
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
 
     steps:
       - name: Checkout code
@@ -91,7 +116,7 @@ jobs:
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          SDL_FILE: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}
+          SDL_FILE: ${{ inputs.sdl_file }}
           USE_INFISICAL: ${{ inputs.use_infisical || 'false' }}
         run: |
           cp $SDL_FILE deploy-final.yaml
@@ -482,7 +507,7 @@ jobs:
           tsx scripts/sync-dns.ts ${{ env.DSEQ }} ${{ env.PROVIDER }}
 
       - name: Post deployment URLs to PR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: false  # Disabled since this workflow is manual-only now
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -531,8 +556,8 @@ jobs:
           echo "=========================================="
           echo ""
           echo "Deployment Details:"
-          echo "  Environment: ${{ github.event_name == 'push' && 'production' || inputs.environment }}"
-          echo "  SDL File:    ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}"
+          echo "  Environment: ${{ inputs.environment }}"
+          echo "  SDL File:    ${{ inputs.sdl_file }}"
           echo "  Trigger:     ${{ github.event_name }}"
           echo "  Branch:      ${{ github.ref_name }}"
           echo "  Wallet:      ${{ env.AKASH_ADDRESS }}"
@@ -557,8 +582,8 @@ jobs:
           # GitHub Actions summary for UI
           echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment**: ${{ github.event_name == 'push' && 'production' || inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **SDL File**: ${{ github.event_name == 'push' && 'deploy-mainnet.yaml' || inputs.sdl_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SDL File**: ${{ inputs.sdl_file }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Wallet**: ${{ env.AKASH_ADDRESS }}" >> $GITHUB_STEP_SUMMARY

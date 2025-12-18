@@ -1,0 +1,267 @@
+name: Update Manifest (No Redeploy)
+permissions:
+  contents: read
+
+# This workflow sends a manifest update to an EXISTING deployment.
+# It keeps the same DSEQ and ingress URL - NO DNS changes required.
+# Use this for code-only updates, env var changes, or image tag updates.
+#
+# For changes that require a full redeploy (CPU/RAM/storage changes),
+# use the "Deploy to Akash Network (Full Redeploy)" workflow instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to update'
+        required: true
+        type: choice
+        options:
+          - api        # Main API (DSEQ: 24363709)
+          - auth       # Auth Service (DSEQ: 24492663)
+          - gateway    # Gateway Service (DSEQ: 24452456)
+          - infisical  # Secrets Manager (DSEQ: 24458239)
+          - caddy      # Edge Proxy (DSEQ: 24489905)
+      sdl_file:
+        description: 'SDL file to deploy (relative to repo root)'
+        required: true
+        default: 'deploy-mainnet.yaml'
+        type: string
+      use_infisical:
+        description: 'Use Infisical for secrets management'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: akash-manifest-update-${{ inputs.service }}
+  cancel-in-progress: false
+
+env:
+  # Service DSEQ mapping (from AKASH_DEPLOYMENTS.md)
+  DSEQ_api: "24363709"
+  DSEQ_auth: "24492663"
+  DSEQ_gateway: "24452456"
+  DSEQ_infisical: "24458239"
+  DSEQ_caddy: "24489905"
+
+  # Provider mapping
+  PROVIDER_api: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
+  PROVIDER_auth: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
+  PROVIDER_gateway: "akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac"
+  PROVIDER_infisical: "akash1gq42nhp64xrkxlawvchfguuq0wpdx68rkzfnw6"
+  PROVIDER_caddy: "akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj"
+
+jobs:
+  update-manifest:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set deployment variables
+        run: |
+          SERVICE="${{ inputs.service }}"
+
+          # Get DSEQ for selected service
+          case "$SERVICE" in
+            api)      DSEQ="${{ env.DSEQ_api }}"; PROVIDER="${{ env.PROVIDER_api }}" ;;
+            auth)     DSEQ="${{ env.DSEQ_auth }}"; PROVIDER="${{ env.PROVIDER_auth }}" ;;
+            gateway)  DSEQ="${{ env.DSEQ_gateway }}"; PROVIDER="${{ env.PROVIDER_gateway }}" ;;
+            infisical) DSEQ="${{ env.DSEQ_infisical }}"; PROVIDER="${{ env.PROVIDER_infisical }}" ;;
+            caddy)    DSEQ="${{ env.DSEQ_caddy }}"; PROVIDER="${{ env.PROVIDER_caddy }}" ;;
+            *)        echo "Unknown service: $SERVICE"; exit 1 ;;
+          esac
+
+          echo "DSEQ=$DSEQ" >> $GITHUB_ENV
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
+          echo "SERVICE=$SERVICE" >> $GITHUB_ENV
+
+          echo "=== Manifest Update Configuration ==="
+          echo "Service:  $SERVICE"
+          echo "DSEQ:     $DSEQ"
+          echo "Provider: $PROVIDER"
+          echo "SDL File: ${{ inputs.sdl_file }}"
+
+      - name: Install Akash CLI and provider-services
+        run: |
+          cd /tmp
+
+          # Install akash CLI
+          curl -sfL "https://github.com/akash-network/node/releases/download/v1.0.2/akash_1.0.2_linux_amd64.zip" -o akash.zip
+          unzip akash.zip
+          sudo mv akash /usr/local/bin/
+          chmod +x /usr/local/bin/akash
+
+          # Install provider-services CLI for manifest send
+          curl -sfL "https://github.com/akash-network/provider/releases/download/v0.6.9/provider-services_0.6.9_linux_amd64.zip" -o provider.zip
+          unzip provider.zip
+          sudo mv provider-services /usr/local/bin/
+          chmod +x /usr/local/bin/provider-services
+
+          akash version
+          provider-services version
+
+      - name: Setup Akash wallet
+        env:
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+        run: |
+          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test
+          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test)
+          echo "AKASH_ADDRESS=$AKASH_ADDRESS" >> $GITHUB_ENV
+          echo "Wallet address: $AKASH_ADDRESS"
+
+      - name: Verify deployment exists
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+        run: |
+          echo "Verifying deployment ${{ env.DSEQ }} exists and is active..."
+
+          DEPLOYMENT_INFO=$(akash query deployment get \
+            --owner ${{ env.AKASH_ADDRESS }} \
+            --dseq ${{ env.DSEQ }} \
+            --node $AKASH_NODE \
+            --output json 2>/dev/null || echo '{}')
+
+          STATE=$(echo "$DEPLOYMENT_INFO" | jq -r '.deployment.state // "unknown"')
+
+          if [ "$STATE" != "active" ]; then
+            echo "::error::Deployment ${{ env.DSEQ }} is not active (state: $STATE)"
+            echo "Cannot send manifest to inactive deployment."
+            echo "Use the full redeploy workflow instead."
+            exit 1
+          fi
+
+          echo "Deployment is active. Ready to send manifest."
+
+      - name: Setup certificates
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_CLIENT_CRT: ${{ secrets.AKASH_CLIENT_CRT }}
+          AKASH_CLIENT_KEY: ${{ secrets.AKASH_CLIENT_KEY }}
+        run: |
+          CERT_PATH="$HOME/.akash/certs"
+          mkdir -p "$CERT_PATH"
+
+          if [ -n "$AKASH_CLIENT_CRT" ] && [ -n "$AKASH_CLIENT_KEY" ]; then
+            echo "Restoring certificates from GitHub Secrets..."
+            echo "$AKASH_CLIENT_CRT" | base64 -d > "$CERT_PATH/client.crt"
+            echo "$AKASH_CLIENT_KEY" | base64 -d > "$CERT_PATH/client.key"
+            chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
+            echo "Certificates restored"
+          else
+            echo "::error::No certificates found in secrets."
+            echo "Run the 'Setup Akash Certificates' workflow first."
+            exit 1
+          fi
+
+      - name: Substitute secrets in SDL
+        env:
+          YUGABYTE_PASSWORD: ${{ secrets.YUGABYTE_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
+          FILECOIN_WALLET_KEY: ${{ secrets.FILECOIN_WALLET_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_SERVICE_TOKEN }}
+          INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          SDL_FILE: ${{ inputs.sdl_file }}
+          USE_INFISICAL: ${{ inputs.use_infisical || 'false' }}
+        run: |
+          cp $SDL_FILE deploy-final.yaml
+
+          if [ "$USE_INFISICAL" == "true" ]; then
+            echo "Using Infisical for secrets management"
+            sed -i "s|PLACEHOLDER_INFISICAL_SERVICE_TOKEN|$INFISICAL_SERVICE_TOKEN|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_PROJECT_ID|$INFISICAL_PROJECT_ID|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_CLIENT_ID|$INFISICAL_CLIENT_ID|g" deploy-final.yaml
+            sed -i "s|PLACEHOLDER_CLIENT_SECRET|$INFISICAL_CLIENT_SECRET|g" deploy-final.yaml
+          else
+            echo "Using direct secrets substitution"
+            sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
+            sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
+            sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_filecoin_wallet_key|${FILECOIN_WALLET_KEY:-placeholder}|g" deploy-final.yaml
+            sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+          fi
+
+          echo "SDL prepared with secrets"
+
+      - name: Send manifest to provider
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+          AKASH_FROM: deploy
+        run: |
+          echo "=== Sending Manifest Update ==="
+          echo "DSEQ:     ${{ env.DSEQ }}"
+          echo "Provider: ${{ env.PROVIDER }}"
+          echo ""
+
+          provider-services send-manifest deploy-final.yaml \
+            --dseq ${{ env.DSEQ }} \
+            --provider ${{ env.PROVIDER }} \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --home $HOME/.akash
+
+          echo ""
+          echo "Manifest sent successfully!"
+
+      - name: Wait for update to propagate
+        run: |
+          echo "Waiting 30 seconds for container update..."
+          sleep 30
+
+      - name: Health check
+        continue-on-error: true
+        run: |
+          SERVICE="${{ env.SERVICE }}"
+
+          case "$SERVICE" in
+            api)
+              echo "Checking API health..."
+              curl -sf --max-time 30 https://api.alternatefutures.ai/health || echo "Health check failed or timed out"
+              ;;
+            auth)
+              echo "Checking Auth API health..."
+              curl -sf --max-time 30 https://auth.alternatefutures.ai/health || echo "Health check failed or timed out"
+              ;;
+            *)
+              echo "No health check configured for service: $SERVICE"
+              ;;
+          esac
+
+      - name: Update summary
+        if: always()
+        run: |
+          echo "## Manifest Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | ${{ env.SERVICE }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **DSEQ** | ${{ env.DSEQ }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Provider** | ${{ env.PROVIDER }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SDL File** | ${{ inputs.sdl_file }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### What This Means" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Same DSEQ:** The deployment ID has not changed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Same Ingress URL:** No DNS update required" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container Restarted:** The service is now running the updated configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If you need to change CPU, RAM, or storage resources, use the **Full Redeploy** workflow instead." >> $GITHUB_STEP_SUMMARY
