@@ -1,5 +1,4 @@
 import type { StorageService } from './types.js'
-import { IPFSStorageService } from './ipfs.js'
 import { SelfHostedIPFSStorageService } from './ipfs-selfhosted.js'
 import { ArweaveStorageService } from './arweave.js'
 import { FilecoinStorageService } from './filecoin.js'
@@ -10,7 +9,6 @@ export class StorageServiceFactory {
   static create(storageType: StorageType): StorageService {
     switch (storageType) {
       case 'IPFS':
-        // Always use self-hosted IPFS (no Pinata fallback)
         if (!process.env.IPFS_API_URL) {
           throw new Error(
             'IPFS_API_URL environment variable is required for self-hosted IPFS'

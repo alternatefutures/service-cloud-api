@@ -33,7 +33,6 @@
     "@graphql-tools/schema": "^10.0.29",
     "@infisical/sdk": "^4.0.6",
     "@lighthouse-web3/sdk": "^0.4.3",
-    "@pinata/sdk": "^2.1.0",
     "@prisma/client": "^6.19.0",
     "@solana/web3.js": "^1.98.4",
     "@types/node-cron": "^3.0.11",
