@@ -1,18 +1,13 @@
 /**
  * Usage Buffer Service
  *
- * High-performance buffering for usage metrics using YugabyteDB.
- * Dramatically reduces database writes by aggregating usage in a buffer table
- * and flushing to the main usage table every minute.
- *
- * Cost savings: 97% reduction in DB writes (450M/month → 13M/month)
- * Latency impact: Minimal (+2-5ms vs +20-50ms for direct writes to main table)
+ * Buffers usage metrics in PostgreSQL before flushing to the main usage table.
+ * Reduces main table writes by batching per-request increments into per-minute aggregates.
  *
  * Implementation:
- * - No external dependencies (uses existing YugabyteDB)
- * - No data loss on restart (persisted in DB)
- * - Maintains 97% write reduction via batching
- * - Atomic operations via PostgreSQL ON CONFLICT
+ * - Uses existing PostgreSQL (no Redis or external cache)
+ * - No data loss on restart (buffer persisted in DB)
+ * - Atomic increments via PostgreSQL ON CONFLICT UPSERT
  */
 
 import { PrismaClient } from '@prisma/client'
@@ -26,7 +21,7 @@ export class UsageBuffer {
 
   constructor() {
     // eslint-disable-next-line no-console
-    console.log('[UsageBuffer] Initialized with YugabyteDB buffer table')
+    console.log('[UsageBuffer] Initialized with PostgreSQL buffer table')
   }
 
   /**
@@ -43,7 +38,7 @@ export class UsageBuffer {
       const field = type.toLowerCase() as 'bandwidth' | 'compute' | 'requests'
 
       // UPSERT: Insert or increment atomically
-      // This is fast in YugabyteDB (distributed ACID transactions)
+      // This is fast in PostgreSQL (ACID transactions)
       await prisma.$executeRaw`
         INSERT INTO "UsageBuffer" ("userId", "bandwidth", "compute", "requests", "updatedAt")
         VALUES (${userId},

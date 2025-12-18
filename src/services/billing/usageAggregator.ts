@@ -1,16 +1,14 @@
 /**
  * Usage Aggregator
  *
- * Flushes buffered usage data from Redis to PostgreSQL every minute.
- * This reduces database writes by 97% while maintaining 1-minute accuracy.
+ * Flushes buffered usage data from PostgreSQL buffer table to main table every minute.
+ * This reduces database writes by ~97% vs. writing directly on each request.
  *
  * Architecture:
- * 1. Requests increment Redis counters (sub-millisecond, no DB write)
- * 2. Every minute, this aggregator reads all Redis counters
- * 3. Writes one aggregated record per user to database
- * 4. Clears Redis counters
- *
- * Cost savings: $565/month → $70/month for 10K users
+ * 1. Requests increment buffer table counters (fast UPSERT, no main table write)
+ * 2. Every minute, this aggregator reads all buffered counters
+ * 3. Writes one aggregated record per user to main usage table
+ * 4. Clears buffer table entries
  */
 
 import * as cron from 'node-cron'
@@ -23,7 +21,8 @@ export class UsageAggregator {
   private isProcessing = false
 
   constructor(
-    private prisma: PrismaClient,
+    // eslint-disable-next-line no-unused-vars
+    private _prisma: PrismaClient,
     usageBuffer?: UsageBuffer
   ) {
     this.usageBuffer = usageBuffer || new UsageBuffer()
@@ -76,7 +75,7 @@ export class UsageAggregator {
     const startTime = Date.now()
 
     try {
-      // Get all buffered usage from Redis
+      // Get all buffered usage from buffer table
       const bufferedUsage = await this.usageBuffer.getAllBufferedUsage()
 
       if (bufferedUsage.size === 0) {
@@ -198,7 +197,7 @@ export class UsageAggregator {
             })
           }
 
-          // Clear this user's buffer in Redis
+          // Clear this user's buffer in buffer table
           await this.usageBuffer.clearUser(userId)
 
           successCount++
@@ -266,7 +265,9 @@ export class UsageAggregator {
     let waited = 0
 
     while (this.isProcessing && waited < maxWait) {
-      await new Promise(resolve => setTimeout(resolve, checkInterval))
+      await new Promise(resolve =>
+        globalThis.setTimeout(resolve, checkInterval)
+      )
       waited += checkInterval
     }
 
@@ -276,7 +277,7 @@ export class UsageAggregator {
       )
     }
 
-    // Disconnect from Redis
+    // Disconnect from database
     await this.usageBuffer.disconnect()
 
     console.log('[UsageAggregator] Shutdown complete')
