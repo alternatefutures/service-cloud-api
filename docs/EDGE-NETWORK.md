@@ -279,6 +279,47 @@ const deployment = await cloud.deploy({
 
 **Documentation:** https://docs.phala.network
 
+#### Golem Network
+
+Peer-to-peer marketplace for decentralized computing resources.
+
+| Feature         | Details                                          |
+| --------------- | ------------------------------------------------ |
+| **Model**       | P2P compute marketplace (providers ↔ requestors) |
+| **Token**       | GLM (Ethereum + Polygon)                         |
+| **GPU Support** | Beta program available                           |
+| **APIs**        | JavaScript API, Ray interface                    |
+| **Use Case**    | Rendering, AI inference, scientific computing    |
+
+**Integration Points:**
+
+- Burst compute capacity for heavy workloads
+- Distributed rendering for 3D/video processing
+- AI model training and inference
+- Scientific simulations and batch processing
+
+```typescript
+// Golem JS API example
+import { TaskExecutor } from '@golem-sdk/task-executor'
+
+const executor = await TaskExecutor.create({
+  package: 'golem/node:latest',
+  budget: 0.5, // GLM budget
+})
+
+const result = await executor.run(async ctx => {
+  const output = await ctx.run('node', [
+    '-e',
+    'console.log("Hello from Golem!")',
+  ])
+  return output.stdout
+})
+
+await executor.shutdown()
+```
+
+**Documentation:** https://docs.golem.network
+
 ### Phase 4 (Advanced Features)
 
 With DePIN network established:
