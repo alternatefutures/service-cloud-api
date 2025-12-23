@@ -35,55 +35,65 @@ Self-hosted edge network providing SSL termination, load balancing, and geograph
     Edge nodes handle: SSL termination, dynamic routing, rate limiting, DDoS protection
 ```
 
-## Current Stack (Phase 1: Caddy)
+## Current Stack (Phase 1: Pingap on Akash)
 
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Edge Proxy | Caddy 2.x | SSL termination, load balancing, dynamic routing |
-| Dynamic Config | Caddy Admin API | Instant domain updates via REST API |
-| SSL Certificates | Let's Encrypt (auto) + OpenProvider (wildcard) | Automatic cert management |
-| DNS | OpenProvider API | DNS management |
-| Origin Backends | Akash Network | Decentralized compute |
-| Monitoring | Prometheus + Grafana | Observability |
+| Component        | Technology                  | Purpose                                  |
+| ---------------- | --------------------------- | ---------------------------------------- |
+| Edge Proxy       | Pingap (Rust/Pingora)       | SSL termination, load balancing, routing |
+| SSL Certificates | Cloudflare Origin Certs     | Certificate management                   |
+| DNS              | Cloudflare + deSEC          | DNS management with GeoDNS               |
+| Origin Backends  | Akash Network               | Decentralized compute                    |
+| Monitoring       | Akash logs + custom metrics | Observability                            |
 
-### Why Caddy?
+### Current Deployment
 
-| Feature | HAProxy | Caddy | Winner |
-|---------|---------|-------|--------|
-| Dynamic domain updates | Socket API (complex) | REST API (simple) | Caddy |
-| Auto HTTPS | Manual (acme.sh) | Built-in | Caddy |
-| Configuration | Config file reload | Instant API updates | Caddy |
-| Memory usage | ~20MB | ~50MB | HAProxy |
-| Learning curve | High | Low | Caddy |
+| Field            | Value                                                       |
+| ---------------- | ----------------------------------------------------------- |
+| **DSEQ**         | 24750686                                                    |
+| **Provider**     | Europlots (`akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc`)  |
+| **Dedicated IP** | 62.3.50.133                                                 |
+| **Image**        | `ghcr.io/alternatefutures/infrastructure-proxy-pingap:main` |
+
+### Why Pingap?
+
+| Feature         | Caddy          | Pingap                   | Winner |
+| --------------- | -------------- | ------------------------ | ------ |
+| Performance     | Good           | Excellent (Rust/Pingora) | Pingap |
+| Memory usage    | ~50MB          | ~20MB                    | Pingap |
+| HTTP/3 support  | Limited        | Native                   | Pingap |
+| Config format   | Caddyfile/JSON | TOML                     | Pingap |
+| Dynamic updates | REST API       | Config reload            | Caddy  |
+
+We chose Pingap for its Rust-based performance and lower memory footprint on Akash.
 
 ## Edge Node Specifications
 
 ### Minimum Requirements (Akash Deployment)
 
 | Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| CPU | 1 vCPU | 2 vCPU |
-| RAM | 512 MB | 1 GB |
-| Storage | 1 GB | 2 GB |
+| -------- | ------- | ----------- |
+| CPU      | 1 vCPU  | 2 vCPU      |
+| RAM      | 512 MB  | 1 GB        |
+| Storage  | 1 GB    | 2 GB        |
 
 ### VPS Requirements (Future Multi-Region)
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| CPU | 1 vCPU | 2 vCPU |
-| RAM | 1 GB | 2 GB |
-| Storage | 20 GB SSD | 40 GB SSD |
-| Bandwidth | 1 TB/mo | Unmetered |
-| OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
+| Resource  | Minimum          | Recommended      |
+| --------- | ---------------- | ---------------- |
+| CPU       | 1 vCPU           | 2 vCPU           |
+| RAM       | 1 GB             | 2 GB             |
+| Storage   | 20 GB SSD        | 40 GB SSD        |
+| Bandwidth | 1 TB/mo          | Unmetered        |
+| OS        | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
 
 ### Recommended VPS Providers (Future)
 
-| Provider | Region Coverage | Starting Cost |
-|----------|-----------------|---------------|
-| Hetzner | EU, US | $4/mo |
-| Vultr | Global (25 regions) | $5/mo |
-| DigitalOcean | Global (15 regions) | $6/mo |
-| Linode | Global (11 regions) | $5/mo |
+| Provider     | Region Coverage     | Starting Cost |
+| ------------ | ------------------- | ------------- |
+| Hetzner      | EU, US              | $4/mo         |
+| Vultr        | Global (25 regions) | $5/mo         |
+| DigitalOcean | Global (15 regions) | $6/mo         |
+| Linode       | Global (11 regions) | $5/mo         |
 
 ## Features
 
@@ -106,20 +116,105 @@ Self-hosted edge network providing SSL termination, load balancing, and geograph
 - [ ] Request logging and analytics
 - [ ] Wildcard SSL for `*.alternatefutures.ai`
 
-### Phase 3 (Pingora Migration)
+### Phase 3 (DePIN Provider Expansion)
 
-Migration triggers (from [PINGORA-MIGRATION.md](./PINGORA-MIGRATION.md)):
-- HTTP/3 demand > 20% of customers
-- > 100k RPS per node needed
-- Rust developer on staff
-- Custom routing logic requirements
+Expand beyond Akash to additional decentralized infrastructure providers:
 
-Features:
-- [ ] HTTP/3 (QUIC) support
+#### Edge Network (edge.network)
+
+A decentralized "supercloud" with global CDN and serverless capabilities.
+
+| Feature         | Details                                                |
+| --------------- | ------------------------------------------------------ |
+| **Services**    | CDN, DNS, Compute, Serverless Functions, Storage       |
+| **Network**     | Peer-to-peer architecture, thousands of global nodes   |
+| **Token**       | $EDGE (Ethereum + XE blockchain)                       |
+| **Integration** | Edge CLI, REST API                                     |
+| **Use Case**    | Global content delivery, edge caching, DDoS protection |
+
+**Integration Points:**
+
+- CDN for static assets and cached content
+- DNS with global anycast
+- Serverless functions at edge locations
+- DDoS protection (Shield)
+
+```bash
+# Edge CLI example
+edge cdn deploy --domain cdn.alternatefutures.ai --origin ipfs.alternatefutures.ai
+```
+
+**Documentation:** https://wiki.edge.network
+
+#### Hedera Hashgraph
+
+High-throughput distributed ledger for consensus and micropayments.
+
+| Feature        | Details                                            |
+| -------------- | -------------------------------------------------- |
+| **Throughput** | 10,000+ TPS                                        |
+| **Cost**       | ~$0.001 per transaction                            |
+| **Finality**   | 3-5 seconds                                        |
+| **Services**   | Consensus Service, Token Service, Smart Contracts  |
+| **Use Case**   | Payment-gated functions, audit logs, micropayments |
+
+**Integration Points:**
+
+- Hedera Consensus Service (HCS) for ordered event logs
+- Token Service for function micropayments
+- Smart contracts for access control
+
+```typescript
+// Hedera SDK example - payment-gated function
+import { Client, TopicMessageSubmitTransaction } from '@hashgraph/sdk'
+
+const client = Client.forMainnet()
+await new TopicMessageSubmitTransaction()
+  .setTopicId(topicId)
+  .setMessage(`function:${functionId}:invoked:${timestamp}`)
+  .execute(client)
+```
+
+**Documentation:** https://docs.hedera.com
+
+#### Filecoin Saturn
+
+Decentralized content delivery network built on Filecoin.
+
+| Feature         | Details                                        |
+| --------------- | ---------------------------------------------- |
+| **Network**     | 2,500+ nodes globally                          |
+| **Latency**     | Sub-100ms for cached content                   |
+| **Integration** | HTTP Gateway, Client Library                   |
+| **Use Case**    | Large file delivery, IPFS content acceleration |
+
+**Integration Points:**
+
+- Accelerate IPFS content delivery
+- Cache frequently accessed function assets
+- Reduce origin load for static content
+
+```typescript
+// Saturn client example
+import { Saturn } from '@filecoin-saturn/client'
+
+const saturn = new Saturn()
+const content = await saturn.fetchCID(cid, {
+  preferredNodes: ['us-west', 'eu-central'],
+})
+```
+
+**Documentation:** https://saturn.tech
+
+### Phase 4 (Advanced Features)
+
+With DePIN network established:
+
+- [ ] HTTP/3 (QUIC) support via Pingap upgrade
 - [ ] Programmable request routing
-- [ ] Custom caching logic
+- [ ] Custom caching logic across providers
 - [ ] Advanced traffic shaping
-- [ ] Plugin architecture for customer features
+- [ ] Provider marketplace (user selects preferred DePIN)
 
 ## Dynamic Domain Management
 
@@ -158,6 +253,7 @@ curl "http://edge-ip:2019/config/"
 ### Integration with cloud-cli
 
 When a user deploys a site:
+
 1. Site deploys to Akash, gets ingress URL
 2. cloud-cli calls Caddy Admin API to add domain route
 3. Route is active immediately (no restart needed)
@@ -179,61 +275,64 @@ When a user deploys a site:
 
 Current Akash backends:
 
-| Service | Ingress URL | Purpose |
-|---------|-------------|---------|
-| service-cloud-api | cjrdmusuql9e34bevi8mjgj8pg.ingress.europlots.com | Main API |
-| service-auth | 2svb4vnmb1fkdbudldgr7p3thg.ingress.europlots.com | Authentication |
-| infisical | 9tnnbebe65bvt1vd2g6k67a72g.ingress.parallelnode.de | Secrets Manager |
+| Service           | Provider  | Ingress URL                                         | Purpose                  |
+| ----------------- | --------- | --------------------------------------------------- | ------------------------ |
+| SSL Proxy         | Europlots | 62.3.50.133 (dedicated IP)                          | SSL termination, routing |
+| service-cloud-api | Subangle  | rvknp4kjg598n8uslgnovkrdpk.ingress.gpu.subangle.com | Main GraphQL API         |
+| service-auth      | _TBD_     | _Needs redeployment_                                | Authentication           |
+| infisical         | Europlots | ddchr1pel5e0p8i0c46drjpclg.ingress.europlots.com    | Secrets Manager          |
+
+> **Note:** Auth service needs redeployment on a different provider to avoid NAT hairpin issues with the proxy.
 
 ## Scaling Strategy
 
 ### Horizontal Scaling (Edge Nodes)
 
-| Traffic Level | Edge Nodes | Regions |
-|---------------|------------|---------|
-| < 10k RPM | 1 | Single region (Akash) |
-| 10k - 100k RPM | 2-3 | 2 regions |
-| 100k - 1M RPM | 3-5 | 3 regions |
-| 1M+ RPM | 5+ | Global |
+| Traffic Level  | Edge Nodes | Regions               |
+| -------------- | ---------- | --------------------- |
+| < 10k RPM      | 1          | Single region (Akash) |
+| 10k - 100k RPM | 2-3        | 2 regions             |
+| 100k - 1M RPM  | 3-5        | 3 regions             |
+| 1M+ RPM        | 5+         | Global                |
 
 ### Vertical Scaling (Per Node)
 
-| Connections | Resources |
-|-------------|-----------|
-| < 10k concurrent | 1 vCPU / 512 MB |
-| 10k - 50k concurrent | 2 vCPU / 1 GB |
-| 50k - 100k concurrent | 4 vCPU / 2 GB |
-| 100k+ concurrent | 8 vCPU / 4 GB |
+| Connections           | Resources       |
+| --------------------- | --------------- |
+| < 10k concurrent      | 1 vCPU / 512 MB |
+| 10k - 50k concurrent  | 2 vCPU / 1 GB   |
+| 50k - 100k concurrent | 4 vCPU / 2 GB   |
+| 100k+ concurrent      | 8 vCPU / 4 GB   |
 
 ### Sites per Edge Node
 
-| Sites | Memory Impact | Notes |
-|-------|--------------|-------|
-| 100 | ~5 MB | Minimal impact |
-| 1,000 | ~20 MB | Easy |
-| 10,000 | ~100 MB | Still comfortable |
-| 50,000+ | ~500 MB | Consider sharding |
+| Sites   | Memory Impact | Notes             |
+| ------- | ------------- | ----------------- |
+| 100     | ~5 MB         | Minimal impact    |
+| 1,000   | ~20 MB        | Easy              |
+| 10,000  | ~100 MB       | Still comfortable |
+| 50,000+ | ~500 MB       | Consider sharding |
 
 ## Monitoring
 
 ### Key Metrics
 
-| Metric | Alert Threshold |
-|--------|-----------------|
-| Request latency (p99) | > 500ms |
-| Error rate (5xx) | > 1% |
-| Backend health | Any backend down |
-| SSL cert expiry | < 14 days |
-| Connection queue | > 1000 |
-| CPU usage | > 80% |
-| Memory usage | > 85% |
+| Metric                | Alert Threshold  |
+| --------------------- | ---------------- |
+| Request latency (p99) | > 500ms          |
+| Error rate (5xx)      | > 1%             |
+| Backend health        | Any backend down |
+| SSL cert expiry       | < 14 days        |
+| Connection queue      | > 1000           |
+| CPU usage             | > 80%            |
+| Memory usage          | > 85%            |
 
 ### Health Endpoints
 
-| Endpoint | Port | Purpose |
-|----------|------|---------|
-| /health | 8080 | Liveness check |
-| /ready | 8080 | Readiness check |
+| Endpoint | Port | Purpose         |
+| -------- | ---- | --------------- |
+| /health  | 8080 | Liveness check  |
+| /ready   | 8080 | Readiness check |
 
 ### Dashboards
 
@@ -288,32 +387,32 @@ Current Akash backends:
 
 ### Current (Single Akash Node)
 
-| Item | Monthly Cost |
-|------|--------------|
-| Akash deployment (1 CPU / 512 MB) | ~$5 |
-| IP Lease | ~$10 |
-| DNS (OpenProvider) | ~$5 |
-| **Total** | **~$20/mo** |
+| Item                              | Monthly Cost |
+| --------------------------------- | ------------ |
+| Akash deployment (1 CPU / 512 MB) | ~$5          |
+| IP Lease                          | ~$10         |
+| DNS (OpenProvider)                | ~$5          |
+| **Total**                         | **~$20/mo**  |
 
 ### 3-Node Global Edge Network (Future)
 
-| Item | Monthly Cost |
-|------|--------------|
-| 3x VPS (2 vCPU / 4 GB) | $60 |
-| Bandwidth (10 TB) | Included |
-| Monitoring (Grafana Cloud free tier) | $0 |
-| DNS (OpenProvider) | ~$5 |
-| **Total** | **~$65/mo** |
+| Item                                 | Monthly Cost |
+| ------------------------------------ | ------------ |
+| 3x VPS (2 vCPU / 4 GB)               | $60          |
+| Bandwidth (10 TB)                    | Included     |
+| Monitoring (Grafana Cloud free tier) | $0           |
+| DNS (OpenProvider)                   | ~$5          |
+| **Total**                            | **~$65/mo**  |
 
 ### At Scale (10 Nodes)
 
-| Item | Monthly Cost |
-|------|--------------|
-| 10x VPS (4 vCPU / 8 GB) | $400 |
-| Bandwidth (100 TB) | ~$100 |
-| Monitoring | $50 |
-| DNS | $10 |
-| **Total** | **~$560/mo** |
+| Item                    | Monthly Cost |
+| ----------------------- | ------------ |
+| 10x VPS (4 vCPU / 8 GB) | $400         |
+| Bandwidth (100 TB)      | ~$100        |
+| Monitoring              | $50          |
+| DNS                     | $10          |
+| **Total**               | **~$560/mo** |
 
 ## SSL Certificate Strategy
 
@@ -324,15 +423,16 @@ Current Akash backends:
 
 ### Let's Encrypt Rate Limits
 
-| Limit | Value | Mitigation |
-|-------|-------|------------|
-| Certs per domain/week | 50 | Use wildcard for subdomains |
-| Duplicate certs/week | 5 | Cache certs |
-| New orders/3 hours | 300 | Spread deployments |
+| Limit                 | Value | Mitigation                  |
+| --------------------- | ----- | --------------------------- |
+| Certs per domain/week | 50    | Use wildcard for subdomains |
+| Duplicate certs/week  | 5     | Cache certs                 |
+| New orders/3 hours    | 300   | Spread deployments          |
 
 ### Fallback CAs
 
 If Let's Encrypt limits hit:
+
 - ZeroSSL (3 free, then paid)
 - Buypass (20/week limit)
 - Google Trust Services
@@ -345,8 +445,27 @@ If Let's Encrypt limits hit:
 
 ## Decision Log
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2024-12-02 | Started with HAProxy | Fast time to market, mature technology |
-| 2024-12-04 | **Migrated to Caddy** | Need for dynamic domain management via API |
-| TBD | Pingora migration | When HTTP/3 or custom routing triggers met |
+| Date       | Decision                 | Rationale                                    |
+| ---------- | ------------------------ | -------------------------------------------- |
+| 2024-12-02 | Started with HAProxy     | Fast time to market, mature technology       |
+| 2024-12-04 | Migrated to Caddy        | Need for dynamic domain management via API   |
+| 2025-12-23 | **Migrated to Pingap**   | Better performance, lower memory, Rust-based |
+| 2025-12-23 | Moved proxy to Europlots | DigitalFrontier IP pool exhausted            |
+| 2025-12-23 | Added provider selection | NAT hairpin prevention for backend services  |
+| TBD        | Edge Network integration | Global CDN and edge caching                  |
+| TBD        | Hedera integration       | Payment-gated functions, micropayments       |
+| TBD        | Filecoin Saturn          | Content delivery acceleration                |
+
+## Related Documentation
+
+- [AF_FUNCTIONS_PLATFORM.md](../../web-app.alternatefutures.ai/AF_FUNCTIONS_PLATFORM.md) - Functions platform architecture
+- [ProviderSelector](../src/services/akash/providerSelector.ts) - NAT hairpin prevention
+- [infrastructure-proxy/CLAUDE.md](../../infrastructure-proxy/CLAUDE.md) - Proxy deployment procedures
+- [Pingora Migration Plan](./PINGORA-MIGRATION.md) - HTTP/3 upgrade path
+
+## External Resources
+
+- [Akash Network](https://akash.network/) - Primary compute provider
+- [Edge Network](https://edge.network/) - Decentralized CDN (Phase 3)
+- [Hedera Hashgraph](https://hedera.com/) - Consensus and micropayments (Phase 3)
+- [Filecoin Saturn](https://saturn.tech/) - Content delivery (Phase 3)
