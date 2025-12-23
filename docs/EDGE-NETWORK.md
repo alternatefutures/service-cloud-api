@@ -206,6 +206,79 @@ const content = await saturn.fetchCID(cid, {
 
 **Documentation:** https://saturn.tech
 
+#### Internet Computer (ICP)
+
+Sovereign internet cloud providing tamperproof, unstoppable web hosting and compute.
+
+| Feature      | Details                                              |
+| ------------ | ---------------------------------------------------- |
+| **Runtime**  | WebAssembly (any language that compiles to Wasm)     |
+| **Language** | Motoko (domain-specific) + Rust, TypeScript, Python  |
+| **Security** | Tamperproof execution, immune to traditional attacks |
+| **Hosting**  | Fully on-chain apps, websites, SaaS                  |
+| **Use Case** | Autonomous dApps, cross-chain token operations       |
+
+**Integration Points:**
+
+- Host static sites and SPAs directly on-chain
+- Run serverless canisters (smart contracts) for backend logic
+- Cross-chain token operations (Bitcoin, Ethereum integration)
+- Unstoppable, censorship-resistant hosting
+
+```typescript
+// ICP canister example (Motoko)
+actor {
+  public query func greet(name : Text) : async Text {
+    return "Hello, " # name # "!";
+  };
+}
+
+// Or using dfx CLI
+// dfx deploy --network ic
+```
+
+**Documentation:** https://internetcomputer.org/docs
+
+#### Phala Network
+
+Confidential computing platform with GPU TEE for private AI and secure execution.
+
+| Feature         | Details                                         |
+| --------------- | ----------------------------------------------- |
+| **TEE Support** | Intel SGX, AMD SEV, NVIDIA H100/H200/B200 GPUs  |
+| **Performance** | 95% native efficiency with full privacy         |
+| **Compliance**  | SOC 2 Type I, HIPAA compliant                   |
+| **SLA**         | 99.9% uptime                                    |
+| **Use Case**    | Confidential AI, private compute, secure agents |
+
+**Integration Points:**
+
+- Run AI models with full data privacy (DeepSeek, Llama, Qwen)
+- Confidential VMs with Docker/Kubernetes compatibility
+- Cryptographic attestations for security verification
+- Trusted execution for sensitive function logic
+
+```typescript
+// Phala dStack deployment example
+// 1. Write code, dockerize
+// 2. Deploy via Phala CLI
+
+import { PhalaCloud } from '@phal/sdk'
+
+const cloud = new PhalaCloud({ apiKey: process.env.PHALA_API_KEY })
+
+// Deploy confidential container
+const deployment = await cloud.deploy({
+  image: 'ghcr.io/alternatefutures/secure-function:latest',
+  tee: 'sgx', // or 'nvidia-h100'
+  resources: { cpu: 2, memory: '4Gi' },
+})
+```
+
+**Pricing:** Starting at $0.27/million tokens for AI inference
+
+**Documentation:** https://docs.phala.network
+
 ### Phase 4 (Advanced Features)
 
 With DePIN network established:
@@ -455,6 +528,8 @@ If Let's Encrypt limits hit:
 | TBD        | Edge Network integration | Global CDN and edge caching                  |
 | TBD        | Hedera integration       | Payment-gated functions, micropayments       |
 | TBD        | Filecoin Saturn          | Content delivery acceleration                |
+| TBD        | Internet Computer (ICP)  | Tamperproof on-chain hosting                 |
+| TBD        | Phala Network            | Confidential computing, private AI           |
 
 ## Related Documentation
 
@@ -469,3 +544,5 @@ If Let's Encrypt limits hit:
 - [Edge Network](https://edge.network/) - Decentralized CDN (Phase 3)
 - [Hedera Hashgraph](https://hedera.com/) - Consensus and micropayments (Phase 3)
 - [Filecoin Saturn](https://saturn.tech/) - Content delivery (Phase 3)
+- [Internet Computer](https://internetcomputer.org/) - Tamperproof web hosting (Phase 3)
+- [Phala Network](https://phala.com/) - Confidential computing with TEE (Phase 3)
