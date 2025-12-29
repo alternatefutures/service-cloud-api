@@ -11,6 +11,10 @@ import { billingResolvers } from './billing.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
 import { dnsAdminQueries, dnsAdminMutations } from './dnsAdmin.js'
+import {
+  observabilityQueries,
+  observabilityMutations,
+} from './observability.js'
 import type { Context } from './types.js'
 
 export type { Context }
@@ -285,6 +289,9 @@ export const resolvers = {
 
     // Auth queries (from auth resolvers)
     ...authQueries,
+
+    // Observability queries (from observability resolvers)
+    ...observabilityQueries,
   },
 
   Mutation: {
@@ -511,6 +518,9 @@ export const resolvers = {
 
     // Auth mutations (from auth resolvers)
     ...authMutations,
+
+    // Observability mutations (from observability resolvers)
+    ...observabilityMutations,
   },
 
   // Field resolvers

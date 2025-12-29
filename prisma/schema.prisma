@@ -51,6 +51,10 @@ model Project {
   sites     Site[]
   functions AFFunction[]
 
+  // Observability
+  telemetryIngestions   TelemetryIngestion[]
+  observabilitySettings ObservabilitySettings?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -721,6 +725,7 @@ enum UsageType {
   COMPUTE
   REQUESTS
   SEATS
+  TELEMETRY_INGESTION
 }
 
 model BillingSettings {
@@ -737,6 +742,7 @@ model BillingSettings {
   bandwidthPerGBCents   Int      @default(0)
   computePerHourCents   Int      @default(0)
   requestsPer1000Cents  Int      @default(0)
+  telemetryPerGBCents   Int      @default(35)  // $0.35/GB default
 
   // Tax settings
   taxRatePercent        Decimal  @default(0.0)
@@ -839,4 +845,60 @@ model StorageSnapshot {
   @@unique([userId, date])
   @@index([userId])
   @@index([date])
+}
+
+// ============================================
+// OBSERVABILITY / APM
+// ============================================
+
+model TelemetryIngestion {
+  id              String   @id @default(cuid())
+
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Ingestion stats per period
+  bytesIngested   BigInt   @default(0)
+  spansCount      Int      @default(0)
+  metricsCount    Int      @default(0)
+  logsCount       Int      @default(0)
+
+  // Billing period (hourly granularity)
+  periodStart     DateTime
+  periodEnd       DateTime
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([projectId, periodStart, periodEnd])
+  @@index([projectId])
+  @@index([periodStart, periodEnd])
+}
+
+model ObservabilitySettings {
+  id              String   @id @default(cuid())
+
+  projectId       String   @unique
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Feature toggles
+  tracesEnabled   Boolean  @default(true)
+  metricsEnabled  Boolean  @default(true)
+  logsEnabled     Boolean  @default(true)
+
+  // Retention (days)
+  traceRetention  Int      @default(7)
+  metricRetention Int      @default(30)
+  logRetention    Int      @default(7)
+
+  // Sampling rate (1.0 = 100%)
+  sampleRate      Float    @default(1.0)
+
+  // Rate limits (null = unlimited)
+  maxBytesPerHour BigInt?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([projectId])
 }

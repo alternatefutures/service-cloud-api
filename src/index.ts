@@ -14,6 +14,11 @@ import {
   InvoiceScheduler,
   UsageAggregator,
 } from './services/billing/index.js'
+import {
+  getTelemetryIngestionService,
+  handleTelemetryWebhook,
+  handleTelemetryStats,
+} from './services/observability/index.js'
 import { startSslRenewalJob } from './jobs/sslRenewal.js'
 import depthLimit from 'graphql-depth-limit'
 import { createComplexityLimitRule } from 'graphql-validation-complexity'
@@ -29,6 +34,7 @@ const prisma = new PrismaClient()
 const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma)
 const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
+const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret =
   process.env.JWT_SECRET || 'development-secret-change-in-production'
 
@@ -111,6 +117,18 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
+  // Handle telemetry ingestion webhook (internal - from OTEL Collector)
+  if (url.pathname === '/internal/telemetry/ingestion-webhook') {
+    await handleTelemetryWebhook(req, res, prisma)
+    return
+  }
+
+  // Handle telemetry stats endpoint (internal - for monitoring)
+  if (url.pathname === '/internal/telemetry/stats') {
+    await handleTelemetryStats(req, res, prisma)
+    return
+  }
+
   // Pass all other requests to Yoga
   return yoga(req, res)
 }
@@ -145,8 +163,10 @@ server.listen(port, () => {
   storageSnapshotScheduler.start()
   invoiceScheduler.start()
   usageAggregator.start()
+  telemetryIngestionService.start()
   console.log(`📊 Billing schedulers started`)
   console.log(`⚡ Usage aggregator running (1-minute intervals)`)
+  console.log(`📈 Telemetry ingestion service running`)
 
   // Start SSL renewal job
   startSslRenewalJob()
@@ -159,6 +179,7 @@ process.on('SIGTERM', async () => {
   server.close(async () => {
     await chatServer.shutdown()
     await usageAggregator.shutdown()
+    await telemetryIngestionService.stop()
     await prisma.$disconnect()
     process.exit(0)
   })
@@ -169,6 +190,7 @@ process.on('SIGINT', async () => {
   server.close(async () => {
     await chatServer.shutdown()
     await usageAggregator.shutdown()
+    await telemetryIngestionService.stop()
     await prisma.$disconnect()
     process.exit(0)
   })

@@ -551,6 +551,184 @@ export const typeDefs = /* GraphQL */ `
     message: String!
   }
 
+  # ============================================
+  # OBSERVABILITY / APM
+  # ============================================
+
+  type Span {
+    timestamp: Date!
+    traceId: String!
+    spanId: String!
+    parentSpanId: String
+    traceState: String
+    spanName: String!
+    spanKind: String!
+    serviceName: String!
+    resourceAttributes: JSON
+    scopeName: String
+    scopeVersion: String
+    spanAttributes: JSON
+    durationNs: String!
+    durationMs: Float!
+    statusCode: String!
+    statusMessage: String
+    events: [SpanEvent!]!
+    links: [SpanLink!]!
+  }
+
+  type SpanEvent {
+    timestamp: Date!
+    name: String!
+    attributes: JSON
+  }
+
+  type SpanLink {
+    traceId: String!
+    spanId: String!
+    traceState: String
+    attributes: JSON
+  }
+
+  type Trace {
+    traceId: String!
+    rootSpan: Span
+    spans: [Span!]!
+    serviceName: String!
+    startTime: Date!
+    endTime: Date!
+    durationMs: Float!
+    spanCount: Int!
+    hasError: Boolean!
+  }
+
+  type MetricDataPoint {
+    timestamp: Date!
+    metricName: String!
+    metricDescription: String
+    metricUnit: String
+    metricType: String!
+    value: Float
+    histogramCount: Int
+    histogramSum: Float
+    histogramBuckets: [Float!]
+    histogramBucketCounts: [Int!]
+    attributes: JSON
+    resourceAttributes: JSON
+  }
+
+  type MetricSeries {
+    metricName: String!
+    metricUnit: String
+    metricType: String!
+    dataPoints: [MetricDataPoint!]!
+  }
+
+  type LogEntry {
+    timestamp: Date!
+    traceId: String
+    spanId: String
+    severityText: String!
+    severityNumber: Int!
+    body: String!
+    resourceAttributes: JSON
+    logAttributes: JSON
+  }
+
+  type ServiceStats {
+    serviceName: String!
+    spanCount: Int!
+    traceCount: Int!
+    errorCount: Int!
+    errorRate: Float!
+    avgDurationMs: Float!
+    p50DurationMs: Float!
+    p95DurationMs: Float!
+    p99DurationMs: Float!
+  }
+
+  type ObservabilitySettings {
+    id: ID!
+    projectId: String!
+    tracesEnabled: Boolean!
+    metricsEnabled: Boolean!
+    logsEnabled: Boolean!
+    traceRetention: Int!
+    metricRetention: Int!
+    logRetention: Int!
+    sampleRate: Float!
+    maxBytesPerHour: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  type TelemetryUsageSummary {
+    projectId: String!
+    bytesIngested: String!
+    bytesFormatted: String!
+    spansCount: Int!
+    metricsCount: Int!
+    logsCount: Int!
+    costCents: Int!
+    costFormatted: String!
+    periodStart: Date!
+    periodEnd: Date!
+  }
+
+  input TraceQueryInput {
+    projectId: ID!
+    startTime: Date!
+    endTime: Date!
+    serviceName: String
+    spanName: String
+    minDurationMs: Float
+    maxDurationMs: Float
+    statusCode: String
+    traceId: String
+    limit: Int
+    offset: Int
+  }
+
+  input MetricQueryInput {
+    projectId: ID!
+    startTime: Date!
+    endTime: Date!
+    metricName: String
+    aggregation: MetricAggregation
+    interval: String
+    limit: Int
+  }
+
+  enum MetricAggregation {
+    AVG
+    SUM
+    MIN
+    MAX
+    COUNT
+  }
+
+  input LogQueryInput {
+    projectId: ID!
+    startTime: Date!
+    endTime: Date!
+    severityText: String
+    minSeverityNumber: Int
+    search: String
+    traceId: String
+    limit: Int
+    offset: Int
+  }
+
+  input UpdateObservabilitySettingsInput {
+    tracesEnabled: Boolean
+    metricsEnabled: Boolean
+    logsEnabled: Boolean
+    traceRetention: Int
+    metricRetention: Int
+    logRetention: Int
+    sampleRate: Float
+    maxBytesPerHour: String
+  }
+
   type PaymentMethod {
     id: ID!
     type: PaymentMethodType!
@@ -817,6 +995,19 @@ export const typeDefs = /* GraphQL */ `
 
     # Usage Buffer Monitoring
     usageBufferStats: UsageBufferStats!
+
+    # Observability / APM
+    traces(input: TraceQueryInput!): [Trace!]!
+    trace(projectId: ID!, traceId: String!): Trace
+    metrics(input: MetricQueryInput!): [MetricSeries!]!
+    logs(input: LogQueryInput!): [LogEntry!]!
+    services(projectId: ID!, startTime: Date!, endTime: Date!): [ServiceStats!]!
+    observabilitySettings(projectId: ID!): ObservabilitySettings
+    telemetryUsage(
+      projectId: ID!
+      startDate: Date!
+      endDate: Date!
+    ): TelemetryUsageSummary!
   }
 
   # ============================================
@@ -904,6 +1095,12 @@ export const typeDefs = /* GraphQL */ `
 
     # Usage Buffer Management
     flushUsageBuffer: FlushUsageBufferResult!
+
+    # Observability Settings
+    updateObservabilitySettings(
+      projectId: ID!
+      input: UpdateObservabilitySettingsInput!
+    ): ObservabilitySettings!
 
     # DNS Record Management (Admin)
     addDnsRecord(input: CreateDNSRecordInput!): DNSUpdateResult!

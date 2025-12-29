@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@ardrive/turbo-sdk": "^1.33.0",
+    "@clickhouse/client": "^1.8.1",
     "@graphql-tools/schema": "^10.0.29",
     "@infisical/sdk": "^4.0.6",
     "@lighthouse-web3/sdk": "^0.4.3",
