@@ -146,7 +146,7 @@ jobs:
 
       - name: Upload backup as GitHub artifact
         if: steps.secrets.outputs.sidecar_mode == 'false'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: database-backup-${{ github.run_id }}
           path: ${{ env.backup_file }}.age
