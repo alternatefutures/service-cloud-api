@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 
 export interface AuthContext {
   userId?: string
+  organizationId?: string
   projectId?: string
 }
 
@@ -10,7 +11,7 @@ export interface AuthContext {
  */
 async function validateTokenViaAuthService(
   token: string
-): Promise<{ userId: string; tokenId: string } | null> {
+): Promise<{ userId: string; tokenId: string; organizationId?: string } | null> {
   const authServiceUrl = process.env.AUTH_SERVICE_URL
 
   if (!authServiceUrl) {
@@ -42,6 +43,7 @@ async function validateTokenViaAuthService(
     return {
       userId: data.userId,
       tokenId: data.tokenId,
+      organizationId: data.organizationId,
     }
   } catch (error) {
     console.error('Auth service validation error:', error)
@@ -75,8 +77,13 @@ export async function getAuthContext(
     // Get project ID from X-Project-Id header (optional)
     const projectId = request.headers.get('x-project-id') || undefined
 
+    // Organization ID comes from token, can be overridden by header
+    const organizationIdHeader = request.headers.get('x-organization-id')
+    const organizationId = organizationIdHeader || validationResult.organizationId
+
     return {
       userId: validationResult.userId,
+      organizationId,
       projectId,
     }
   } catch (error) {

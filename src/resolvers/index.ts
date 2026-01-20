@@ -7,7 +7,6 @@ import type { StorageType } from '../services/storage/factory.js'
 import { deploymentEvents } from '../services/events/index.js'
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js'
 import { chatResolvers } from './chat.js'
-import { billingResolvers } from './billing.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
 import { dnsAdminQueries, dnsAdminMutations } from './dnsAdmin.js'
@@ -15,9 +14,13 @@ import {
   observabilityQueries,
   observabilityMutations,
 } from './observability.js'
+import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
 export type { Context }
+
+// Service factory for storage tracking (billing is now handled by service-auth)
+const storageTracker = (prisma: any) => new StorageTracker(prisma)
 
 export const resolvers = {
   Query: {
@@ -45,8 +48,12 @@ export const resolvers = {
       if (!context.userId) {
         throw new GraphQLError('Not authenticated')
       }
+      // If organizationId is provided, filter by org; otherwise filter by user
+      const where = context.organizationId
+        ? { organizationId: context.organizationId }
+        : { userId: context.userId }
       return context.prisma.project.findMany({
-        where: { userId: context.userId },
+        where,
       })
     },
 
@@ -284,14 +291,103 @@ export const resolvers = {
     // Chat queries (from chat resolvers)
     ...chatResolvers.Query,
 
-    // Billing queries (from billing resolvers)
-    ...billingResolvers.Query,
-
     // Auth queries (from auth resolvers)
     ...authQueries,
 
     // Observability queries (from observability resolvers)
     ...observabilityQueries,
+
+    // Storage tracking queries (billing is now in service-auth)
+    pinnedContent: async (
+      _: unknown,
+      { limit = 100 }: { limit?: number },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required')
+      }
+
+      const pins = await storageTracker(context.prisma).getActivePins(
+        context.userId,
+        limit
+      )
+
+      // Convert BigInt to string for GraphQL
+      return pins.map((pin: any) => ({
+        ...pin,
+        sizeBytes: pin.sizeBytes.toString(),
+      }))
+    },
+
+    storageSnapshots: async (
+      _: unknown,
+      {
+        startDate,
+        endDate,
+        limit = 30,
+      }: { startDate?: Date; endDate?: Date; limit?: number },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required')
+      }
+
+      const start = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+      const end = endDate || new Date()
+
+      const snapshots = await storageTracker(context.prisma).getSnapshots(
+        context.userId,
+        start,
+        end
+      )
+
+      return snapshots.slice(0, limit).map((snapshot: any) => ({
+        ...snapshot,
+        totalBytes: snapshot.totalBytes.toString(),
+      }))
+    },
+
+    storageStats: async (_: unknown, __: unknown, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required')
+      }
+
+      const currentBytes = await storageTracker(
+        context.prisma
+      ).getCurrentStorage(context.userId)
+      const pinCount = await storageTracker(context.prisma).getPinCount(
+        context.userId
+      )
+
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
+
+      const snapshots = await storageTracker(context.prisma).getSnapshots(
+        context.userId,
+        yesterday,
+        today
+      )
+      const lastSnapshot =
+        snapshots.length > 0 ? snapshots[snapshots.length - 1] : null
+
+      const gb = Number(currentBytes) / (1024 * 1024 * 1024)
+      const formatted =
+        gb < 0.01 ? `${(gb * 1024).toFixed(2)} MB` : `${gb.toFixed(2)} GB`
+
+      return {
+        currentBytes: currentBytes.toString(),
+        currentBytesFormatted: formatted,
+        pinCount,
+        lastSnapshot: lastSnapshot
+          ? {
+              ...lastSnapshot,
+              totalBytes: lastSnapshot.totalBytes.toString(),
+            }
+          : null,
+      }
+    },
   },
 
   Mutation: {
@@ -312,6 +408,7 @@ export const resolvers = {
           name,
           slug,
           userId: context.userId,
+          organizationId: context.organizationId,
         },
       })
     },
@@ -513,14 +610,35 @@ export const resolvers = {
     // Chat mutations (from chat resolvers)
     ...chatResolvers.Mutation,
 
-    // Billing mutations (from billing resolvers)
-    ...billingResolvers.Mutation,
-
     // Auth mutations (from auth resolvers)
     ...authMutations,
 
     // Observability mutations (from observability resolvers)
     ...observabilityMutations,
+
+    // Storage tracking mutation (billing is now in service-auth)
+    triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Authentication required')
+      }
+
+      const snapshotId = await storageTracker(
+        context.prisma
+      ).createDailySnapshot(context.userId)
+
+      const snapshot = await context.prisma.storageSnapshot.findUnique({
+        where: { id: snapshotId },
+      })
+
+      if (!snapshot) {
+        throw new GraphQLError('Failed to create snapshot')
+      }
+
+      return {
+        ...snapshot,
+        totalBytes: snapshot.totalBytes.toString(),
+      }
+    },
   },
 
   // Field resolvers
@@ -601,19 +719,25 @@ export const resolvers = {
   Chat: chatResolvers.Chat,
   Message: chatResolvers.Message,
 
-  // Billing field resolvers
-  Customer: billingResolvers.Customer,
-  PaymentMethod: billingResolvers.PaymentMethod,
-  Invoice: billingResolvers.Invoice,
-  Payment: billingResolvers.Payment,
-  UsageRecord: billingResolvers.UsageRecord,
-  PinnedContent: billingResolvers.PinnedContent,
-  StorageSnapshot: billingResolvers.StorageSnapshot,
+  // Storage tracking field resolvers
+  PinnedContent: {
+    user: async (parent: any, _: unknown, context: Context) => {
+      return context.prisma.user.findUnique({
+        where: { id: parent.userId },
+      })
+    },
+  },
+
+  StorageSnapshot: {
+    user: async (parent: any, _: unknown, context: Context) => {
+      return context.prisma.user.findUnique({
+        where: { id: parent.userId },
+      })
+    },
+  },
 
   // Subscriptions for real-time updates
   Subscription: {
-    // Billing subscription field resolvers
-    ...billingResolvers.Subscription,
     // GraphQL subscription operations
     deploymentLogs: {
       subscribe: async function* (
