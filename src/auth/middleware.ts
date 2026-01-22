@@ -53,7 +53,7 @@ async function validateTokenViaAuthService(
 
 export async function getAuthContext(
   request: Request,
-  _prisma: PrismaClient
+  prisma: PrismaClient
 ): Promise<AuthContext> {
   const authHeader = request.headers.get('authorization')
 
@@ -73,6 +73,13 @@ export async function getAuthContext(
     if (!validationResult) {
       return {}
     }
+
+    // Ensure user exists in cloud API database (upsert)
+    await prisma.user.upsert({
+      where: { id: validationResult.userId },
+      update: {}, // No updates needed, just ensure exists
+      create: { id: validationResult.userId },
+    })
 
     // Get project ID from X-Project-Id header (optional)
     const projectId = request.headers.get('x-project-id') || undefined

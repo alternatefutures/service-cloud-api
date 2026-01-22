@@ -153,7 +153,7 @@ server.on('upgrade', (request, socket, head) => {
   }
 })
 
-const port = process.env.PORT || 4000
+const port = process.env.PORT || 1602
 
 server.listen(port, () => {
   console.log(`🚀 GraphQL server running at http://localhost:${port}/graphql`)

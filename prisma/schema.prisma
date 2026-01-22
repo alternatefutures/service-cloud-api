@@ -540,3 +540,31 @@ model ObservabilitySettings {
 
   @@index([projectId])
 }
+
+// ============================================
+// USAGE BUFFERING
+// ============================================
+
+model UsageBuffer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  
+  bandwidth Int      @default(0)
+  compute   Int      @default(0)
+  requests  Int      @default(0)
+  
+  updatedAt DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model UsageMetadata {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // BANDWIDTH, COMPUTE, REQUESTS
+  metadata  Json
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([createdAt])
+}

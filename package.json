@@ -16,7 +16,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio",
+    "db:studio": "prisma studio --port 1611",
     "db:seed": "tsx prisma/seed.ts",
     "generate:invoice": "tsx scripts/generate-sample-invoice.ts",
     "generate:types": "graphql-codegen --config codegen.ts",
@@ -99,5 +99,6 @@
     "parse-duration": "^2.1.3",
     "ws": "^8.18.3",
     "nanoid": "^5.0.9"
-  }
+  },
+  "packageManager": "pnpm@10.22.0+sha512.bf049efe995b28f527fd2b41ae0474ce29186f7edcb3bf545087bd61fbbebb2bf75362d1307fda09c2d288e1e499787ac12d4fcb617a974718a6051f2eee741c"
 }
