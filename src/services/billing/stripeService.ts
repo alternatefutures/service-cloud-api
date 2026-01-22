@@ -303,15 +303,28 @@ export class StripeService {
       stripeSubscriptionId = subscription.id
     }
 
+    // Get or create the plan
+    let subscriptionPlan = await this.prisma.subscriptionPlan.findUnique({
+      where: { name: plan },
+    })
+
+    if (!subscriptionPlan) {
+      subscriptionPlan = await this.prisma.subscriptionPlan.create({
+        data: {
+          name: plan,
+          basePricePerSeat,
+          usageMarkup,
+        },
+      })
+    }
+
     // Create subscription record
     const sub = await this.prisma.subscription.create({
       data: {
         customerId,
         stripeSubscriptionId,
         status: 'ACTIVE',
-        plan,
-        basePricePerSeat,
-        usageMarkup,
+        planId: subscriptionPlan.id,
         seats,
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,

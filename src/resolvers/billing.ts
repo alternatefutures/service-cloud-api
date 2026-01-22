@@ -680,11 +680,13 @@ export const billingResolvers = {
       }
 
       // Get or create billing settings
-      let settings = await context.prisma.billingSettings.findFirst()
+      let settings = await context.prisma.billingSettings.findUnique({
+        where: { userId: context.userId },
+      })
 
       if (!settings) {
         settings = await context.prisma.billingSettings.create({
-          data: {},
+          data: { userId: context.userId },
         })
       }
 
