@@ -11,6 +11,25 @@ datasource db {
 }
 
 // ============================================
+// ORGANIZATIONS & SERVICE REGISTRY (Workloads)
+// ============================================
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ServiceType {
+  SITE
+  FUNCTION
+  VM
+  DATABASE
+  CRON
+  BUCKET
+}
+
+// ============================================
 // USER & AUTHENTICATION
 // ============================================
 
@@ -21,6 +40,8 @@ model User {
   walletAddress String?  @unique
 
   projects              Project[]
+  organizationMemberships OrganizationMember[]
+  createdServices       Service[]
   agents                Agent[]
   chats                 Chat[]
   messages              Message[]
@@ -49,8 +70,11 @@ model Project {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
   sites     Site[]
   functions AFFunction[]
+  services  Service[]
 
   // Observability
   telemetryIngestions   TelemetryIngestion[]
@@ -75,6 +99,9 @@ model Site {
 
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  serviceId   String?  @unique
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   deployments Deployment[]
   domains     Domain[]
@@ -139,6 +166,9 @@ model AFFunction {
   projectId           String
   project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  serviceId           String?              @unique
+  service             Service?             @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
   siteId              String?
 
   currentDeploymentId String?              @unique
@@ -179,6 +209,56 @@ enum FunctionStatus {
   INACTIVE
   DEPLOYING
   FAILED
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  slug      String?
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   OrganizationMember[]
+  projects  Project[]
+
+  @@index([slug])
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Service {
+  id              String      @id @default(cuid())
+  type            ServiceType
+  name            String
+  slug            String
+  projectId       String
+  createdByUserId String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdByUser   User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // One-to-one (subtype tables have the FK via serviceId)
+  site            Site?
+  afFunction      AFFunction?
+
+  @@unique([type, slug])
+  @@index([projectId])
+  @@index([createdByUserId])
 }
 
 // ============================================

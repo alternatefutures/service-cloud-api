@@ -48,45 +48,233 @@ export const resolvers = {
       if (!context.userId) {
         throw new GraphQLError('Not authenticated')
       }
-      // If organizationId is provided, filter by org; otherwise filter by user
+      // If organizationId is provided, include both:
+      // - org-scoped projects for that org
+      // - user-owned "personal" projects (organizationId null)
+      // This prevents CLI-created personal projects from disappearing in the UI
+      // when the UI is operating in an org context.
       const where = context.organizationId
-        ? { organizationId: context.organizationId }
+        ? {
+            OR: [
+              { organizationId: context.organizationId },
+              { userId: context.userId, organizationId: null },
+            ],
+          }
         : { userId: context.userId }
-      return context.prisma.project.findMany({
+      const data = await context.prisma.project.findMany({
         where,
+      })
+      // Return wrapped format for SDK compatibility
+      return { data }
+    },
+
+    // Service registry (canonical workloads)
+    serviceRegistry: async (
+      _: unknown,
+      { projectId }: { projectId?: string | null },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const targetProjectId = projectId ?? context.projectId
+      if (!targetProjectId) {
+        throw new GraphQLError('Project ID required')
+      }
+
+      const project = await context.prisma.project.findUnique({
+        where: { id: targetProjectId },
+        select: { id: true, userId: true, organizationId: true },
+      })
+      if (!project) {
+        throw new GraphQLError('Project not found')
+      }
+
+      const isAuthorized = context.organizationId
+        ? project.organizationId === context.organizationId ||
+          (project.userId === context.userId && project.organizationId === null)
+        : project.userId === context.userId
+
+      if (!isAuthorized) {
+        throw new GraphQLError('Not authorized to access this project')
+      }
+
+      return context.prisma.service.findMany({
+        where: { projectId: targetProjectId },
+        orderBy: { createdAt: 'desc' },
       })
     },
 
     // Sites
-    site: async (_: unknown, { id }: { id: string }, context: Context) => {
+    site: async (
+      _: unknown,
+      { where }: { where: { id: string } },
+      context: Context
+    ) => {
       return context.prisma.site.findUnique({
-        where: { id },
+        where: { id: where.id },
       })
     },
 
-    sites: async (_: unknown, __: unknown, context: Context) => {
+    sites: async (_: unknown, _args: { where?: unknown } | undefined, context: Context) => {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required')
       }
-      return context.prisma.site.findMany({
+      const data = await context.prisma.site.findMany({
         where: { projectId: context.projectId },
       })
+      // Return wrapped format for SDK compatibility
+      return { data }
     },
 
     siteBySlug: async (
       _: unknown,
-      { slug }: { slug: string },
+      { where }: { where: { slug: string } },
       context: Context
     ) => {
       return context.prisma.site.findUnique({
-        where: { slug },
+        where: { slug: where.slug },
       })
+    },
+
+    // IPNS Records
+    ipnsRecord: async (
+      _: unknown,
+      { name }: { name: string },
+      context: Context
+    ) => {
+      return context.prisma.iPNSRecord.findUnique({
+        where: { name },
+      })
+    },
+
+    ipnsRecords: async (_: unknown, __: unknown, context: Context) => {
+      if (!context.projectId) {
+        throw new GraphQLError('Project ID required')
+      }
+      // Get IPNS records for sites in the current project
+      const sites = await context.prisma.site.findMany({
+        where: { projectId: context.projectId },
+        select: { id: true },
+      })
+      const siteIds = sites.map(s => s.id)
+      const data = await context.prisma.iPNSRecord.findMany({
+        where: { siteId: { in: siteIds } },
+      })
+      // Return wrapped format for SDK compatibility
+      return { data }
+    },
+
+    // Private Gateways (placeholder - returns empty for now as model doesn't exist)
+    privateGateway: async (
+      _: unknown,
+      { id }: { id: string },
+      context: Context
+    ) => {
+      // Private gateways not yet implemented in this API version
+      return null
+    },
+
+    privateGatewayBySlug: async (
+      _: unknown,
+      { slug }: { slug: string },
+      context: Context
+    ) => {
+      // Private gateways not yet implemented in this API version
+      return null
+    },
+
+    privateGateways: async (_: unknown, __: unknown, context: Context) => {
+      // Private gateways not yet implemented in this API version
+      // Return empty wrapped format for SDK compatibility
+      return { data: [] }
+    },
+
+    // Deployments (SDK compatibility)
+    deployment: async (
+      _: unknown,
+      { where }: { where: { id: string } },
+      context: Context
+    ) => {
+      return context.prisma.deployment.findUnique({
+        where: { id: where.id },
+      })
+    },
+
+    // Zones (SDK compatibility)
+    zones: async (_: unknown, __: unknown, context: Context) => {
+      if (!context.projectId) {
+        throw new GraphQLError('Project ID required')
+      }
+
+      const sites = await context.prisma.site.findMany({
+        where: { projectId: context.projectId },
+        select: { id: true },
+      })
+      const siteIds = sites.map(s => s.id)
+      const data = await context.prisma.zone.findMany({
+        where: { siteId: { in: siteIds } },
+        orderBy: { createdAt: 'desc' },
+      })
+
+      return { data }
+    },
+
+    zone: async (_: unknown, { id }: { id: string }, context: Context) => {
+      return context.prisma.zone.findUnique({ where: { id } })
+    },
+
+    // Storage (SDK compatibility - minimal)
+    pins: async (_: unknown, __: unknown, context: Context) => {
+      // This API doesn't currently expose pins by project; return empty list for CLI compatibility.
+      return { data: [] }
+    },
+
+    pin: async (_: unknown, { where }: { where: { cid: string } }, context: Context) => {
+      return context.prisma.pin.findUnique({ where: { cid: where.cid } })
+    },
+
+    pinsByFilename: async (
+      _ : unknown,
+      { where }: { where: { filename: string; extension?: string } },
+      context: Context
+    ) => {
+      // No filename/extension stored on Pin in this API version
+      return { data: [] }
+    },
+
+    filecoinDeals: async (
+      _: unknown,
+      { where }: { where: { cid: string } },
+      context: Context
+    ) => {
+      // Filecoin deals not implemented in this API version
+      return { data: [] }
+    },
+
+    // ENS (SDK compatibility - minimal)
+    ensRecords: async (_: unknown, __: unknown, context: Context) => {
+      return { data: [] }
+    },
+
+    ensRecordsByIpnsId: async (
+      _: unknown,
+      { where }: { where: { ipnsRecordId?: string } },
+      context: Context
+    ) => {
+      return { data: [] }
+    },
+
+    // Applications (SDK compatibility - minimal)
+    applications: async (_: unknown, __: unknown, context: Context) => {
+      return { data: [] }
     },
 
     // Functions
     afFunctionByName: async (
       _: unknown,
-      { name }: { name: string },
+      { where }: { where: { name: string } },
       context: Context
     ) => {
       if (!context.projectId) {
@@ -95,7 +283,7 @@ export const resolvers = {
 
       const func = await context.prisma.aFFunction.findFirst({
         where: {
-          name,
+          name: where.name,
           projectId: context.projectId,
         },
       })
@@ -111,20 +299,58 @@ export const resolvers = {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required')
       }
-      return context.prisma.aFFunction.findMany({
+      const data = await context.prisma.aFFunction.findMany({
         where: { projectId: context.projectId },
       })
+      // Return wrapped format for SDK compatibility
+      return { data }
     },
 
     afFunctionDeployments: async (
       _: unknown,
-      { functionId }: { functionId: string },
+      { where }: { where: { afFunctionId?: string; functionId?: string } },
       context: Context
     ) => {
-      return context.prisma.aFFunctionDeployment.findMany({
-        where: { afFunctionId: functionId },
+      const afFunctionId = where.afFunctionId || where.functionId
+      if (!afFunctionId) {
+        throw new GraphQLError('Function ID required')
+      }
+      const data = await context.prisma.aFFunctionDeployment.findMany({
+        where: { afFunctionId },
         orderBy: { createdAt: 'desc' },
       })
+      return { data }
+    },
+
+    afFunctionDeployment: async (
+      _: unknown,
+      { where }: { where: { id?: string; cid?: string; functionId?: string } },
+      context: Context
+    ) => {
+      if (where.id) {
+        return context.prisma.aFFunctionDeployment.findUnique({
+          where: { id: where.id },
+        })
+      }
+
+      if (where.cid) {
+        return context.prisma.aFFunctionDeployment.findFirst({
+          where: {
+            cid: where.cid,
+            ...(where.functionId ? { afFunctionId: where.functionId } : {}),
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+      }
+
+      if (where.functionId) {
+        return context.prisma.aFFunctionDeployment.findFirst({
+          where: { afFunctionId: where.functionId },
+          orderBy: { createdAt: 'desc' },
+        })
+      }
+
+      return null
     },
 
     // Domains (from domain resolvers)
@@ -394,14 +620,33 @@ export const resolvers = {
     // Projects
     createProject: async (
       _: unknown,
-      { name }: { name: string },
+      { data }: { data: { name: string } },
       context: Context
     ) => {
       if (!context.userId) {
         throw new GraphQLError('Not authenticated')
       }
 
-      const slug = generateSlug(name)
+      const { name } = data
+      const baseSlug = generateSlug(name)
+
+      // Project.slug is globally unique in Prisma, so repeated creates
+      // (or different users choosing the same name) must be disambiguated.
+      let slug = baseSlug
+      for (let i = 2; i <= 100; i++) {
+        const existing = await context.prisma.project.findUnique({
+          where: { slug },
+        })
+        if (!existing) break
+        slug = `${baseSlug}-${i}`
+      }
+
+      const stillExists = await context.prisma.project.findUnique({
+        where: { slug },
+      })
+      if (stillExists) {
+        throw new GraphQLError('Project slug already exists')
+      }
 
       return context.prisma.project.create({
         data: {
@@ -416,26 +661,99 @@ export const resolvers = {
     // Sites
     createSite: async (
       _: unknown,
-      { name, projectId }: { name: string; projectId?: string },
+      { data }: { data: { name: string } },
       context: Context
     ) => {
-      const targetProjectId = projectId || context.projectId
+      const targetProjectId = context.projectId
       if (!targetProjectId) {
         throw new GraphQLError('Project ID required')
       }
 
-      const slug = generateSlug(name)
+      const slug = generateSlug(data.name)
 
-      return context.prisma.site.create({
-        data: {
-          name,
-          slug,
-          projectId: targetProjectId,
+      return context.prisma.$transaction(async tx => {
+        const service = await tx.service.create({
+          data: {
+            type: 'SITE',
+            name: data.name,
+            slug,
+            projectId: targetProjectId,
+            createdByUserId: context.userId ?? null,
+          },
+        })
+
+        return tx.site.create({
+          data: {
+            name: data.name,
+            slug,
+            projectId: targetProjectId,
+            serviceId: service.id,
+          },
+        })
+      })
+    },
+
+    deleteSite: async (
+      _: unknown,
+      { where }: { where: { id: string } },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const site = await context.prisma.site.findUnique({
+        where: { id: where.id },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          projectId: true,
+          serviceId: true,
+          createdAt: true,
+          updatedAt: true,
         },
+      })
+
+      if (!site) {
+        throw new GraphQLError('Site not found')
+      }
+
+      // Ensure site belongs to the current project context (if set)
+      if (context.projectId && site.projectId !== context.projectId) {
+        throw new GraphQLError('Not authorized to delete this site')
+      }
+
+      // Prefer deleting the Service registry entry (cascade should remove the Site)
+      if (site.serviceId) {
+        await context.prisma.service.delete({ where: { id: site.serviceId } })
+        return site
+      }
+
+      // Legacy fallback (no serviceId)
+      return context.prisma.site.delete({
+        where: { id: where.id },
       })
     },
 
     // Deployments
+    createCustomIpfsDeployment: async (
+      _: unknown,
+      { data }: { data: { siteId: string; cid: string } },
+      context: Context
+    ) => {
+      // Create a deployment record for an existing IPFS CID.
+      // Mark as SUCCESS immediately since content already exists.
+      return context.prisma.deployment.create({
+        data: {
+          siteId: data.siteId,
+          cid: data.cid,
+          storageType: 'IPFS',
+          status: 'SUCCESS',
+        },
+      })
+    },
+
     createDeployment: async (
       _: unknown,
       {
@@ -490,64 +808,86 @@ export const resolvers = {
     // Functions
     createAFFunction: async (
       _: unknown,
-      { name, siteId, routes }: { name: string; siteId?: string; routes?: any },
+      {
+        data,
+      }: { data: { name?: string; siteId?: string; slug?: string; routes?: any; status?: string } },
       context: Context
     ) => {
       if (!context.projectId) {
         throw new GraphQLError('Project ID required')
       }
 
-      // Validate routes if provided
-      if (routes) {
-        validateRoutes(routes)
+      if (!data?.name) {
+        throw new GraphQLError('Function name required')
       }
 
-      const slug = generateSlug(name)
+      const name = data.name
+
+      // Validate routes if provided
+      if (data.routes !== undefined && data.routes !== null) {
+        validateRoutes(data.routes)
+      }
+
+      const slug = data.slug || generateSlug(name)
       const invokeUrl = generateInvokeUrl(slug)
 
-      return context.prisma.aFFunction.create({
-        data: {
-          name,
-          slug,
-          invokeUrl,
-          projectId: context.projectId,
-          siteId,
-          routes: routes || undefined,
-          status: 'ACTIVE',
-        },
+      return context.prisma.$transaction(async tx => {
+        const service = await tx.service.create({
+          data: {
+            type: 'FUNCTION',
+            name,
+            slug,
+            projectId: context.projectId!,
+            createdByUserId: context.userId ?? null,
+          },
+        })
+
+        return tx.aFFunction.create({
+          data: {
+            name,
+            slug,
+            invokeUrl,
+            projectId: context.projectId!,
+            siteId: data.siteId,
+            serviceId: service.id,
+            routes: data.routes === null ? null : (data.routes ?? undefined),
+            status: (data.status as any) || 'ACTIVE',
+          },
+        })
       })
     },
 
-    deployAFFunction: async (
+    triggerAFFunctionDeployment: async (
       _: unknown,
       {
-        functionId,
-        cid,
-        sgx = false,
-        blake3Hash,
-        assetsCid,
+        where,
+        data,
       }: {
-        functionId: string
-        cid: string
-        sgx?: boolean
-        blake3Hash?: string
-        assetsCid?: string
+        where: { functionId: string; cid?: string | null }
+        data?:
+          | { cid?: string | null; sgx?: boolean; blake3Hash?: string; assetsCid?: string }
+          | null
       },
       context: Context
     ) => {
+      const cid = where.cid ?? data?.cid
+      if (!cid) {
+        throw new GraphQLError('CID required')
+      }
+
       const deployment = await context.prisma.aFFunctionDeployment.create({
         data: {
           cid,
-          sgx,
-          blake3Hash,
-          assetsCid,
-          afFunctionId: functionId,
+          sgx: data?.sgx ?? false,
+          blake3Hash: data?.blake3Hash,
+          assetsCid: data?.assetsCid,
+          afFunctionId: where.functionId,
         },
       })
 
       // Update function's current deployment
       await context.prisma.aFFunction.update({
-        where: { id: functionId },
+        where: { id: where.functionId },
         data: {
           currentDeploymentId: deployment.id,
           status: 'ACTIVE',
@@ -560,45 +900,78 @@ export const resolvers = {
     updateAFFunction: async (
       _: unknown,
       {
-        id,
-        name,
-        slug,
-        routes,
-        status,
+        where,
+        data,
       }: {
-        id: string
-        name?: string
-        slug?: string
-        routes?: any
-        status?: string
+        where: { id: string }
+        data: { name?: string; slug?: string; siteId?: string; routes?: any; status?: string } | null
       },
       context: Context
     ) => {
       // Validate routes if provided
-      if (routes !== undefined && routes !== null) {
-        validateRoutes(routes)
+      if (data?.routes !== undefined && data?.routes !== null) {
+        validateRoutes(data.routes)
       }
 
+      const invokeUrl =
+        data?.slug !== undefined && data?.slug !== null
+          ? generateInvokeUrl(data.slug)
+          : undefined
+
       return context.prisma.aFFunction.update({
-        where: { id },
+        where: { id: where.id },
         data: {
-          ...(name && { name }),
-          ...(slug && { slug }),
-          ...(routes !== undefined && { routes }),
-          ...(status && { status: status as any }),
+          ...(data?.name !== undefined ? { name: data.name } : {}),
+          ...(data?.slug !== undefined ? { slug: data.slug } : {}),
+          ...(invokeUrl !== undefined ? { invokeUrl } : {}),
+          ...(data?.siteId !== undefined ? { siteId: data.siteId } : {}),
+          ...(data?.routes !== undefined ? { routes: data.routes } : {}),
+          ...(data?.status !== undefined ? { status: data.status as any } : {}),
         },
       })
     },
 
     deleteAFFunction: async (
       _: unknown,
-      { id }: { id: string },
+      { where }: { where: { id: string } },
       context: Context
     ) => {
-      await context.prisma.aFFunction.delete({
-        where: { id },
+      const func = await context.prisma.aFFunction.findUnique({
+        where: { id: where.id },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          invokeUrl: true,
+          routes: true,
+          status: true,
+          projectId: true,
+          siteId: true,
+          currentDeploymentId: true,
+          createdAt: true,
+          updatedAt: true,
+          serviceId: true,
+        },
       })
-      return true
+
+      if (!func) {
+        throw new GraphQLError('Function not found')
+      }
+
+      if (context.projectId && func.projectId !== context.projectId) {
+        throw new GraphQLError('Not authorized to delete this function')
+      }
+
+      // Prefer deleting the Service registry entry (cascade should remove the function)
+      if (func.serviceId) {
+        await context.prisma.service.delete({ where: { id: func.serviceId } })
+        return func
+      }
+
+      // Legacy fallback (no serviceId)
+      return context.prisma.aFFunction.delete({
+        where: { id: where.id },
+      })
     },
 
     // Domains (from domain resolvers)
@@ -668,10 +1041,35 @@ export const resolvers = {
     },
   },
 
+  Service: {
+    site: async (parent: any, _: unknown, context: Context) => {
+      if (parent.type !== 'SITE') return null
+      return context.prisma.site.findUnique({
+        where: { serviceId: parent.id },
+      })
+    },
+    afFunction: async (parent: any, _: unknown, context: Context) => {
+      if (parent.type !== 'FUNCTION') return null
+      return context.prisma.aFFunction.findUnique({
+        where: { serviceId: parent.id },
+      })
+    },
+  },
+
   Site: {
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
+      })
+    },
+    zones: (parent: any, _: unknown, context: Context) => {
+      return context.prisma.zone.findMany({
+        where: { siteId: parent.id },
+      })
+    },
+    ipnsRecords: (parent: any, _: unknown, context: Context) => {
+      return context.prisma.iPNSRecord.findMany({
+        where: { siteId: parent.id },
       })
     },
     deployments: (parent: any, _: unknown, context: Context) => {
@@ -684,6 +1082,55 @@ export const resolvers = {
         where: { siteId: parent.id },
       })
     },
+  },
+
+  Domain: {
+    isVerified: (parent: any) => !!parent.verified,
+    dnsConfigs: (parent: any) => {
+      const configs: any[] = []
+
+      if (parent.expectedCname) {
+        configs.push({
+          id: `${parent.id}-cname`,
+          type: 'CNAME',
+          name: '@',
+          value: parent.expectedCname,
+          createdAt: parent.createdAt,
+          updatedAt: parent.updatedAt,
+        })
+      }
+
+      if (parent.txtVerificationToken) {
+        configs.push({
+          id: `${parent.id}-txt`,
+          type: 'TXT',
+          name: '@',
+          value: parent.txtVerificationToken,
+          createdAt: parent.createdAt,
+          updatedAt: parent.updatedAt,
+        })
+      }
+
+      return configs
+    },
+    zone: async (parent: any, _: unknown, context: Context) => {
+      // Our Domain model doesn't store a zoneId; infer via its site -> zones
+      const zones = await context.prisma.zone.findMany({
+        where: { siteId: parent.siteId },
+        orderBy: { createdAt: 'asc' },
+        take: 1,
+      })
+      return zones[0] || null
+    },
+  },
+
+  IPNSRecord: {
+    ensRecords: () => [],
+  },
+
+  Application: {
+    whitelistDomains: () => [],
+    whiteLabelDomains: () => [],
   },
 
   AFFunction: {

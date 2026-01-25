@@ -107,7 +107,7 @@ describe('Query Resolvers', () => {
   })
 
   describe('projects', () => {
-    it('should return all projects for user', async () => {
+    it('should return all projects for user in wrapped format', async () => {
       const mockProjects = [
         { id: 'project-1', name: 'Project 1' },
         { id: 'project-2', name: 'Project 2' },
@@ -118,7 +118,8 @@ describe('Query Resolvers', () => {
 
       const result = await resolvers.Query.projects({}, {}, mockContext)
 
-      expect(result).toEqual(mockProjects)
+      // SDK expects wrapped format { data: [...] }
+      expect(result).toEqual({ data: mockProjects })
       expect(mockContext.prisma.project.findMany).toHaveBeenCalledWith({
         where: { userId: 'user-123' },
       })
@@ -152,7 +153,7 @@ describe('Query Resolvers', () => {
   })
 
   describe('sites', () => {
-    it('should return all sites for project', async () => {
+    it('should return all sites for project in wrapped format', async () => {
       const mockSites = [
         { id: 'site-1', name: 'Site 1' },
         { id: 'site-2', name: 'Site 2' },
@@ -161,7 +162,8 @@ describe('Query Resolvers', () => {
 
       const result = await resolvers.Query.sites({}, {}, mockContext)
 
-      expect(result).toEqual(mockSites)
+      // SDK expects wrapped format { data: [...] }
+      expect(result).toEqual({ data: mockSites })
       expect(mockContext.prisma.site.findMany).toHaveBeenCalledWith({
         where: { projectId: 'project-123' },
       })
@@ -253,7 +255,7 @@ describe('Query Resolvers', () => {
 
       const result = await resolvers.Query.afFunctions({}, {}, mockContext)
 
-      expect(result).toEqual(mockFunctions)
+      expect(result).toEqual({ data: mockFunctions })
       expect(mockContext.prisma.aFFunction.findMany).toHaveBeenCalledWith({
         where: { projectId: 'project-123' },
       })
