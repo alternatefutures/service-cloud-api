@@ -26,8 +26,10 @@ function getAuthServiceUrl(): string {
 }
 
 /**
- * Generate a short-lived JWT token for service-to-service authentication
- * The auth service will validate this token to authenticate the backend
+ * Generate a short-lived JWT token that the auth-service accepts.
+ *
+ * The auth-service `authMiddleware` only accepts tokens that look like its own
+ * access tokens (type=access, correct issuer/audience, signed with JWT_SECRET).
  */
 function generateServiceToken(userId: string): string {
   const secret = process.env.JWT_SECRET
@@ -35,15 +37,18 @@ function generateServiceToken(userId: string): string {
     throw new Error('JWT_SECRET not configured')
   }
 
-  // Generate a JWT token with 5-minute expiry for service-to-service auth
   return jwt.sign(
     {
       userId,
-      service: 'alternatefutures-backend',
-      type: 'service-to-service',
+      sessionId: 'cloud-api',
+      type: 'access',
     },
     secret,
-    { expiresIn: '5m' }
+    {
+      expiresIn: '5m',
+      issuer: 'alternatefutures-auth',
+      audience: 'alternatefutures-app',
+    }
   )
 }
 
@@ -141,7 +146,19 @@ export const authQueries = {
     }
 
     const data = await response.json()
-    return data.tokens
+    const tokens = (data.tokens || []).map((t: any) => ({
+      id: t.id,
+      name: t.name,
+      // SDK expects this field; we don't have a server-side masked value
+      maskedToken: null,
+      expiresAt: t.expiresAt ? new Date(t.expiresAt) : null,
+      lastUsedAt: t.lastUsedAt ? new Date(t.lastUsedAt) : null,
+      createdAt: t.createdAt ? new Date(t.createdAt) : new Date(),
+      updatedAt: t.updatedAt ? new Date(t.updatedAt) : new Date(),
+    }))
+
+    // Return wrapped format for SDK compatibility
+    return { data: tokens }
   },
 
   /**
@@ -183,7 +200,120 @@ export const authQueries = {
   },
 }
 
+/**
+ * Validate token via auth service (for loginWithPersonalAccessToken)
+ */
+async function validateTokenViaAuthService(
+  token: string
+): Promise<{ userId: string; tokenId: string; organizationId?: string } | null> {
+  const authServiceUrl = getAuthServiceUrl()
+  const introspectionSecret = process.env.AUTH_INTROSPECTION_SECRET
+
+  try {
+    const response = await fetch(`${authServiceUrl}/tokens/validate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(introspectionSecret
+          ? { 'x-af-introspection-secret': introspectionSecret }
+          : {}),
+      },
+      body: JSON.stringify({ token }),
+    })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const data = await response.json()
+    if (!data.valid) {
+      return null
+    }
+
+    return {
+      userId: data.userId,
+      tokenId: data.tokenId,
+      organizationId: data.organizationId,
+    }
+  } catch (error) {
+    console.error('Token validation error:', error)
+    return null
+  }
+}
+
+/**
+ * Generate a short-lived access token for the SDK
+ * This token is used for subsequent GraphQL requests
+ */
+function generateAccessToken(userId: string, projectId?: string): string {
+  const secret = process.env.JWT_SECRET
+  if (!secret) {
+    throw new Error('JWT_SECRET not configured')
+  }
+
+  // SDK access tokens are short-lived (8 minutes by default, matching SDK expectations)
+  return jwt.sign(
+    {
+      userId,
+      projectId,
+      type: 'sdk-access',
+    },
+    secret,
+    { expiresIn: '8m' }
+  )
+}
+
 export const authMutations = {
+  /**
+   * Exchange a Personal Access Token for a short-lived access token
+   * This is used by the SDK to authenticate subsequent requests
+   * Does NOT require prior authentication
+   */
+  loginWithPersonalAccessToken: async (
+    _: unknown,
+    { data }: { data: { personalAccessToken: string; projectId?: string } },
+    context: Context
+  ) => {
+    const { personalAccessToken, projectId } = data
+    
+    console.log('[loginWithPersonalAccessToken] Received request')
+    console.log('[loginWithPersonalAccessToken] Token length:', personalAccessToken?.length)
+    console.log('[loginWithPersonalAccessToken] Token:', personalAccessToken)
+
+    if (!personalAccessToken) {
+      throw new GraphQLError('Personal access token is required', {
+        extensions: {
+          code: 'INVALID_ARGUMENT',
+          name: 'InvalidArgumentError',
+        },
+      })
+    }
+
+    // Validate the PAT via auth service
+    const validationResult = await validateTokenViaAuthService(personalAccessToken)
+
+    if (!validationResult) {
+      throw new GraphQLError('Invalid or expired personal access token', {
+        extensions: {
+          code: 'UNAUTHORIZED',
+          name: 'UnauthorizedError',
+        },
+      })
+    }
+
+    // Ensure user exists in our database
+    await context.prisma.user.upsert({
+      where: { id: validationResult.userId },
+      update: {},
+      create: { id: validationResult.userId },
+    })
+
+    // Generate a short-lived access token for subsequent requests
+    const accessToken = generateAccessToken(validationResult.userId, projectId)
+
+    return accessToken
+  },
+
   /**
    * Create a new personal access token
    * Rate limited to 50 tokens per day per user

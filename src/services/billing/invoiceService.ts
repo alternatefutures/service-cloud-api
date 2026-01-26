@@ -24,6 +24,7 @@ export class InvoiceService {
         customer: {
           include: { user: true },
         },
+        plan: true,
       },
     })
 
@@ -47,15 +48,15 @@ export class InvoiceService {
 
     // Calculate amounts
     const baseAmount =
-      Number(subscription.basePricePerSeat) * subscription.seats
+      Number(subscription.plan.basePricePerSeat) * subscription.seats
     let usageAmount = 0
 
     for (const item of usage) {
-      usageAmount += item._sum.amount || 0
+      usageAmount += item._sum?.amount || 0
     }
 
     // Apply usage markup
-    const usageMarkup = Number(subscription.usageMarkup)
+    const usageMarkup = Number(subscription.plan.usageMarkup)
     const markedUpUsage = Math.ceil(usageAmount * (1 + usageMarkup))
 
     const subtotal = baseAmount + markedUpUsage
@@ -96,17 +97,17 @@ export class InvoiceService {
     await this.prisma.invoiceLineItem.create({
       data: {
         invoiceId: invoice.id,
-        description: `${subscription.plan} Plan - ${subscription.seats} seat(s)`,
+        description: `${subscription.plan.name} Plan - ${subscription.seats} seat(s)`,
         quantity: subscription.seats,
-        unitPrice: Number(subscription.basePricePerSeat),
+        unitPrice: Number(subscription.plan.basePricePerSeat),
         amount: baseAmount,
       },
     })
 
     // Usage line items
     for (const item of usage) {
-      const quantity = Number(item._sum.quantity || 0)
-      const amount = item._sum.amount || 0
+      const quantity = Number(item._sum?.quantity || 0)
+      const amount = item._sum?.amount || 0
       const markedUp = Math.ceil(amount * (1 + usageMarkup))
 
       await this.prisma.invoiceLineItem.create({

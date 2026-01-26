@@ -91,35 +91,17 @@ export const domainQueries = {
   },
 
   /**
-   * List domains for a site
+   * List domains (SDK compatibility wrapper)
    */
   domains: async (
     _: unknown,
-    { siteId }: { siteId?: string },
+    __: unknown,
     { prisma, userId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
-    if (siteId) {
-      // Check site ownership
-      const site = await prisma.site.findUnique({
-        where: { id: siteId },
-        include: { project: true },
-      })
-
-      if (!site) {
-        throw new GraphQLError('Site not found')
-      }
-
-      if (site.project.userId !== userId) {
-        throw new GraphQLError('Not authorized to access this site')
-      }
-
-      return await listDomainsForSite(siteId)
-    }
-
     // Return all domains for user
-    return await prisma.domain.findMany({
+    const data = await prisma.domain.findMany({
       where: {
         site: {
           project: {
@@ -129,6 +111,8 @@ export const domainQueries = {
       },
       orderBy: { createdAt: 'desc' },
     })
+
+    return { data }
   },
 
   /**
