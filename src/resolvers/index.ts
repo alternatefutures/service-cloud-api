@@ -648,6 +648,14 @@ export const resolvers = {
         throw new GraphQLError('Project slug already exists')
       }
 
+      if (context.organizationId) {
+        await context.prisma.organization.upsert({
+          where: { id: context.organizationId },
+          update: {},
+          create: { id: context.organizationId },
+        })
+      }
+
       return context.prisma.project.create({
         data: {
           name,
