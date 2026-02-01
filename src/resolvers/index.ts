@@ -272,6 +272,22 @@ export const resolvers = {
     },
 
     // Functions
+    afFunction: async (
+      _: unknown,
+      { where }: { where: { id: string } },
+      context: Context
+    ) => {
+      const func = await context.prisma.aFFunction.findUnique({
+        where: { id: where.id },
+      })
+
+      if (!func) {
+        throw new GraphQLError('Function not found')
+      }
+
+      return func
+    },
+
     afFunctionByName: async (
       _: unknown,
       { where }: { where: { name: string } },
@@ -818,7 +834,7 @@ export const resolvers = {
       _: unknown,
       {
         data,
-      }: { data: { name?: string; siteId?: string; slug?: string; routes?: any; status?: string } },
+      }: { data: { name?: string; siteId?: string; slug?: string; sourceCode?: string; routes?: any; status?: string } },
       context: Context
     ) => {
       if (!context.projectId) {
@@ -854,6 +870,7 @@ export const resolvers = {
           data: {
             name,
             slug,
+            sourceCode: data.sourceCode,
             invokeUrl,
             projectId: context.projectId!,
             siteId: data.siteId,
@@ -912,7 +929,7 @@ export const resolvers = {
         data,
       }: {
         where: { id: string }
-        data: { name?: string; slug?: string; siteId?: string; routes?: any; status?: string } | null
+        data: { name?: string; slug?: string; sourceCode?: string; siteId?: string; routes?: any; status?: string } | null
       },
       context: Context
     ) => {
@@ -931,6 +948,7 @@ export const resolvers = {
         data: {
           ...(data?.name !== undefined ? { name: data.name } : {}),
           ...(data?.slug !== undefined ? { slug: data.slug } : {}),
+          ...(data?.sourceCode !== undefined ? { sourceCode: data.sourceCode } : {}),
           ...(invokeUrl !== undefined ? { invokeUrl } : {}),
           ...(data?.siteId !== undefined ? { siteId: data.siteId } : {}),
           ...(data?.routes !== undefined ? { routes: data.routes } : {}),

@@ -159,6 +159,7 @@ model AFFunction {
   id                  String               @id @default(cuid())
   name                String
   slug                String               @unique
+  sourceCode          String?              @db.Text
   invokeUrl           String?
   routes              Json?
   status              FunctionStatus       @default(ACTIVE)

@@ -177,6 +177,7 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     slug: String!
+    sourceCode: String
     invokeUrl: String
     # SDK compatibility fields (backed by Prisma columns)
     projectId: ID!
@@ -235,6 +236,7 @@ export const typeDefs = /* GraphQL */ `
     name: String
     siteId: ID
     slug: String
+    sourceCode: String
     routes: JSON
     status: FunctionStatus
   }
@@ -247,6 +249,7 @@ export const typeDefs = /* GraphQL */ `
     name: String
     siteId: ID
     slug: String
+    sourceCode: String
     routes: JSON
     status: FunctionStatus
   }
@@ -1276,6 +1279,7 @@ export const typeDefs = /* GraphQL */ `
     deployments(siteId: ID): [Deployment!]!
 
     # Functions
+    afFunction(where: AFFunctionWhereInput!): AFFunction
     afFunctionByName(where: AFFunctionByNameWhereInput!): AFFunction
     afFunctions: AFFunctionList!
     afFunctionDeployment(where: AFFunctionDeploymentWhereInput!): AFFunctionDeployment
