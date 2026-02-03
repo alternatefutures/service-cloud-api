@@ -17,38 +17,24 @@ jobs:
           BRANCH_NAME="${{ github.head_ref }}"
           echo "Checking branch name: $BRANCH_NAME"
 
-          # Valid patterns (ticket number optional):
-          # - feature/description or feat/description
-          # - fix/description
-          # - hotfix/description
-          # - chore/description
-          # - docs/description
-          # - refactor/description
+          # Valid patterns:
+          # - Simple: description (lowercase letters, numbers, hyphens)
+          # - Prefixed: type/description
 
-          if [[ "$BRANCH_NAME" =~ ^(feature|feat|fix|hotfix|chore|docs|refactor)/[a-z0-9-]+$ ]]; then
+          if [[ "$BRANCH_NAME" =~ ^[a-z0-9-]+$ ]] || [[ "$BRANCH_NAME" =~ ^[a-z]+/[a-z0-9-]+$ ]]; then
             echo "✅ Branch name is valid: $BRANCH_NAME"
             exit 0
           else
             echo "❌ Invalid branch name: $BRANCH_NAME"
             echo ""
-            echo "Branch names must follow this format:"
-            echo "  - feature/description or feat/description"
-            echo "  - fix/description"
-            echo "  - hotfix/description"
-            echo "  - chore/description"
-            echo "  - docs/description"
-            echo "  - refactor/description"
-            echo ""
-            echo "Where description uses lowercase letters, numbers, and hyphens"
+            echo "Branch names should use lowercase letters, numbers, and hyphens."
             echo ""
             echo "Examples:"
+            echo "  ✅ add-org-structure"
             echo "  ✅ feature/add-webhook-support"
-            echo "  ✅ feat/user-auth"
             echo "  ✅ fix/auth-token-expiry"
-            echo "  ✅ hotfix/security-patch"
-            echo "  ✅ chore/update-dependencies"
-            echo "  ❌ my-feature (missing prefix)"
             echo "  ❌ Feature/Something (uppercase not allowed)"
+            echo "  ❌ my_feature (underscores not allowed)"
             exit 1
           fi
 
