@@ -10,7 +10,7 @@
 
 ### Main Navigation
 
-The Admin UI has several tabs:
+The Admin UI has several tabs: 
 
 1. **Overview** - Cluster health and metrics
 2. **Tables** - Browse database schema and data
