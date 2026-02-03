@@ -45,7 +45,9 @@ const schema = makeExecutableSchema({
 
 // Security limits for GraphQL queries
 const MAX_DEPTH = 10
-const MAX_COMPLEXITY = 1000
+// SDK-generated queries (notably Sites list) are fairly "wide" and can
+// exceed conservative complexity limits in development.
+const MAX_COMPLEXITY = 5000
 
 // Custom plugin to add validation rules for depth and complexity limits
 const useValidationRules = (): Plugin => {
@@ -59,6 +61,23 @@ const useValidationRules = (): Plugin => {
           listFactor: 10,
         })
       )
+    },
+  }
+}
+
+// Plugin to log GraphQL operations
+const useLogging = (): Plugin => {
+  return {
+    onExecute({ args }) {
+      const operationName = args.operationName || 'anonymous'
+      const query = args.document?.loc?.source?.body?.substring(0, 300) || 'unknown'
+      console.log(`[GraphQL] Executing: ${operationName}`)
+      console.log(`[GraphQL] Query: ${query}`)
+    },
+    onResultProcess({ result }) {
+      if ('errors' in result && result.errors) {
+        console.log('[GraphQL] Errors:', JSON.stringify(result.errors))
+      }
     },
   }
 }
@@ -79,7 +98,7 @@ const yoga = createYoga({
   graphqlEndpoint: '/graphql',
   landingPage: true,
   maskedErrors: process.env.NODE_ENV === 'production',
-  plugins: [useValidationRules()],
+  plugins: [useValidationRules(), useLogging()],
 })
 
 // Apply security headers middleware
@@ -104,6 +123,9 @@ const helmetMiddleware = helmet({
 // Custom request handler to intercept webhook requests
 async function requestHandler(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
+  
+  // Log all incoming requests
+  console.log(`<-- ${req.method} ${url.pathname}`)
 
   // Apply security headers
   await new Promise<void>(resolve => {
@@ -153,7 +175,7 @@ server.on('upgrade', (request, socket, head) => {
   }
 })
 
-const port = process.env.PORT || 4000
+const port = process.env.PORT || 1602
 
 server.listen(port, () => {
   console.log(`🚀 GraphQL server running at http://localhost:${port}/graphql`)

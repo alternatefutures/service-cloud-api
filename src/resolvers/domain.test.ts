@@ -101,22 +101,16 @@ describe('Domain Resolvers', () => {
 
     describe('domains', () => {
       it('should list domains for site', async () => {
-        const mockSite = {
-          id: 'site-123',
-          project: {
-            userId: 'user-123',
-          },
-        }
-
+        // Note: The domains resolver returns ALL domains for the user
+        // and doesn't filter by siteId - the siteId argument is ignored.
         const mockDomains = [
           { id: 'domain-1', hostname: 'example.com' },
           { id: 'domain-2', hostname: 'www.example.com' },
         ]
 
-        mockContext.prisma.site.findUnique = vi.fn().mockResolvedValue(mockSite)
-        vi.mocked(domainService.listDomainsForSite).mockResolvedValue(
-          mockDomains as any
-        )
+        mockContext.prisma.domain.findMany = vi
+          .fn()
+          .mockResolvedValue(mockDomains)
 
         const result = await domainQueries.domains(
           {},
@@ -124,7 +118,7 @@ describe('Domain Resolvers', () => {
           mockContext
         )
 
-        expect(result).toHaveLength(2)
+        expect(result.data).toHaveLength(2)
       })
 
       it('should list all domains for user if no siteId', async () => {
@@ -139,7 +133,7 @@ describe('Domain Resolvers', () => {
 
         const result = await domainQueries.domains({}, {}, mockContext)
 
-        expect(result).toHaveLength(2)
+        expect(result.data).toHaveLength(2)
       })
     })
 

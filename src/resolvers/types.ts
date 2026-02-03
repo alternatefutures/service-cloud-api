@@ -8,5 +8,6 @@ import type { PrismaClient } from '@prisma/client'
 export interface Context extends YogaInitialContext {
   prisma: PrismaClient
   userId?: string
+  organizationId?: string
   projectId?: string
 }

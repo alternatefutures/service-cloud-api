@@ -96,7 +96,7 @@ export class UsageAggregator {
       for (const [userId, metrics] of bufferedUsage.entries()) {
         try {
           // Find customer for this user
-          const customer = await this.prisma.customer.findUnique({
+          const customer = await this._prisma.customer.findUnique({
             where: { userId },
             include: {
               subscriptions: {
@@ -123,7 +123,7 @@ export class UsageAggregator {
             new Date(timestamp.getTime() + 30 * 24 * 60 * 60 * 1000)
 
           // Get pricing from billing settings
-          const settings = await this.prisma.billingSettings.findFirst()
+          const settings = await this._prisma.billingSettings.findFirst()
 
           // Create usage records for each metric type
           const usageRecords = []
@@ -136,12 +136,14 @@ export class UsageAggregator {
             usageRecords.push({
               customerId: customer.id,
               type: 'BANDWIDTH' as const,
+              metricType: 'bandwidth',
               resourceType: 'AGGREGATED',
               quantity: metrics.bandwidth,
               unit: 'GB',
               periodStart,
               periodEnd,
-              unitPrice: settings?.bandwidthPerGBCents,
+              recordedAt: timestamp,
+              unitPrice: settings?.bandwidthPerGBCents ?? undefined,
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
@@ -156,12 +158,14 @@ export class UsageAggregator {
             usageRecords.push({
               customerId: customer.id,
               type: 'COMPUTE' as const,
+              metricType: 'compute',
               resourceType: 'AGGREGATED',
               quantity: metrics.compute,
               unit: 'HOURS',
               periodStart,
               periodEnd,
-              unitPrice: settings?.computePerHourCents,
+              recordedAt: timestamp,
+              unitPrice: settings?.computePerHourCents ?? undefined,
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
@@ -178,12 +182,14 @@ export class UsageAggregator {
             usageRecords.push({
               customerId: customer.id,
               type: 'REQUESTS' as const,
+              metricType: 'requests',
               resourceType: 'AGGREGATED',
               quantity: metrics.requests,
               unit: 'REQUESTS',
               periodStart,
               periodEnd,
-              unitPrice: settings?.requestsPer1000Cents,
+              recordedAt: timestamp,
+              unitPrice: settings?.requestsPer1000Cents ?? undefined,
               amount,
               timestamp,
               metadata: { aggregated: true, interval: '1min' },
@@ -192,7 +198,7 @@ export class UsageAggregator {
 
           // Batch insert all usage records for this user
           if (usageRecords.length > 0) {
-            await this.prisma.usageRecord.createMany({
+            await this._prisma.usageRecord.createMany({
               data: usageRecords,
             })
           }

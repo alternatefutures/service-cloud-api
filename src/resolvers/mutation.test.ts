@@ -42,6 +42,12 @@ describe('Mutation Resolvers', () => {
       prisma: {
         project: {
           create: vi.fn(),
+          findUnique: vi.fn(),
+        },
+        service: {
+          create: vi.fn(),
+          delete: vi.fn(),
+          findUnique: vi.fn(),
         },
         site: {
           create: vi.fn(),
@@ -51,6 +57,7 @@ describe('Mutation Resolvers', () => {
           create: vi.fn(),
           update: vi.fn(),
           delete: vi.fn(),
+          findUnique: vi.fn(),
         },
         aFFunctionDeployment: {
           create: vi.fn(),
@@ -80,13 +87,14 @@ describe('Mutation Resolvers', () => {
         slug: 'test-project',
         userId: 'user-123',
       }
+      vi.mocked(mockContext.prisma.project.findUnique).mockResolvedValue(null)
       vi.mocked(mockContext.prisma.project.create).mockResolvedValue(
         mockProject
       )
 
       const result = await resolvers.Mutation.createProject(
         {},
-        { name: 'Test Project' },
+        { data: { name: 'Test Project' } },
         mockContext
       )
 
@@ -96,6 +104,7 @@ describe('Mutation Resolvers', () => {
           name: 'Test Project',
           slug: 'test-project',
           userId: 'user-123',
+          organizationId: undefined,
         },
       })
     })
@@ -106,7 +115,7 @@ describe('Mutation Resolvers', () => {
       await expect(
         resolvers.Mutation.createProject(
           {},
-          { name: 'Test Project' },
+          { data: { name: 'Test Project' } },
           mockContext
         )
       ).rejects.toThrow('Not authenticated')
@@ -120,46 +129,75 @@ describe('Mutation Resolvers', () => {
         name: 'Test Site',
         slug: 'test-site',
         projectId: 'project-123',
+        serviceId: 'svc-site-1',
       }
+      vi.mocked(mockContext.prisma.service.create).mockResolvedValue({
+        id: 'svc-site-1',
+      } as any)
       vi.mocked(mockContext.prisma.site.create).mockResolvedValue(mockSite)
 
       const result = await resolvers.Mutation.createSite(
         {},
-        { name: 'Test Site' },
+        { data: { name: 'Test Site' } },
         mockContext
       )
 
       expect(result).toEqual(mockSite)
+      expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
+        data: {
+          type: 'SITE',
+          name: 'Test Site',
+          slug: 'test-site',
+          projectId: 'project-123',
+          createdByUserId: 'user-123',
+        },
+      })
       expect(mockContext.prisma.site.create).toHaveBeenCalledWith({
         data: {
           name: 'Test Site',
           slug: 'test-site',
           projectId: 'project-123',
+          serviceId: 'svc-site-1',
         },
       })
     })
 
-    it('should create a new site with provided projectId', async () => {
+    it('should create a new site with context projectId override', async () => {
+      mockContext.projectId = 'custom-project-456'
       const mockSite = {
         id: 'site-123',
         name: 'Test Site',
         slug: 'test-site',
         projectId: 'custom-project-456',
+        serviceId: 'svc-site-1',
       }
+      vi.mocked(mockContext.prisma.service.create).mockResolvedValue({
+        id: 'svc-site-1',
+      } as any)
       vi.mocked(mockContext.prisma.site.create).mockResolvedValue(mockSite)
 
       const result = await resolvers.Mutation.createSite(
         {},
-        { name: 'Test Site', projectId: 'custom-project-456' },
+        { data: { name: 'Test Site' } },
         mockContext
       )
 
       expect(result).toEqual(mockSite)
+      expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
+        data: {
+          type: 'SITE',
+          name: 'Test Site',
+          slug: 'test-site',
+          projectId: 'custom-project-456',
+          createdByUserId: 'user-123',
+        },
+      })
       expect(mockContext.prisma.site.create).toHaveBeenCalledWith({
         data: {
           name: 'Test Site',
           slug: 'test-site',
           projectId: 'custom-project-456',
+          serviceId: 'svc-site-1',
         },
       })
     })
@@ -168,7 +206,7 @@ describe('Mutation Resolvers', () => {
       mockContext.projectId = undefined
 
       await expect(
-        resolvers.Mutation.createSite({}, { name: 'Test Site' }, mockContext)
+        resolvers.Mutation.createSite({}, { data: { name: 'Test Site' } }, mockContext)
       ).rejects.toThrow('Project ID required')
     })
   })
@@ -182,18 +220,31 @@ describe('Mutation Resolvers', () => {
         invokeUrl: 'https://invoke.example.com/test-function',
         projectId: 'project-123',
         status: 'ACTIVE',
+        serviceId: 'svc-fn-1',
       }
+      vi.mocked(mockContext.prisma.service.create).mockResolvedValue({
+        id: 'svc-fn-1',
+      } as any)
       vi.mocked(mockContext.prisma.aFFunction.create).mockResolvedValue(
         mockFunction
       )
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
-        { name: 'Test Function' },
+        { data: { name: 'Test Function' } },
         mockContext
       )
 
       expect(result).toEqual(mockFunction)
+      expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
+        data: {
+          type: 'FUNCTION',
+          name: 'Test Function',
+          slug: 'test-function',
+          projectId: 'project-123',
+          createdByUserId: 'user-123',
+        },
+      })
       expect(mockContext.prisma.aFFunction.create).toHaveBeenCalledWith({
         data: {
           name: 'Test Function',
@@ -201,6 +252,7 @@ describe('Mutation Resolvers', () => {
           invokeUrl: 'https://invoke.example.com/test-function',
           projectId: 'project-123',
           siteId: undefined,
+          serviceId: 'svc-fn-1',
           routes: undefined,
           status: 'ACTIVE',
         },
@@ -219,14 +271,18 @@ describe('Mutation Resolvers', () => {
         projectId: 'project-123',
         routes,
         status: 'ACTIVE',
+        serviceId: 'svc-fn-1',
       }
+      vi.mocked(mockContext.prisma.service.create).mockResolvedValue({
+        id: 'svc-fn-1',
+      } as any)
       vi.mocked(mockContext.prisma.aFFunction.create).mockResolvedValue(
         mockFunction
       )
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
-        { name: 'Test Function', routes },
+        { data: { name: 'Test Function', routes } },
         mockContext
       )
 
@@ -243,14 +299,18 @@ describe('Mutation Resolvers', () => {
         projectId: 'project-123',
         siteId: 'site-123',
         status: 'ACTIVE',
+        serviceId: 'svc-fn-1',
       }
+      vi.mocked(mockContext.prisma.service.create).mockResolvedValue({
+        id: 'svc-fn-1',
+      } as any)
       vi.mocked(mockContext.prisma.aFFunction.create).mockResolvedValue(
         mockFunction
       )
 
       const result = await resolvers.Mutation.createAFFunction(
         {},
-        { name: 'Test Function', siteId: 'site-123' },
+        { data: { name: 'Test Function', siteId: 'site-123' } },
         mockContext
       )
 
@@ -262,6 +322,7 @@ describe('Mutation Resolvers', () => {
           invokeUrl: 'https://invoke.example.com/test-function',
           projectId: 'project-123',
           siteId: 'site-123',
+          serviceId: 'svc-fn-1',
           routes: undefined,
           status: 'ACTIVE',
         },
@@ -274,14 +335,14 @@ describe('Mutation Resolvers', () => {
       await expect(
         resolvers.Mutation.createAFFunction(
           {},
-          { name: 'Test Function' },
+          { data: { name: 'Test Function' } },
           mockContext
         )
       ).rejects.toThrow('Project ID required')
     })
   })
 
-  describe('deployAFFunction', () => {
+  describe('triggerAFFunctionDeployment', () => {
     it('should deploy a function without optional fields', async () => {
       const mockDeployment = {
         id: 'deploy-123',
@@ -296,9 +357,9 @@ describe('Mutation Resolvers', () => {
         {} as any
       )
 
-      const result = await resolvers.Mutation.deployAFFunction(
+      const result = await resolvers.Mutation.triggerAFFunctionDeployment(
         {},
-        { functionId: 'func-123', cid: 'QmTest123' },
+        { where: { functionId: 'func-123', cid: 'QmTest123' } },
         mockContext
       )
 
@@ -339,14 +400,15 @@ describe('Mutation Resolvers', () => {
         {} as any
       )
 
-      const result = await resolvers.Mutation.deployAFFunction(
+      const result = await resolvers.Mutation.triggerAFFunctionDeployment(
         {},
         {
-          functionId: 'func-123',
-          cid: 'QmTest123',
-          sgx: true,
-          blake3Hash: 'blake3hash123',
-          assetsCid: 'QmAssets456',
+          where: { functionId: 'func-123', cid: 'QmTest123' },
+          data: {
+            sgx: true,
+            blake3Hash: 'blake3hash123',
+            assetsCid: 'QmAssets456',
+          },
         },
         mockContext
       )
@@ -375,7 +437,7 @@ describe('Mutation Resolvers', () => {
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
-        { id: 'func-123', name: 'Updated Name' },
+        { where: { id: 'func-123' }, data: { name: 'Updated Name' } },
         mockContext
       )
 
@@ -394,14 +456,17 @@ describe('Mutation Resolvers', () => {
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
-        { id: 'func-123', slug: 'new-slug' },
+        { where: { id: 'func-123' }, data: { slug: 'new-slug' } },
         mockContext
       )
 
       expect(result).toEqual(mockFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-123' },
-        data: { slug: 'new-slug' },
+        data: {
+          slug: 'new-slug',
+          invokeUrl: 'https://invoke.example.com/new-slug',
+        },
       })
     })
 
@@ -416,7 +481,7 @@ describe('Mutation Resolvers', () => {
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
-        { id: 'func-123', routes },
+        { where: { id: 'func-123' }, data: { routes } },
         mockContext
       )
 
@@ -436,7 +501,7 @@ describe('Mutation Resolvers', () => {
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
-        { id: 'func-123', routes: null },
+        { where: { id: 'func-123' }, data: { routes: null } },
         mockContext
       )
 
@@ -456,7 +521,7 @@ describe('Mutation Resolvers', () => {
 
       const result = await resolvers.Mutation.updateAFFunction(
         {},
-        { id: 'func-123', status: 'INACTIVE' },
+        { where: { id: 'func-123' }, data: { status: 'INACTIVE' } },
         mockContext
       )
 
@@ -481,10 +546,12 @@ describe('Mutation Resolvers', () => {
       const result = await resolvers.Mutation.updateAFFunction(
         {},
         {
-          id: 'func-123',
-          name: 'New Name',
-          slug: 'new-slug',
-          status: 'ACTIVE',
+          where: { id: 'func-123' },
+          data: {
+            name: 'New Name',
+            slug: 'new-slug',
+            status: 'ACTIVE',
+          },
         },
         mockContext
       )
@@ -492,26 +559,45 @@ describe('Mutation Resolvers', () => {
       expect(result).toEqual(mockFunction)
       expect(mockContext.prisma.aFFunction.update).toHaveBeenCalledWith({
         where: { id: 'func-123' },
-        data: { name: 'New Name', slug: 'new-slug', status: 'ACTIVE' },
+        data: {
+          name: 'New Name',
+          slug: 'new-slug',
+          invokeUrl: 'https://invoke.example.com/new-slug',
+          status: 'ACTIVE',
+        },
       })
     })
   })
 
   describe('deleteAFFunction', () => {
     it('should delete a function', async () => {
-      vi.mocked(mockContext.prisma.aFFunction.delete).mockResolvedValue(
-        {} as any
-      )
+      vi.mocked(mockContext.prisma.aFFunction.findUnique).mockResolvedValue({
+        id: 'func-123',
+        name: 'Test Function',
+        slug: 'test-function',
+        invokeUrl: 'https://invoke.example.com/test-function',
+        routes: null,
+        status: 'ACTIVE',
+        projectId: 'project-123',
+        siteId: null,
+        currentDeploymentId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        serviceId: 'svc-fn-1',
+      } as any)
+      vi.mocked(mockContext.prisma.service.delete).mockResolvedValue({
+        id: 'svc-fn-1',
+      } as any)
 
       const result = await resolvers.Mutation.deleteAFFunction(
         {},
-        { id: 'func-123' },
+        { where: { id: 'func-123' } },
         mockContext
       )
 
-      expect(result).toBe(true)
-      expect(mockContext.prisma.aFFunction.delete).toHaveBeenCalledWith({
-        where: { id: 'func-123' },
+      expect(result).toMatchObject({ id: 'func-123' })
+      expect(mockContext.prisma.service.delete).toHaveBeenCalledWith({
+        where: { id: 'svc-fn-1' },
       })
     })
   })

@@ -11,6 +11,25 @@ datasource db {
 }
 
 // ============================================
+// ORGANIZATIONS & SERVICE REGISTRY (Workloads)
+// ============================================
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum ServiceType {
+  SITE
+  FUNCTION
+  VM
+  DATABASE
+  CRON
+  BUCKET
+}
+
+// ============================================
 // USER & AUTHENTICATION
 // ============================================
 
@@ -21,12 +40,14 @@ model User {
   walletAddress String?  @unique
 
   projects              Project[]
+  organizationMemberships OrganizationMember[]
+  createdServices       Service[]
   agents                Agent[]
   chats                 Chat[]
   messages              Message[]
-  customer              Customer?
   pinnedContent         PinnedContent[]
   storageSnapshots      StorageSnapshot[]
+  customer              Customer?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -41,15 +62,19 @@ model User {
 // ============================================
 
 model Project {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  organizationId String?  @map("organization_id")
 
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
   sites     Site[]
   functions AFFunction[]
+  services  Service[]
 
   // Observability
   telemetryIngestions   TelemetryIngestion[]
@@ -59,6 +84,7 @@ model Project {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([organizationId])
   @@index([slug])
 }
 
@@ -73,6 +99,9 @@ model Site {
 
   projectId   String
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  serviceId   String?  @unique
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   deployments Deployment[]
   domains     Domain[]
@@ -130,12 +159,16 @@ model AFFunction {
   id                  String               @id @default(cuid())
   name                String
   slug                String               @unique
+  sourceCode          String?              @db.Text
   invokeUrl           String?
   routes              Json?
   status              FunctionStatus       @default(ACTIVE)
 
   projectId           String
   project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  serviceId           String?              @unique
+  service             Service?             @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   siteId              String?
 
@@ -177,6 +210,56 @@ enum FunctionStatus {
   INACTIVE
   DEPLOYING
   FAILED
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  slug      String?
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   OrganizationMember[]
+  projects  Project[]
+
+  @@index([slug])
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Service {
+  id              String      @id @default(cuid())
+  type            ServiceType
+  name            String
+  slug            String
+  projectId       String
+  createdByUserId String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdByUser   User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // One-to-one (subtype tables have the FK via serviceId)
+  site            Site?
+  afFunction      AFFunction?
+
+  @@unique([type, slug])
+  @@index([projectId])
+  @@index([createdByUserId])
 }
 
 // ============================================
@@ -428,369 +511,6 @@ model Attachment {
 }
 
 // ============================================
-// BILLING SYSTEM
-// ============================================
-
-model Customer {
-  id                String   @id @default(cuid())
-
-  userId            String   @unique
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  // Stripe customer ID
-  stripeCustomerId  String?  @unique
-
-  // Billing details
-  email             String?
-  name              String?
-  address           Json?    // { line1, line2, city, state, postal_code, country }
-
-  // Default payment method
-  defaultPaymentMethodId String?
-  defaultPaymentMethod   PaymentMethod? @relation("DefaultPaymentMethod", fields: [defaultPaymentMethodId], references: [id])
-
-  paymentMethods    PaymentMethod[] @relation("CustomerPaymentMethods")
-  subscriptions     Subscription[]
-  invoices          Invoice[]
-  payments          Payment[]
-  usageRecords      UsageRecord[]
-
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  @@index([userId])
-  @@index([stripeCustomerId])
-}
-
-model PaymentMethod {
-  id                String              @id @default(cuid())
-
-  customerId        String
-  customer          Customer            @relation("CustomerPaymentMethods", fields: [customerId], references: [id], onDelete: Cascade)
-
-  type              PaymentMethodType
-
-  // For Stripe credit cards
-  stripePaymentMethodId String?         @unique
-  cardBrand         String?             // visa, mastercard, amex, etc.
-  cardLast4         String?
-  cardExpMonth      Int?
-  cardExpYear       Int?
-
-  // For crypto wallets
-  walletAddress     String?
-  blockchain        String?             // ethereum, solana, arweave, filecoin
-
-  isDefault         Boolean             @default(false)
-
-  defaultForCustomers Customer[]        @relation("DefaultPaymentMethod")
-  payments          Payment[]
-
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
-
-  @@index([customerId])
-  @@index([stripePaymentMethodId])
-  @@index([walletAddress])
-}
-
-enum PaymentMethodType {
-  CARD
-  CRYPTO_WALLET
-}
-
-model Subscription {
-  id                String             @id @default(cuid())
-
-  customerId        String
-  customer          Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  // Stripe subscription ID
-  stripeSubscriptionId String?         @unique
-
-  status            SubscriptionStatus @default(ACTIVE)
-  plan              SubscriptionPlan
-
-  // Pricing
-  basePricePerSeat  Decimal            // Admin-configurable per seat price
-  usageMarkup       Decimal            // Admin-configurable percentage markup on usage (0.0-1.0)
-
-  // Seats
-  seats             Int                @default(1)
-
-  // Billing period
-  currentPeriodStart DateTime
-  currentPeriodEnd   DateTime
-
-  // Cancellation
-  cancelAt          DateTime?
-  canceledAt        DateTime?
-
-  invoices          Invoice[]
-
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-
-  @@index([customerId])
-  @@index([status])
-  @@index([stripeSubscriptionId])
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  PAST_DUE
-  CANCELED
-  TRIALING
-  PAUSED
-}
-
-enum SubscriptionPlan {
-  FREE
-  STARTER
-  PRO
-  ENTERPRISE
-}
-
-model Invoice {
-  id                String           @id @default(cuid())
-
-  customerId        String
-  customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  subscriptionId    String?
-  subscription      Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-
-  // Stripe invoice ID
-  stripeInvoiceId   String?          @unique
-
-  // Invoice details
-  invoiceNumber     String           @unique
-  status            InvoiceStatus    @default(DRAFT)
-
-  // Amounts (in cents/smallest currency unit)
-  subtotal          Int              // Base subscription + usage charges
-  tax               Int              @default(0)
-  total             Int
-  amountPaid        Int              @default(0)
-  amountDue         Int
-
-  currency          String           @default("usd")
-
-  // Billing period
-  periodStart       DateTime
-  periodEnd         DateTime
-
-  // Due date and payment
-  dueDate           DateTime?
-  paidAt            DateTime?
-
-  // PDF generation
-  pdfUrl            String?
-
-  lineItems         InvoiceLineItem[]
-  payments          Payment[]
-
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
-
-  @@index([customerId])
-  @@index([subscriptionId])
-  @@index([status])
-  @@index([invoiceNumber])
-  @@index([stripeInvoiceId])
-}
-
-enum InvoiceStatus {
-  DRAFT
-  OPEN
-  PAID
-  VOID
-  UNCOLLECTIBLE
-}
-
-model InvoiceLineItem {
-  id          String   @id @default(cuid())
-
-  invoiceId   String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-
-  description String
-  quantity    Decimal
-  unitPrice   Int      // in cents
-  amount      Int      // in cents
-
-  // Metadata for usage-based items
-  metadata    Json?    // { usageType, resourceId, etc. }
-
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([invoiceId])
-}
-
-model Payment {
-  id                String        @id @default(cuid())
-
-  customerId        String
-  customer          Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  invoiceId         String?
-  invoice           Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-
-  paymentMethodId   String?
-  paymentMethod     PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-
-  // Stripe payment intent ID
-  stripePaymentIntentId String?   @unique
-
-  // Crypto transaction hash
-  txHash            String?       @unique
-  blockchain        String?
-
-  amount            Int           // in cents or smallest currency unit
-  currency          String        @default("usd")
-
-  status            PaymentStatus @default(PENDING)
-
-  // Failure information
-  failureCode       String?
-  failureMessage    String?
-
-  // Metadata
-  metadata          Json?
-
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
-
-  @@index([customerId])
-  @@index([invoiceId])
-  @@index([status])
-  @@index([stripePaymentIntentId])
-  @@index([txHash])
-}
-
-enum PaymentStatus {
-  PENDING
-  PROCESSING
-  SUCCEEDED
-  FAILED
-  CANCELED
-  REFUNDED
-}
-
-model UsageRecord {
-  id          String      @id @default(cuid())
-
-  customerId  String
-  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  // Usage type
-  type        UsageType
-
-  // Resource being metered
-  resourceType String     // deployment, function, bandwidth, etc.
-  resourceId   String?    // ID of deployment, function, etc.
-
-  // Usage amount
-  quantity    Decimal
-  unit        String      // bytes, requests, hours, etc.
-
-  // Timestamp
-  timestamp   DateTime    @default(now())
-
-  // Billing period
-  periodStart DateTime
-  periodEnd   DateTime
-
-  // Cost calculation
-  unitPrice   Int?        // in cents
-  amount      Int?        // in cents
-
-  // Metadata
-  metadata    Json?
-
-  createdAt   DateTime    @default(now())
-
-  @@index([customerId])
-  @@index([type])
-  @@index([resourceType])
-  @@index([resourceId])
-  @@index([timestamp])
-  @@index([periodStart, periodEnd])
-}
-
-enum UsageType {
-  STORAGE
-  BANDWIDTH
-  COMPUTE
-  REQUESTS
-  SEATS
-  TELEMETRY_INGESTION
-}
-
-model BillingSettings {
-  id                    String   @id @default(cuid())
-
-  // Per-seat pricing
-  pricePerSeatCents     Int      @default(0)
-
-  // Usage markup percentage (0.0 to 1.0)
-  usageMarkupPercent    Decimal  @default(0.0)
-
-  // Usage pricing (in cents per unit)
-  storagePerGBCents     Int      @default(0)
-  bandwidthPerGBCents   Int      @default(0)
-  computePerHourCents   Int      @default(0)
-  requestsPer1000Cents  Int      @default(0)
-  telemetryPerGBCents   Int      @default(35)  // $0.35/GB default
-
-  // Tax settings
-  taxRatePercent        Decimal  @default(0.0)
-
-  // Invoice settings
-  invoiceDueDays        Int      @default(30)
-
-  // Trial period (in days)
-  trialPeriodDays       Int      @default(0)
-
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-}
-
-// ============================================
-// USAGE BUFFER
-// ============================================
-
-// High-performance buffer table for aggregating usage metrics
-// Reduces database writes by 97% by batching updates
-model UsageBuffer {
-  userId      String   @id
-
-  // Aggregated metrics
-  bandwidth   Float    @default(0)
-  compute     Float    @default(0)
-  requests    Float    @default(0)
-
-  // Last update timestamp
-  updatedAt   DateTime @updatedAt
-
-  @@index([updatedAt])
-}
-
-// Optional metadata for usage events (auditing/debugging)
-model UsageMetadata {
-  id          String      @id @default(cuid())
-  userId      String
-  type        String      // BANDWIDTH, COMPUTE, REQUESTS
-  metadata    Json
-  createdAt   DateTime    @default(now())
-
-  @@index([userId])
-  @@index([type])
-  @@index([createdAt])
-}
-
-// ============================================
 // STORAGE TRACKING
 // ============================================
 
@@ -901,4 +621,271 @@ model ObservabilitySettings {
   updatedAt       DateTime @updatedAt
 
   @@index([projectId])
+}
+
+// ============================================
+// USAGE BUFFERING
+// ============================================
+
+model UsageBuffer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  
+  bandwidth Int      @default(0)
+  compute   Int      @default(0)
+  requests  Int      @default(0)
+  
+  updatedAt DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model UsageMetadata {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // BANDWIDTH, COMPUTE, REQUESTS
+  metadata  Json
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================
+// BILLING MODELS
+// ============================================
+
+model Customer {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email            String?
+  name             String?
+  stripeCustomerId String?  @unique
+  
+  defaultPaymentMethodId String?
+  defaultPaymentMethod   PaymentMethod? @relation("DefaultPaymentMethod", fields: [defaultPaymentMethodId], references: [id])
+  
+  paymentMethods   PaymentMethod[] @relation("CustomerPaymentMethods")
+  subscriptions    Subscription[]
+  invoices         Invoice[]
+  payments         Payment[]
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  
+  @@index([stripeCustomerId])
+}
+
+model PaymentMethod {
+  id                    String    @id @default(cuid())
+  customerId            String
+  customer              Customer  @relation("CustomerPaymentMethods", fields: [customerId], references: [id], onDelete: Cascade)
+  
+  type                  String    // CARD, CRYPTO
+  provider              String    @default("stripe") // stripe, stax, relay
+  cardBrand             String?
+  cardLast4             String?
+  cardExpMonth          Int?
+  cardExpYear           Int?
+  stripePaymentMethodId String?   @unique
+  walletAddress         String?
+  blockchain            String?
+  isDefault             Boolean   @default(false)
+  isActive              Boolean   @default(true)
+  
+  defaultForCustomers   Customer[] @relation("DefaultPaymentMethod")
+  payments              Payment[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([customerId])
+}
+
+model SubscriptionPlan {
+  id               String   @id @default(cuid())
+  name             String   @unique // FREE, STARTER, PRO, ENTERPRISE
+  basePricePerSeat Int      // in cents
+  usageMarkup      Float    @default(0) // percentage as decimal
+  features         String?  // JSON array
+  stripePriceId    String?
+  
+  subscriptions    Subscription[]
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  customerId           String
+  customer             Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  planId               String
+  plan                 SubscriptionPlan @relation(fields: [planId], references: [id])
+  
+  status               String    // ACTIVE, CANCELED, PAST_DUE, UNPAID, TRIALING
+  seats                Int       @default(1)
+  stripeSubscriptionId String?   @unique
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  cancelAt             DateTime?
+  canceledAt           DateTime?
+  trialEnd             DateTime?
+  
+  invoices             Invoice[]
+  usageRecords         UsageRecord[]
+  
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  
+  @@index([customerId])
+  @@index([status])
+}
+
+model Invoice {
+  id               String    @id @default(cuid())
+  customerId       String
+  customer         Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  subscriptionId   String?
+  subscription     Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  
+  invoiceNumber    String    @unique
+  status           String    // DRAFT, OPEN, PAID, VOID, UNCOLLECTIBLE
+  subtotal         Int       // in cents
+  tax              Int       @default(0)
+  total            Int
+  amountPaid       Int       @default(0)
+  amountDue        Int
+  currency         String    @default("usd")
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  dueDate          DateTime?
+  paidAt           DateTime?
+  pdfUrl           String?
+  stripeInvoiceId  String?   @unique
+  
+  lineItems        InvoiceLineItem[]
+  payments         Payment[]
+  
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  @@index([customerId])
+  @@index([status])
+}
+
+model InvoiceLineItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  description String
+  quantity    Float
+  unitPrice   Int      // in cents
+  amount      Int      // in cents
+  metadata    Json?
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([invoiceId])
+}
+
+model Payment {
+  id                    String    @id @default(cuid())
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  invoiceId             String?
+  invoice               Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  
+  paymentMethodId       String?
+  paymentMethod         PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  
+  amount                Int       // in cents
+  currency              String    @default("usd")
+  status                String    // PENDING, SUCCEEDED, FAILED, REFUNDED
+  provider              String    @default("stripe") // stripe, stax, relay
+  stripePaymentIntentId String?   @unique
+  txHash                String?   @unique
+  blockchain            String?
+  fromAddress           String?
+  toAddress             String?
+  failureReason         String?
+  failureCode           String?
+  failureMessage        String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([customerId])
+  @@index([invoiceId])
+}
+
+model BillingSettings {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  
+  // Feature toggles
+  autoPayEnabled  Boolean  @default(true)
+  
+  // Pricing settings (in cents)
+  bandwidthPerGBCents   Int? // cents per GB
+  computePerHourCents   Int? // cents per compute hour
+  requestsPer1000Cents  Int? // cents per 1000 requests
+  storagePerGBCents     Int? // cents per GB per month
+  telemetryPerGBCents   Int? // cents per GB telemetry
+  pricePerSeatCents     Int? // cents per seat
+  usageMarkupPercent    Float? // percentage markup for usage
+  
+  // Tax settings
+  taxId           String?
+  taxCountry      String?
+  taxRatePercent  Float?   // tax rate percentage
+  
+  // Invoice settings
+  invoiceDueDays  Int?     @default(30)
+  
+  // Billing address
+  billingEmail    String?
+  billingAddress  String?
+  billingCity     String?
+  billingState    String?
+  billingZip      String?
+  billingCountry  String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([userId])
+}
+
+model UsageRecord {
+  id             String   @id @default(cuid())
+  customerId     String
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  
+  type           String   // BANDWIDTH, COMPUTE, REQUESTS, STORAGE
+  metricType     String   @default("") // storage, bandwidth, compute, requests (alias for type)
+  resourceType   String?  // AGGREGATED, etc.
+  resourceId     String?  // ID of the resource being tracked
+  quantity       Float
+  unit           String?  // GB, HOURS, REQUESTS
+  unitPrice      Int?     // in cents
+  amount         Int?     // in cents
+  periodStart    DateTime
+  periodEnd      DateTime
+  recordedAt     DateTime @default(now())
+  timestamp      DateTime @default(now())
+  metadata       Json?
+  
+  createdAt      DateTime @default(now())
+  
+  @@index([customerId, periodStart])
+  @@index([type])
+  @@index([metricType])
+  @@index([timestamp])
 }

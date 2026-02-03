@@ -49,16 +49,16 @@ export class UsageService {
 
     switch (type) {
       case 'STORAGE':
-        unitPrice = settings?.storagePerGBCents
+        unitPrice = settings?.storagePerGBCents ?? undefined
         break
       case 'BANDWIDTH':
-        unitPrice = settings?.bandwidthPerGBCents
+        unitPrice = settings?.bandwidthPerGBCents ?? undefined
         break
       case 'COMPUTE':
-        unitPrice = settings?.computePerHourCents
+        unitPrice = settings?.computePerHourCents ?? undefined
         break
       case 'REQUESTS':
-        unitPrice = settings?.requestsPer1000Cents
+        unitPrice = settings?.requestsPer1000Cents ?? undefined
         break
     }
 
@@ -69,12 +69,14 @@ export class UsageService {
       data: {
         customerId: customer.id,
         type,
+        metricType: type.toLowerCase(),
         resourceType,
         resourceId,
         quantity,
         unit,
         periodStart,
         periodEnd,
+        recordedAt: new Date(),
         unitPrice,
         amount,
         metadata,

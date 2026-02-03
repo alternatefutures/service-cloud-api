@@ -26,10 +26,19 @@ export const typeDefs = /* GraphQL */ `
   type PersonalAccessToken {
     id: ID!
     name: String!
+    # SDK compatibility field
+    maskedToken: String
     expiresAt: Date
     lastUsedAt: Date
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  """
+  Wrapper type for tokens list (SDK compatibility)
+  """
+  type PersonalAccessTokenList {
+    data: [PersonalAccessToken!]!
   }
 
   """
@@ -62,11 +71,49 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     slug: String!
+    avatar: String
+    backupStorageOnArweave: Boolean
+    backupStorageOnFilecoin: Boolean
     user: User!
     sites: [Site!]!
     functions: [AFFunction!]!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  """
+  Wrapper type for paginated project list (SDK compatibility)
+  """
+  type ProjectList {
+    data: [Project!]!
+  }
+
+  # ============================================
+  # SERVICE REGISTRY (canonical workloads)
+  # ============================================
+
+  enum ServiceType {
+    SITE
+    FUNCTION
+    VM
+    DATABASE
+    CRON
+    BUCKET
+  }
+
+  type Service {
+    id: ID!
+    type: ServiceType!
+    name: String!
+    slug: String!
+    projectId: ID!
+    createdByUserId: ID
+    createdAt: Date!
+    updatedAt: Date!
+
+    # Convenience links to the concrete resource
+    site: Site
+    afFunction: AFFunction
   }
 
   # ============================================
@@ -80,9 +127,19 @@ export const typeDefs = /* GraphQL */ `
     project: Project!
     deployments: [Deployment!]!
     domains: [Domain!]!
+    # SDK compatibility fields
+    zones: [Zone!]!
+    ipnsRecords: [IPNSRecord!]!
     primaryDomain: Domain
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  """
+  Wrapper type for paginated site list (SDK compatibility)
+  """
+  type SiteList {
+    data: [Site!]!
   }
 
   type Deployment {
@@ -90,6 +147,8 @@ export const typeDefs = /* GraphQL */ `
     cid: String!
     status: DeploymentStatus!
     storageType: StorageType!
+    # SDK compatibility field
+    siteId: ID!
     site: Site!
     pin: Pin
     createdAt: Date!
@@ -118,7 +177,11 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     slug: String!
+    sourceCode: String
     invokeUrl: String
+    # SDK compatibility fields (backed by Prisma columns)
+    projectId: ID!
+    currentDeploymentId: ID
     routes: JSON
     status: FunctionStatus!
     project: Project!
@@ -129,8 +192,17 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
   }
 
+  """
+  Wrapper type for function list (SDK compatibility)
+  """
+  type AFFunctionList {
+    data: [AFFunction!]!
+  }
+
   type AFFunctionDeployment {
     id: ID!
+    # SDK compatibility field (backed by Prisma column)
+    afFunctionId: ID!
     cid: String!
     blake3Hash: String
     assetsCid: String
@@ -138,6 +210,76 @@ export const typeDefs = /* GraphQL */ `
     afFunction: AFFunction!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  """
+  Wrapper type for function deployments list (SDK compatibility)
+  """
+  type AFFunctionDeploymentList {
+    data: [AFFunctionDeployment!]!
+  }
+
+  # Function inputs (SDK compatibility)
+  input AFFunctionByNameWhereInput {
+    name: String!
+  }
+
+  input AFFunctionWhereInput {
+    id: ID!
+  }
+
+  """
+  SDK compatibility input type for creating a function.
+  Some clients (including the CLI/SDK) use CreateAFFunctionDataInput.
+  """
+  input CreateAFFunctionDataInput {
+    name: String
+    siteId: ID
+    slug: String
+    sourceCode: String
+    routes: JSON
+    status: FunctionStatus
+  }
+
+  """
+  SDK compatibility input type for updating a function.
+  Some clients (including the CLI/SDK) use UpdateAFFunctionDataInput.
+  """
+  input UpdateAFFunctionDataInput {
+    name: String
+    siteId: ID
+    slug: String
+    sourceCode: String
+    routes: JSON
+    status: FunctionStatus
+  }
+
+  input AFFunctionDeploymentsWhereInput {
+    afFunctionId: ID!
+    # Backwards/SDK compatibility alias (some clients send functionId)
+    functionId: ID
+  }
+
+  input AFFunctionDeploymentWhereInput {
+    id: ID
+    cid: String
+    functionId: ID
+  }
+
+  input TriggerAFFunctionDeploymentWhereInput {
+    functionId: ID!
+    cid: String
+  }
+
+  input TriggerAFFunctionDeploymentDataInput {
+    cid: String
+    assetsCid: String
+    blake3Hash: String
+    sgx: Boolean
+  }
+
+  input DeleteAFFunctionWhereInput {
+    id: ID!
   }
 
   enum FunctionStatus {
@@ -155,6 +297,11 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     hostname: String!
     verified: Boolean!
+    # SDK compatibility fields
+    isVerified: Boolean!
+    zone: Zone
+    dnsConfigs: [DNSConfig!]!
+    status: String
     domainType: DomainType!
     site: Site!
     txtVerificationToken: String
@@ -171,6 +318,22 @@ export const typeDefs = /* GraphQL */ `
     dnsCheckAttempts: Int!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  type DNSConfig {
+    id: ID!
+    type: String!
+    name: String!
+    value: String!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  """
+  Wrapper type for domains list (SDK compatibility)
+  """
+  type DomainList {
+    data: [Domain!]!
   }
 
   enum DomainType {
@@ -272,6 +435,14 @@ export const typeDefs = /* GraphQL */ `
     verificationMethod: String
   }
 
+  """
+  Input for exchanging a Personal Access Token for an access token
+  """
+  input LoginWithPersonalAccessTokenDataInput {
+    personalAccessToken: String!
+    projectId: ID
+  }
+
   # ============================================
   # IPFS/STORAGE
   # ============================================
@@ -279,6 +450,10 @@ export const typeDefs = /* GraphQL */ `
   type Pin {
     id: ID!
     cid: String!
+    # SDK compatibility fields
+    filename: String
+    extension: String
+    arweavePin: ArweavePin
     name: String
     size: Int
     deployment: Deployment!
@@ -286,13 +461,164 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
   }
 
+  type ArweavePin {
+    bundlrId: String
+  }
+
+  type PinList {
+    data: [Pin!]!
+  }
+
+  input PinWhereInput {
+    cid: String!
+  }
+
+  input PinsByFilenameWhereInput {
+    filename: String!
+    extension: String
+  }
+
+  type FilecoinDeal {
+    dealId: String!
+  }
+
+  type FilecoinDealList {
+    data: [FilecoinDeal!]!
+  }
+
+  input FilecoinDealsWhereInput {
+    cid: String!
+  }
+
   type IPNSRecord {
     id: ID!
     name: String!
     hash: String!
+    # SDK compatibility field
+    ensRecords: [EnsRecord!]!
     site: Site!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  # ENS (SDK compatibility)
+  type EnsRecord {
+    id: ID!
+    name: String
+    updatedAt: Date
+    createdAt: Date
+    status: String
+    site: Site
+    ipnsRecord: IPNSRecord
+  }
+
+  """
+  Wrapper type for paginated IPNS record list (SDK compatibility)
+  """
+  type IpnsRecordList {
+    data: [IPNSRecord!]!
+  }
+
+  """
+  Zone type for DNS zone management
+  """
+  type Zone {
+    id: ID!
+    name: String!
+    site: Site!
+    # SDK compatibility fields (not backed by DB in this API)
+    originUrl: String
+    type: String
+    status: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  """
+  Wrapper type for zones list (SDK compatibility)
+  """
+  type ZoneList {
+    data: [Zone!]!
+  }
+
+  type ApplicationWhitelistDomain {
+    id: ID!
+    hostname: String!
+    createdAt: Date
+    updatedAt: Date
+  }
+
+  # Applications (SDK compatibility)
+  type Application {
+    id: ID!
+    name: String!
+    clientId: String!
+    whitelistDomains: [ApplicationWhitelistDomain!]!
+    whiteLabelDomains: [ApplicationWhitelistDomain!]!
+    createdAt: Date
+    updatedAt: Date
+  }
+
+  type ApplicationList {
+    data: [Application!]!
+  }
+
+  # ENS list (SDK compatibility - minimal)
+  type EnsRecordList {
+    data: [EnsRecord!]!
+  }
+
+  input IPNSRecordWhereInput {
+    ipnsRecordId: ID
+  }
+
+  # Sites list inputs (SDK compatibility)
+  input SitesWhereInput {
+    projectId: ID
+  }
+
+  # Site inputs (SDK compatibility)
+  input SiteWhereInput {
+    id: ID!
+  }
+
+  input SiteBySlugWhereInput {
+    slug: String!
+  }
+
+  input SiteDataInput {
+    name: String!
+  }
+
+  # Deployment inputs (SDK compatibility)
+  input DeploymentWhereInput {
+    id: ID!
+  }
+
+  input DeploymentDataInput {
+    siteId: ID!
+    cid: String!
+  }
+
+  """
+  Private Gateway type for custom IPFS gateway access
+  """
+  type PrivateGateway {
+    id: ID!
+    name: String!
+    slug: String!
+    primaryDomain: Domain
+    project: Project!
+    zone: Zone
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  """
+  Wrapper type for paginated private gateway list (SDK compatibility)
+  """
+  type PrivateGatewayList {
+    data: [PrivateGateway!]!
   }
 
   # ============================================
@@ -924,36 +1250,66 @@ export const typeDefs = /* GraphQL */ `
 
     # User & Auth
     me: User
-    personalAccessTokens: [PersonalAccessToken!]!
+    personalAccessTokens: PersonalAccessTokenList!
     apiKeyRateLimit: ApiKeyRateLimit!
 
     # Projects
     project(id: ID!): Project
-    projects: [Project!]!
+    projects: ProjectList!
+
+    # Service Registry
+    serviceRegistry(projectId: ID): [Service!]!
 
     # Sites
-    site(id: ID!): Site
-    sites: [Site!]!
-    siteBySlug(slug: String!): Site
+    site(where: SiteWhereInput!): Site
+    sites(where: SitesWhereInput): SiteList!
+    siteBySlug(where: SiteBySlugWhereInput!): Site
+
+    # IPNS Records
+    ipnsRecord(name: String!): IPNSRecord
+    ipnsRecords: IpnsRecordList!
+
+    # Private Gateways
+    privateGateway(id: ID!): PrivateGateway
+    privateGatewayBySlug(slug: String!): PrivateGateway
+    privateGateways: PrivateGatewayList!
 
     # Deployments
-    deployment(id: ID!): Deployment
+    deployment(where: DeploymentWhereInput!): Deployment
     deployments(siteId: ID): [Deployment!]!
 
     # Functions
-    afFunctionByName(name: String!): AFFunction
-    afFunctions: [AFFunction!]!
-    afFunctionDeployment(id: ID!): AFFunctionDeployment
-    afFunctionDeployments(functionId: ID!): [AFFunctionDeployment!]!
+    afFunction(where: AFFunctionWhereInput!): AFFunction
+    afFunctionByName(where: AFFunctionByNameWhereInput!): AFFunction
+    afFunctions: AFFunctionList!
+    afFunctionDeployment(where: AFFunctionDeploymentWhereInput!): AFFunctionDeployment
+    afFunctionDeployments(where: AFFunctionDeploymentsWhereInput!): AFFunctionDeploymentList!
 
     # Domains
     domain(id: ID!): Domain
-    domains(siteId: ID): [Domain!]!
+    domains: DomainList!
     domainByHostname(hostname: String!): Domain
     domainVerificationInstructions(
       domainId: ID!
     ): DomainVerificationInstructions!
     sslCertificateStatus: [SslCertificateStatusInfo!]!
+
+    # Zones (SDK compatibility)
+    zones: ZoneList!
+    zone(id: ID!): Zone
+
+    # Storage (SDK compatibility)
+    pins: PinList!
+    pin(where: PinWhereInput!): Pin
+    pinsByFilename(where: PinsByFilenameWhereInput!): PinList!
+    filecoinDeals(where: FilecoinDealsWhereInput!): FilecoinDealList!
+
+    # ENS (SDK compatibility - minimal)
+    ensRecords: EnsRecordList!
+    ensRecordsByIpnsId(where: IPNSRecordWhereInput!): EnsRecordList!
+
+    # Applications (SDK compatibility - minimal)
+    applications: ApplicationList!
 
     # DNS Record Management (Admin)
     dnsRecords(domain: String!): [DNSRecord!]!
@@ -1021,7 +1377,19 @@ export const typeDefs = /* GraphQL */ `
     outputDirectory: String
   }
 
+  # SDK compatibility input types
+  input CreateProjectDataInput {
+    name: String!
+  }
+
   type Mutation {
+    # Auth - SDK token exchange
+    """
+    Exchange a Personal Access Token for a short-lived access token.
+    Used by the SDK to authenticate subsequent requests.
+    """
+    loginWithPersonalAccessToken(data: LoginWithPersonalAccessTokenDataInput!): String!
+
     # Auth
     createPersonalAccessToken(
       name: String!
@@ -1030,14 +1398,15 @@ export const typeDefs = /* GraphQL */ `
     deletePersonalAccessToken(id: ID!): Boolean!
 
     # Projects
-    createProject(name: String!): Project!
+    createProject(data: CreateProjectDataInput!): Project!
     deleteProject(id: ID!): Boolean!
 
     # Sites
-    createSite(name: String!, projectId: ID): Site!
-    deleteSite(id: ID!): Boolean!
+    createSite(data: SiteDataInput!): Site!
+    deleteSite(where: SiteWhereInput!): Site!
 
     # Deployments
+    createCustomIpfsDeployment(data: DeploymentDataInput!): Deployment!
     createDeployment(
       siteId: ID!
       sourceDirectory: String!
@@ -1046,22 +1415,13 @@ export const typeDefs = /* GraphQL */ `
     ): Deployment!
 
     # Functions
-    createAFFunction(name: String!, siteId: ID, routes: JSON): AFFunction!
-    deployAFFunction(
-      functionId: ID!
-      cid: String!
-      sgx: Boolean
-      blake3Hash: String
-      assetsCid: String
+    createAFFunction(data: CreateAFFunctionDataInput!): AFFunction!
+    updateAFFunction(where: AFFunctionWhereInput!, data: UpdateAFFunctionDataInput!): AFFunction!
+    triggerAFFunctionDeployment(
+      where: TriggerAFFunctionDeploymentWhereInput!
+      data: TriggerAFFunctionDeploymentDataInput
     ): AFFunctionDeployment!
-    updateAFFunction(
-      id: ID!
-      name: String
-      slug: String
-      routes: JSON
-      status: FunctionStatus
-    ): AFFunction!
-    deleteAFFunction(id: ID!): Boolean!
+    deleteAFFunction(where: DeleteAFFunctionWhereInput!): AFFunction!
 
     # Domains
     createDomain(input: CreateDomainInput!): Domain!
