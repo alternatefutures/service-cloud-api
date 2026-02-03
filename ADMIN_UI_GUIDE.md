@@ -8,7 +8,7 @@
 
 ## 📊 Dashboard Overview
 
-### Main Navigation 
+### Main Navigation
 
 The Admin UI has several tabs:
 
