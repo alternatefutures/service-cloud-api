@@ -13,14 +13,14 @@ services:
           - api.alternatefutures.ai
     env:
       # Database (internal service)
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/alternatefutures?schema=public
+      - DATABASE_URL=${DATABASE_URL}
 
       # Server
       - PORT=4000
       - NODE_ENV=production
 
       # JWT (must match service-auth)
-      - JWT_SECRET=94b3479461c8b1364df29dd517a334f0d1a8814508c7cdeaf6e969ec48d973e7
+      - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRY=7d
 
       # Auth Service (deployed on Akash)
@@ -66,7 +66,7 @@ services:
           - service: api
     env:
       - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=alternatefutures
 
 profiles:
