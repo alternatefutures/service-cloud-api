@@ -17,33 +17,38 @@ jobs:
           BRANCH_NAME="${{ github.head_ref }}"
           echo "Checking branch name: $BRANCH_NAME"
 
-          # Valid patterns:
-          # - feature/ALT-123-description or feat/alt-123-description
-          # - fix/ALT-456-description or fix/alt-456-description
-          # - hotfix/ALT-789-description or hotfix/alt-789-description
+          # Valid patterns (ticket number optional):
+          # - feature/description or feat/description
+          # - fix/description
+          # - hotfix/description
+          # - chore/description
+          # - docs/description
+          # - refactor/description
 
-          if [[ "$BRANCH_NAME" =~ ^(feature|feat|fix|hotfix)/(ALT|alt)-[0-9]+-[a-z0-9-]+$ ]]; then
+          if [[ "$BRANCH_NAME" =~ ^(feature|feat|fix|hotfix|chore|docs|refactor)/[a-z0-9-]+$ ]]; then
             echo "✅ Branch name is valid: $BRANCH_NAME"
             exit 0
           else
             echo "❌ Invalid branch name: $BRANCH_NAME"
             echo ""
             echo "Branch names must follow this format:"
-            echo "  - feature/ALT-123-description or feat/ALT-123-description"
-            echo "  - fix/ALT-456-description"
-            echo "  - hotfix/ALT-789-description"
+            echo "  - feature/description or feat/description"
+            echo "  - fix/description"
+            echo "  - hotfix/description"
+            echo "  - chore/description"
+            echo "  - docs/description"
+            echo "  - refactor/description"
             echo ""
-            echo "Where:"
-            echo "  - ALT-### or alt-### is your Linear ticket number (case-insensitive)"
-            echo "  - description uses lowercase letters, numbers, and hyphens"
+            echo "Where description uses lowercase letters, numbers, and hyphens"
             echo ""
             echo "Examples:"
-            echo "  ✅ feature/ALT-123-add-webhook-support"
-            echo "  ✅ feat/alt-123-add-webhook-support"
-            echo "  ✅ fix/ALT-456-auth-token-expiry"
-            echo "  ✅ hotfix/alt-789-security-patch"
-            echo "  ❌ feature/add-new-feature"
-            echo "  ❌ ALT-123-my-feature"
+            echo "  ✅ feature/add-webhook-support"
+            echo "  ✅ feat/user-auth"
+            echo "  ✅ fix/auth-token-expiry"
+            echo "  ✅ hotfix/security-patch"
+            echo "  ✅ chore/update-dependencies"
+            echo "  ❌ my-feature (missing prefix)"
+            echo "  ❌ Feature/Something (uppercase not allowed)"
             exit 1
           fi
 
@@ -57,23 +62,23 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           echo "Checking PR title: $PR_TITLE"
 
-          # PR title should include Linear ticket number
-          # Format: ALT-123: Description or [alt-123] Description (case-insensitive)
+          # PR title should follow conventional commit format
+          # Format: type: description or type(scope): description
 
-          if [[ "$PR_TITLE" =~ ([Aa][Ll][Tt]-[0-9]+) ]]; then
-            TICKET_NUMBER="${BASH_REMATCH[1]}"
-            echo "✅ PR title includes Linear ticket: $TICKET_NUMBER"
+          if [[ "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?:\ .+ ]]; then
+            echo "✅ PR title follows conventional commit format"
             exit 0
           else
-            echo "❌ PR title must include Linear ticket number"
+            echo "⚠️  PR title doesn't follow conventional commit format (non-blocking)"
             echo ""
-            echo "Valid formats:"
-            echo "  - ALT-123: Add webhook support"
-            echo "  - alt-123: Add webhook support"
-            echo "  - [ALT-456] Fix auth token expiry"
-            echo "  - [alt-456] Fix auth token expiry"
-            echo "  - ALT-789 Security patch"
+            echo "Recommended formats:"
+            echo "  - feat: Add webhook support"
+            echo "  - fix: Auth token expiry issue"
+            echo "  - fix(auth): Token refresh bug"
+            echo "  - docs: Update README"
+            echo "  - chore: Update dependencies"
             echo ""
             echo "Current title: $PR_TITLE"
-            exit 1
+            # Non-blocking - just a warning
+            exit 0
           fi
