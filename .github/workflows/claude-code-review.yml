@@ -27,6 +27,8 @@ jobs:
     name: Automated AI Code Review
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    # Non-blocking: SDK has intermittent bugs, don't block PRs
+    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -59,6 +61,7 @@ jobs:
   interactive-review:
     name: Interactive Claude Assistant
     runs-on: ubuntu-latest
+    continue-on-error: true
     if: |
       github.event_name == 'issue_comment' ||
       github.event_name == 'pull_request_review_comment' ||
