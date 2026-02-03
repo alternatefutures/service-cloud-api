@@ -192,10 +192,12 @@ describe('InvoiceService', () => {
       const subscription = {
         id: 'sub-123',
         customerId: 'cust-123',
-        plan: 'ENTERPRISE',
         seats: 5,
-        basePricePerSeat: 5000, // $50 per seat
-        usageMarkup: 0.25, // 25% markup
+        plan: {
+          name: 'ENTERPRISE',
+          basePricePerSeat: 5000, // $50 per seat
+          usageMarkup: 0.25, // 25% markup
+        },
         currentPeriodStart: new Date('2025-01-01'),
         currentPeriodEnd: new Date('2025-01-31'),
       }

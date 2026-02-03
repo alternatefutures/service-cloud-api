@@ -134,6 +134,7 @@ describe('Billing Resolvers', () => {
         },
         billingSettings: {
           findFirst: vi.fn(),
+          findUnique: vi.fn(),
           upsert: vi.fn(),
           create: vi.fn(),
           update: vi.fn(),
@@ -761,7 +762,7 @@ describe('Billing Resolvers', () => {
         }
 
         vi.mocked(
-          mockContext.prisma.billingSettings.findFirst
+          mockContext.prisma.billingSettings.findUnique
         ).mockResolvedValue(existingSettings)
         vi.mocked(mockContext.prisma.billingSettings.update).mockResolvedValue(
           updatedSettings
@@ -794,7 +795,7 @@ describe('Billing Resolvers', () => {
         }
 
         vi.mocked(
-          mockContext.prisma.billingSettings.findFirst
+          mockContext.prisma.billingSettings.findUnique
         ).mockResolvedValue(null)
         vi.mocked(mockContext.prisma.billingSettings.create).mockResolvedValue(
           newSettings

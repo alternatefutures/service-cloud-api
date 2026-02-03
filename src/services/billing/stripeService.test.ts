@@ -94,6 +94,10 @@ describe('StripeService', () => {
       billingSettings: {
         findFirst: vi.fn(),
       },
+      subscriptionPlan: {
+        findUnique: vi.fn(),
+        create: vi.fn(),
+      },
     } as any
 
     service = new StripeService(mockPrisma as PrismaClient)
@@ -256,6 +260,12 @@ describe('StripeService', () => {
       mockPrisma.billingSettings.findFirst.mockResolvedValue({
         pricePerSeatCents: 1000,
         usageMarkupPercent: 20,
+      })
+      mockPrisma.subscriptionPlan.findUnique.mockResolvedValue({
+        id: 'plan-pro',
+        name: 'PRO',
+        basePricePerSeat: 1000,
+        usageMarkup: 0.2,
       })
       mockStripeSubscriptions.create.mockResolvedValue(stripeSubscription)
       mockPrisma.subscription.create.mockResolvedValue(createdSubscription)
