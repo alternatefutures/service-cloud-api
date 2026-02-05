@@ -190,40 +190,9 @@ Bring your own domain from any registrar (GoDaddy, Namecheap, Cloudflare, etc.)
 - ENS (Ethereum Name System)
 - IPNS (IPFS Name System)
 
-#### Usage-Based Billing
+#### Billing
 
-- Real-time usage tracking (storage, bandwidth, compute)
-- Automatic invoice generation
-- Stripe integration
-- Customer portal access
-- Branded invoice PDFs with company logo
-
-**Preview Invoice Template:**
-
-```bash
-npm run generate:invoice
-```
-
-Creates a sample invoice PDF with:
-
-- Alternate Futures logo and Instrument Sans typography
-- Sample customer data
-- Example usage charges
-- Professional styling
-
-**Payment Retries:**
-
-Failed payments handled automatically via Stripe's Smart Retries.
-Configure in Stripe Dashboard: **Settings** → **Billing** → **Automatic collection**
-
-Recommended retry schedule:
-
-- First retry: 3 days after failure
-- Second retry: 5 days after first retry
-- Third retry: 7 days after second retry
-- Final retry: 9 days after third retry
-
-All payment webhooks are handled via `/billing/webhook` endpoint.
+Billing (subscriptions, credits wallet, payments, AI metering) is handled by **`service-auth`**, not this service. This API only tracks storage usage via the `StorageTracker`.
 
 #### Multi-Storage Support
 
@@ -345,23 +314,27 @@ mutation {
 
 ```
 src/
-├── schema/              # GraphQL schema
-├── resolvers/           # Resolvers
-│   ├── auth.ts         # Authentication (proxies to auth service)
-│   ├── domain.ts       # Custom domains
-│   ├── billing.ts      # Stripe billing
-│   └── function.ts     # Functions management
-├── services/           # Business logic
-│   ├── billing/        # Stripe integration
-│   ├── dns/            # Domain verification & SSL
-│   └── storage/        # IPFS, Arweave, Filecoin
-├── jobs/               # Background jobs
-│   └── sslRenewal.ts   # SSL certificate renewal
-├── utils/              # Utilities
-└── index.ts            # Server entry
+├── schema/
+│   └── typeDefs.ts      # GraphQL schema definitions
+├── resolvers/
+│   ├── index.ts         # Main resolver map (all queries/mutations)
+│   ├── auth.ts          # Authentication (proxies to auth service)
+│   ├── domain.ts        # Custom domains + DNS + SSL
+│   ├── observability.ts # Traces, logs, metrics (ClickHouse)
+│   └── chat.ts          # Chat/messaging resolvers
+├── services/
+│   ├── akash/           # Akash Network deployment (orchestrator, provider selector)
+│   ├── dns/             # Domain verification & SSL provisioning
+│   ├── storage/         # IPFS, Arweave, Filecoin
+│   ├── observability/   # ClickHouse integration
+│   └── chat/            # Chat server (WebSocket)
+├── runtime/
+│   └── server.ts        # Function invocation stub (deprecated — runs via Akash)
+├── utils/               # Utilities
+└── index.ts             # Server entry (GraphQL Yoga + node:http)
 
 prisma/
-└── schema.prisma       # Database schema
+└── schema.prisma        # Database schema (PostgreSQL)
 ```
 
 ## Dogfooding
