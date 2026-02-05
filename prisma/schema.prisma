@@ -107,6 +107,7 @@ model Site {
   domains     Domain[]
   ipnsRecords IPNSRecord[]
   zones       Zone[]
+  akashDeployments AkashDeployment[]
 
   primaryDomainId String?
   primaryDomain   Domain? @relation("PrimaryDomain", fields: [primaryDomainId], references: [id])
@@ -176,6 +177,7 @@ model AFFunction {
   currentDeployment   AFFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
 
   deployments         AFFunctionDeployment[] @relation("FunctionDeployments")
+  akashDeployments    AkashDeployment[]
   agents              Agent[]
 
   createdAt           DateTime             @default(now())
@@ -256,6 +258,9 @@ model Service {
   // One-to-one (subtype tables have the FK via serviceId)
   site            Site?
   afFunction      AFFunction?
+
+  // Akash deployments for this service (can have multiple over time)
+  akashDeployments AkashDeployment[]
 
   @@unique([type, slug])
   @@index([projectId])
@@ -888,4 +893,71 @@ model UsageRecord {
   @@index([type])
   @@index([metricType])
   @@index([timestamp])
+}
+
+// ============================================
+// AKASH DEPLOYMENTS
+// ============================================
+
+model AkashDeployment {
+  id              String              @id @default(cuid())
+
+  // Akash identifiers
+  owner           String              // Akash wallet address (owner)
+  dseq            BigInt              // Deployment sequence number
+  gseq            Int                 @default(1) // Group sequence
+  oseq            Int                 @default(1) // Order sequence
+  provider        String?             // Provider address once lease created
+
+  // Status tracking
+  status          AkashDeploymentStatus @default(CREATING)
+
+  // Service endpoints (populated after manifest sent)
+  serviceUrls     Json?               // { serviceName: ["url1", "url2"] }
+
+  // SDL content used for deployment
+  sdlContent      String              @db.Text
+
+  // Link to the canonical Service registry (can deploy any service type)
+  serviceId       String
+  service         Service             @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  // Optional direct links to specific resource types (for convenience queries)
+  afFunctionId    String?
+  afFunction      AFFunction?         @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
+  
+  siteId          String?
+  site            Site?               @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  // Cost tracking
+  depositUakt     BigInt?             // Deposit amount in uakt
+  pricePerBlock   String?             // Price from accepted bid
+
+  // Error info
+  errorMessage    String?
+
+  // Timestamps
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  deployedAt      DateTime?           // When services became available
+  closedAt        DateTime?           // When deployment was closed
+
+  @@unique([owner, dseq])
+  @@index([serviceId])
+  @@index([afFunctionId])
+  @@index([siteId])
+  @@index([status])
+  @@index([dseq])
+}
+
+enum AkashDeploymentStatus {
+  CREATING        // Creating deployment on chain
+  WAITING_BIDS    // Waiting for provider bids
+  SELECTING_BID   // Selecting provider
+  CREATING_LEASE  // Creating lease with provider
+  SENDING_MANIFEST // Sending manifest to provider
+  DEPLOYING       // Provider deploying containers
+  ACTIVE          // Deployment running
+  FAILED          // Deployment failed
+  CLOSED          // Deployment closed
 }

@@ -276,10 +276,6 @@ export const authMutations = {
   ) => {
     const { personalAccessToken, projectId } = data
     
-    console.log('[loginWithPersonalAccessToken] Received request')
-    console.log('[loginWithPersonalAccessToken] Token length:', personalAccessToken?.length)
-    console.log('[loginWithPersonalAccessToken] Token:', personalAccessToken)
-
     if (!personalAccessToken) {
       throw new GraphQLError('Personal access token is required', {
         extensions: {

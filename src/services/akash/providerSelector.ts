@@ -68,6 +68,20 @@ const PROXY_PROVIDER = 'akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc'
 const PROXY_PROVIDER_NAME = 'Europlots'
 
 /**
+ * Providers with known issues that should be blocked for all deployments.
+ * 
+ * History:
+ * - 2026-02-05: Added airitdecomp - wildcard DNS not configured for ingress
+ */
+const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason: string }> = {
+  akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040: {
+    address: 'akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040',
+    name: 'AiritDecomp',
+    reason: 'Wildcard DNS not configured - ingress URLs do not resolve',
+  },
+}
+
+/**
  * Known Akash providers with metadata.
  * Update when provider status changes.
  */
@@ -102,15 +116,18 @@ export class ProviderSelector {
   private proxyProvider: string
   private proxyProviderName: string
   private knownProviders: Record<string, ProviderInfo>
+  private blockedProviders: Record<string, { address: string; name: string; reason: string }>
 
   constructor(
     proxyProvider: string = PROXY_PROVIDER,
     proxyProviderName: string = PROXY_PROVIDER_NAME,
-    knownProviders: Record<string, ProviderInfo> = KNOWN_PROVIDERS
+    knownProviders: Record<string, ProviderInfo> = KNOWN_PROVIDERS,
+    blockedProviders: Record<string, { address: string; name: string; reason: string }> = BLOCKED_PROVIDERS
   ) {
     this.proxyProvider = proxyProvider
     this.proxyProviderName = proxyProviderName
     this.knownProviders = knownProviders
+    this.blockedProviders = blockedProviders
   }
 
   /**
@@ -162,7 +179,20 @@ export class ProviderSelector {
     const providerInfo = this.knownProviders[providerAddress]
     const providerName = providerInfo?.name || 'Unknown'
 
-    // Proxy can be on any provider
+    // Check global blocklist first (applies to ALL service types)
+    const blockedInfo = this.blockedProviders[providerAddress]
+    if (blockedInfo) {
+      return {
+        safe: false,
+        provider: providerAddress,
+        providerName: blockedInfo.name,
+        reason: `BLOCKED PROVIDER: ${blockedInfo.name} - ${blockedInfo.reason}`,
+        blockedProvider: providerAddress,
+        blockedProviderName: blockedInfo.name,
+      }
+    }
+
+    // Proxy can be on any provider (that's not globally blocked)
     if (serviceType === 'proxy') {
       return {
         safe: true,

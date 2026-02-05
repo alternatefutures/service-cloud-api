@@ -17,20 +17,6 @@ async function main() {
   })
   console.log('✅ Created user:', user.email)
 
-  // Create Personal Access Token
-  const pat = await prisma.personalAccessToken.upsert({
-    where: { token: 'af_local_test_token_12345' },
-    update: {},
-    create: {
-      id: 'pat-1',
-      name: 'Local Test Token',
-      token: 'af_local_test_token_12345',
-      userId: user.id,
-    },
-  })
-  console.log('✅ Created PAT:', pat.name)
-  console.log('   Token:', pat.token)
-
   // Create test project
   const project = await prisma.project.upsert({
     where: { slug: 'test-project' },
@@ -44,7 +30,22 @@ async function main() {
   })
   console.log('✅ Created project:', project.name)
 
-  // Create a test site
+  // Create Service for site (canonical registry entry)
+  const siteService = await prisma.service.upsert({
+    where: { type_slug: { type: 'SITE', slug: 'test-site' } },
+    update: {},
+    create: {
+      id: 'svc-site-1',
+      type: 'SITE',
+      name: 'Test Site',
+      slug: 'test-site',
+      projectId: project.id,
+      createdByUserId: user.id,
+    },
+  })
+  console.log('✅ Created site service:', siteService.name)
+
+  // Create a test site linked to service
   const site = await prisma.site.upsert({
     where: { slug: 'test-site' },
     update: {},
@@ -53,11 +54,27 @@ async function main() {
       name: 'Test Site',
       slug: 'test-site',
       projectId: project.id,
+      serviceId: siteService.id,
     },
   })
   console.log('✅ Created site:', site.name)
 
-  // Create test function with routes
+  // Create Service for function (canonical registry entry)
+  const functionService = await prisma.service.upsert({
+    where: { type_slug: { type: 'FUNCTION', slug: 'test-gateway' } },
+    update: {},
+    create: {
+      id: 'svc-func-1',
+      type: 'FUNCTION',
+      name: 'test-gateway',
+      slug: 'test-gateway',
+      projectId: project.id,
+      createdByUserId: user.id,
+    },
+  })
+  console.log('✅ Created function service:', functionService.name)
+
+  // Create test function linked to service
   const testFunction = await prisma.aFFunction.upsert({
     where: { slug: 'test-gateway' },
     update: {},
@@ -73,6 +90,7 @@ async function main() {
       },
       status: 'ACTIVE',
       projectId: project.id,
+      serviceId: functionService.id,
     },
   })
   console.log('✅ Created function:', testFunction.name)
@@ -82,9 +100,10 @@ async function main() {
   )
 
   console.log('\n🎉 Seeding complete!')
-  console.log('\n📋 Test credentials:')
-  console.log('   Authorization: af_local_test_token_12345')
-  console.log('   X-Project-Id: proj-1')
+  console.log('\n📋 Test data:')
+  console.log('   User: test@alternatefutures.ai')
+  console.log('   Project ID: proj-1')
+  console.log('   Project Slug: test-project')
 }
 
 main()

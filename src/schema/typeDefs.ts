@@ -114,6 +114,11 @@ export const typeDefs = /* GraphQL */ `
     # Convenience links to the concrete resource
     site: Site
     afFunction: AFFunction
+    
+    # Akash deployments for this service
+    akashDeployments: [AkashDeployment!]!
+    # Get the currently active Akash deployment (if any)
+    activeAkashDeployment: AkashDeployment
   }
 
   # ============================================
@@ -131,6 +136,8 @@ export const typeDefs = /* GraphQL */ `
     zones: [Zone!]!
     ipnsRecords: [IPNSRecord!]!
     primaryDomain: Domain
+    # Akash deployments for this site
+    akashDeployments: [AkashDeployment!]!
     createdAt: Date!
     updatedAt: Date!
   }
@@ -188,6 +195,7 @@ export const typeDefs = /* GraphQL */ `
     siteId: String
     currentDeployment: AFFunctionDeployment
     deployments: [AFFunctionDeployment!]!
+    akashDeployments: [AkashDeployment!]!
     createdAt: Date!
     updatedAt: Date!
   }
@@ -287,6 +295,80 @@ export const typeDefs = /* GraphQL */ `
     INACTIVE
     DEPLOYING
     FAILED
+  }
+
+  # ============================================
+  # AKASH DEPLOYMENTS
+  # ============================================
+
+  """
+  AkashDeployment represents a deployment of any service type to the Akash Network.
+  It is linked to the canonical Service registry and can optionally link to 
+  specific resource types (Site, Function) for convenience queries.
+  """
+  type AkashDeployment {
+    id: ID!
+    owner: String!
+    dseq: String!
+    gseq: Int!
+    oseq: Int!
+    provider: String
+    status: AkashDeploymentStatus!
+    serviceUrls: JSON
+    sdlContent: String!
+    
+    # Link to canonical Service registry
+    serviceId: ID!
+    service: Service!
+    
+    # Optional convenience links to specific resource types
+    afFunctionId: ID
+    afFunction: AFFunction
+    siteId: ID
+    site: Site
+    
+    depositUakt: String
+    pricePerBlock: String
+    errorMessage: String
+    createdAt: Date!
+    updatedAt: Date!
+    deployedAt: Date
+    closedAt: Date
+  }
+
+  enum AkashDeploymentStatus {
+    CREATING
+    WAITING_BIDS
+    SELECTING_BID
+    CREATING_LEASE
+    SENDING_MANIFEST
+    DEPLOYING
+    ACTIVE
+    FAILED
+    CLOSED
+  }
+
+  """
+  Input for deploying a service to Akash. Supports any service type.
+  """
+  input DeployToAkashInput {
+    # The canonical service ID from the Service registry
+    serviceId: ID!
+    # Deposit amount in uakt (default: 5000000 = 5 AKT)
+    depositUakt: Int
+    # Optional custom SDL content (if not provided, will be auto-generated based on service type)
+    sdlContent: String
+    # Optional source code for functions (will be saved before deployment)
+    sourceCode: String
+  }
+
+  """
+  Legacy input for deploying specifically a function to Akash.
+  Prefer DeployToAkashInput for new integrations.
+  """
+  input DeployFunctionToAkashInput {
+    functionId: ID!
+    depositUakt: Int
   }
 
   # ============================================
@@ -1340,6 +1422,15 @@ export const typeDefs = /* GraphQL */ `
     currentUsage: UsageSummary!
     billingSettings: BillingSettings
 
+    # Akash Deployments
+    akashDeployment(id: ID!): AkashDeployment
+    # List Akash deployments, optionally filtered by serviceId, functionId, or siteId
+    akashDeployments(serviceId: ID, functionId: ID, siteId: ID): [AkashDeployment!]!
+    # Get the active Akash deployment for a service
+    akashDeploymentByService(serviceId: ID!): AkashDeployment
+    # Legacy: Get the active Akash deployment for a function
+    akashDeploymentByFunction(functionId: ID!): AkashDeployment
+
     # Storage Tracking
     pinnedContent(limit: Int): [PinnedContent!]!
     storageSnapshots(
@@ -1477,6 +1568,14 @@ export const typeDefs = /* GraphQL */ `
     ): Domain!
     publishIpns(domainId: ID!, cid: String!): Domain!
     updateIpns(domainId: ID!, cid: String!): Domain!
+
+    # Akash Deployments
+    # General-purpose: deploy any service to Akash
+    deployToAkash(input: DeployToAkashInput!): AkashDeployment!
+    # Legacy/convenience: deploy a function to Akash
+    deployFunctionToAkash(input: DeployFunctionToAkashInput!): AkashDeployment!
+    # Close an Akash deployment
+    closeAkashDeployment(id: ID!): AkashDeployment!
   }
 
   # ============================================

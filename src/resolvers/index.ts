@@ -14,6 +14,11 @@ import {
   observabilityQueries,
   observabilityMutations,
 } from './observability.js'
+import {
+  akashQueries,
+  akashMutations,
+  akashFieldResolvers,
+} from './akash.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
@@ -539,6 +544,9 @@ export const resolvers = {
     // Observability queries (from observability resolvers)
     ...observabilityQueries,
 
+    // Akash deployment queries
+    ...akashQueries,
+
     // Storage tracking queries (billing is now in service-auth)
     pinnedContent: async (
       _: unknown,
@@ -1015,6 +1023,9 @@ export const resolvers = {
     // Observability mutations (from observability resolvers)
     ...observabilityMutations,
 
+    // Akash deployment mutations
+    ...akashMutations,
+
     // Storage tracking mutation (billing is now in service-auth)
     triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {
       if (!context.userId) {
@@ -1075,11 +1086,16 @@ export const resolvers = {
       })
     },
     afFunction: async (parent: any, _: unknown, context: Context) => {
+      console.log(`[Service.afFunction] CALLED for service: ${parent.name}, type: ${parent.type}`)
       if (parent.type !== 'FUNCTION') return null
-      return context.prisma.aFFunction.findUnique({
+      const func = await context.prisma.aFFunction.findUnique({
         where: { serviceId: parent.id },
       })
+      console.log(`[Service.afFunction] Found function:`, func ? { id: func.id, sourceCodeLength: func.sourceCode?.length || 0 } : 'null')
+      return func
     },
+    // Merge Akash-related Service field resolvers (akashDeployments, activeAkashDeployment)
+    ...(akashFieldResolvers.Service ?? {}),
   },
 
   Site: {
@@ -1107,6 +1123,17 @@ export const resolvers = {
       return context.prisma.domain.findMany({
         where: { siteId: parent.id },
       })
+    },
+    akashDeployments: async (parent: any, _: unknown, context: Context) => {
+      const deployments = await context.prisma.akashDeployment.findMany({
+        where: { siteId: parent.id },
+        orderBy: { createdAt: 'desc' },
+      })
+      return deployments.map(d => ({
+        ...d,
+        dseq: d.dseq.toString(),
+        depositUakt: d.depositUakt?.toString(),
+      }))
     },
   },
 
@@ -1177,6 +1204,17 @@ export const resolvers = {
         orderBy: { createdAt: 'desc' },
       })
     },
+    akashDeployments: async (parent: any, _: unknown, context: Context) => {
+      const deployments = await context.prisma.akashDeployment.findMany({
+        where: { afFunctionId: parent.id },
+        orderBy: { createdAt: 'desc' },
+      })
+      return deployments.map(d => ({
+        ...d,
+        dseq: d.dseq.toString(),
+        depositUakt: d.depositUakt?.toString(),
+      }))
+    },
   },
 
   AFFunctionDeployment: {
@@ -1208,6 +1246,9 @@ export const resolvers = {
       })
     },
   },
+
+  // Akash deployment field resolvers
+  AkashDeployment: akashFieldResolvers.AkashDeployment,
 
   // Subscriptions for real-time updates
   Subscription: {

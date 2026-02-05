@@ -35,8 +35,15 @@ const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma)
 const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
-const jwtSecret =
-  process.env.JWT_SECRET || 'development-secret-change-in-production'
+const jwtSecret = process.env.JWT_SECRET
+if (!jwtSecret) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: JWT_SECRET is not set. Refusing to start in production without a proper secret.')
+    process.exit(1)
+  }
+  console.warn('⚠️  JWT_SECRET not set — using insecure development default. Do NOT use in production.')
+}
+const effectiveJwtSecret = jwtSecret || 'development-secret-change-in-production'
 
 const schema = makeExecutableSchema({
   typeDefs,
@@ -159,7 +166,7 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 const server = createServer(requestHandler)
 
 // Initialize Chat WebSocket Server
-const chatServer = new ChatServer(prisma, jwtSecret)
+const chatServer = new ChatServer(prisma, effectiveJwtSecret)
 
 // Handle WebSocket upgrade for /ws path
 server.on('upgrade', (request, socket, head) => {
