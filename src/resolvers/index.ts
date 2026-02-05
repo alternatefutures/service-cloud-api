@@ -207,6 +207,31 @@ export const resolvers = {
       })
     },
 
+    deployments: async (
+      _: unknown,
+      { siteId }: { siteId?: string },
+      context: Context
+    ) => {
+      if (!siteId && !context.projectId) {
+        throw new GraphQLError('Either siteId or project context required')
+      }
+      if (siteId) {
+        return context.prisma.deployment.findMany({
+          where: { siteId },
+          orderBy: { createdAt: 'desc' },
+        })
+      }
+      // Fall back to all deployments for sites in the current project
+      const sites = await context.prisma.site.findMany({
+        where: { projectId: context.projectId! },
+        select: { id: true },
+      })
+      return context.prisma.deployment.findMany({
+        where: { siteId: { in: sites.map(s => s.id) } },
+        orderBy: { createdAt: 'desc' },
+      })
+    },
+
     // Zones (SDK compatibility)
     zones: async (_: unknown, __: unknown, context: Context) => {
       if (!context.projectId) {
@@ -690,6 +715,44 @@ export const resolvers = {
       })
     },
 
+    deleteProject: async (
+      _: unknown,
+      { id }: { id: string },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const project = await context.prisma.project.findUnique({
+        where: { id },
+        select: { id: true, userId: true, organizationId: true },
+      })
+
+      if (!project) {
+        throw new GraphQLError('Project not found')
+      }
+
+      // Verify ownership: must be the project creator or in the same org
+      const isAuthorized = context.organizationId
+        ? project.organizationId === context.organizationId
+        : project.userId === context.userId
+
+      if (!isAuthorized) {
+        throw new GraphQLError('Not authorized to delete this project')
+      }
+
+      // Delete all services (cascades to sites, functions, akash deployments)
+      await context.prisma.service.deleteMany({
+        where: { projectId: id },
+      })
+
+      // Delete the project itself
+      await context.prisma.project.delete({ where: { id } })
+
+      return true
+    },
+
     // Sites
     createSite: async (
       _: unknown,
@@ -1086,13 +1149,10 @@ export const resolvers = {
       })
     },
     afFunction: async (parent: any, _: unknown, context: Context) => {
-      console.log(`[Service.afFunction] CALLED for service: ${parent.name}, type: ${parent.type}`)
       if (parent.type !== 'FUNCTION') return null
-      const func = await context.prisma.aFFunction.findUnique({
+      return context.prisma.aFFunction.findUnique({
         where: { serviceId: parent.id },
       })
-      console.log(`[Service.afFunction] Found function:`, func ? { id: func.id, sourceCodeLength: func.sourceCode?.length || 0 } : 'null')
-      return func
     },
     // Merge Akash-related Service field resolvers (akashDeployments, activeAkashDeployment)
     ...(akashFieldResolvers.Service ?? {}),

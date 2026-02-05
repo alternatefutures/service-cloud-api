@@ -1,8 +1,14 @@
 /**
  * Alternate Futures Function Runtime Server
  *
- * Handles function invocations with integrated routing support.
- * Demonstrates integration of RuntimeRouter for ALT-7.
+ * DEPRECATED: This server is a routing stub only.
+ * Actual function execution is handled by Akash deployments
+ * via the AkashOrchestrator in src/services/akash/orchestrator.ts.
+ *
+ * This file can route requests to external targets via AFFunction.routes,
+ * but the executeUserFunction() method is a placeholder that cannot
+ * actually run user code. Do not rely on this for production function
+ * invocations.
  */
 
 import 'dotenv/config'
