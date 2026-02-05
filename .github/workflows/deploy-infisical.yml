@@ -392,7 +392,7 @@ jobs:
 
       - name: Setup Node.js for DNS sync
         if: ${{ github.event.inputs.action == 'deploy' }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 

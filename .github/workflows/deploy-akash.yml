@@ -480,7 +480,7 @@ jobs:
           fi
 
       - name: Setup Node.js for DNS sync
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 

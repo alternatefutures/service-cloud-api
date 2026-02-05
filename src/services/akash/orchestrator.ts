@@ -357,7 +357,7 @@ export class AkashOrchestrator {
     }
 
     // Result might be an array or a "No bids" message
-    if (typeof result === 'string' && result.includes('No bids')) {
+    if (typeof (result as unknown) === 'string' && String(result).includes('No bids')) {
       return []
     }
 
@@ -443,7 +443,7 @@ export class AkashOrchestrator {
       throw new Error(`Failed to get services: ${result.error}`)
     }
 
-    return (result as { services: Record<string, { uris: string[] }> }).services || {}
+    return (result as unknown as { services: Record<string, { uris: string[] }> }).services || {}
   }
 
   /**
