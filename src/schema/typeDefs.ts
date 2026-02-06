@@ -738,6 +738,65 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # WORKSPACE METRICS
+  # ============================================
+
+  type WorkspaceMetrics {
+    compute: ComputeMetrics!
+    storage: StorageMetrics!
+    traffic: TrafficMetrics!
+  }
+
+  type ComputeMetrics {
+    activeDeploys: Int!
+    totalCpuMillicores: Int!
+    totalMemoryMb: Int!
+    formatted: String!
+    trend: Float
+  }
+
+  type StorageMetrics {
+    totalBytes: Float!
+    formatted: String!
+    pinCount: Int!
+    trend: Float
+  }
+
+  type TrafficMetrics {
+    totalRequests: Int!
+    totalBandwidthBytes: Float!
+    formatted: String!
+    trend: Float
+  }
+
+  # ============================================
+  # UNIFIED DEPLOYMENTS (cross-service view)
+  # ============================================
+
+  type UnifiedDeployment {
+    id: ID!
+    shortId: String!
+    status: String!
+    kind: String!                 # SITE, FUNCTION, AKASH
+    serviceName: String!
+    serviceType: String!          # SITE, FUNCTION, VM, DATABASE, CRON, BUCKET
+    projectId: String
+    projectName: String
+    source: String!               # cli, github, docker, etc.
+    image: String                 # container image (Akash) or CID (IPFS)
+    statusMessage: String
+    createdAt: Date!
+    updatedAt: Date
+    author: UnifiedDeploymentAuthor
+  }
+
+  type UnifiedDeploymentAuthor {
+    id: ID!
+    name: String!
+    avatarUrl: String
+  }
+
+  # ============================================
   # VERSION & EVENTS
   # ============================================
 
@@ -1177,6 +1236,12 @@ export const typeDefs = /* GraphQL */ `
     # Storage Analytics
     storageAnalytics(projectId: ID): StorageAnalytics!
     storageUsageTrend(projectId: ID, days: Int): [StorageUsageTrend!]!
+
+    # Workspace Metrics (aggregated compute, storage, traffic)
+    workspaceMetrics(projectId: ID): WorkspaceMetrics!
+
+    # Unified Deployments (all deployment types across all services)
+    allDeployments(projectId: ID, limit: Int): [UnifiedDeployment!]!
 
     # System Health
     subscriptionHealth: SubscriptionHealth!

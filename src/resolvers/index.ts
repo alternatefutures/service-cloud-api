@@ -27,6 +27,68 @@ export type { Context }
 // Service factory for storage tracking (billing is now handled by service-auth)
 const storageTracker = (prisma: any) => new StorageTracker(prisma)
 
+// ── Workspace Metrics Helpers ──────────────────────────────────────
+
+/**
+ * Parse CPU (millicores) and memory (MB) from an Akash SDL string.
+ * SDL is YAML; we use regex to avoid adding a YAML dependency.
+ */
+function parseSdlResources(sdl: string): { cpu: number; memory: number } {
+  let cpu = 0
+  let memory = 0
+
+  // Match cpu units: "units: 0.5" or "units: 500m" inside a cpu block
+  const cpuMatches = sdl.match(/cpu:\s*\n\s*units:\s*([0-9.]+)(m?)/g)
+  if (cpuMatches) {
+    for (const match of cpuMatches) {
+      const inner = match.match(/units:\s*([0-9.]+)(m?)/)
+      if (inner) {
+        const value = parseFloat(inner[1])
+        const isMillicores = inner[2] === 'm'
+        cpu += isMillicores ? value : value * 1000
+      }
+    }
+  }
+
+  // Match memory size: "size: 512Mi" or "size: 1Gi" or "size: 536870912" (bytes)
+  const memMatches = sdl.match(/memory:\s*\n\s*size:\s*([0-9.]+)\s*(Mi|Gi|Ki|Ti|M|G|K|T)?/g)
+  if (memMatches) {
+    for (const match of memMatches) {
+      const inner = match.match(/size:\s*([0-9.]+)\s*(Mi|Gi|Ki|Ti|M|G|K|T)?/)
+      if (inner) {
+        const value = parseFloat(inner[1])
+        const unit = inner[2] || ''
+        switch (unit) {
+          case 'Ti': case 'T': memory += value * 1024 * 1024; break
+          case 'Gi': case 'G': memory += value * 1024; break
+          case 'Mi': case 'M': memory += value; break
+          case 'Ki': case 'K': memory += value / 1024; break
+          default: memory += value / (1024 * 1024); break // assume bytes
+        }
+      }
+    }
+  }
+
+  return { cpu: Math.round(cpu), memory: Math.round(memory) }
+}
+
+/** Format byte count to human-readable string */
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  const idx = Math.min(i, units.length - 1)
+  const value = bytes / Math.pow(1024, idx)
+  return `${value < 10 ? value.toFixed(2) : value < 100 ? value.toFixed(1) : Math.round(value)} ${units[idx]}`
+}
+
+/** Format a count to human-readable (e.g. 12400 → "12.4K") */
+function formatCount(n: number): string {
+  if (n < 1000) return n.toString()
+  if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+}
+
 export const resolvers = {
   Query: {
     version: () => ({
@@ -553,6 +615,351 @@ export const resolvers = {
       }
 
       return trend
+    },
+
+    // Workspace Metrics (aggregated compute, storage, traffic)
+    workspaceMetrics: async (
+      _: unknown,
+      { projectId }: { projectId?: string },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const now = new Date()
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
+
+      // ── Compute Metrics ──────────────────────────────────────────
+      // Find all active Akash deployments, optionally scoped to a project
+      const akashWhere: any = { status: 'ACTIVE' as const }
+      if (projectId) {
+        akashWhere.service = { projectId }
+      } else {
+        // Scope to all projects owned by this user
+        akashWhere.service = {
+          project: { userId: context.userId },
+        }
+      }
+
+      const activeDeployments = await context.prisma.akashDeployment.findMany({
+        where: akashWhere,
+        select: { sdlContent: true },
+      })
+
+      let totalCpuMillicores = 0
+      let totalMemoryMb = 0
+      for (const dep of activeDeployments) {
+        const { cpu, memory } = parseSdlResources(dep.sdlContent)
+        totalCpuMillicores += cpu
+        totalMemoryMb += memory
+      }
+
+      const cpuFormatted = (totalCpuMillicores / 1000).toFixed(1)
+      const memFormatted = totalMemoryMb >= 1024
+        ? `${(totalMemoryMb / 1024).toFixed(1)} GB`
+        : `${totalMemoryMb} MB`
+      const computeFormatted = `${cpuFormatted} vCPU / ${memFormatted}`
+
+      // ── Storage Metrics ──────────────────────────────────────────
+      const activePins = await context.prisma.pinnedContent.findMany({
+        where: {
+          userId: context.userId,
+          unpinnedAt: null,
+        },
+        select: { sizeBytes: true },
+      })
+
+      const totalBytes = activePins.reduce(
+        (sum: number, pin: { sizeBytes: bigint }) => sum + Number(pin.sizeBytes),
+        0
+      )
+      const pinCount = activePins.length
+
+      const storageFormatted = formatBytes(totalBytes)
+
+      // Storage trend: compare current snapshot to 30 days ago
+      const currentSnapshot = await context.prisma.storageSnapshot.findFirst({
+        where: { userId: context.userId },
+        orderBy: { date: 'desc' },
+        select: { totalBytes: true },
+      })
+      const previousSnapshot = await context.prisma.storageSnapshot.findFirst({
+        where: {
+          userId: context.userId,
+          date: { lte: thirtyDaysAgo },
+        },
+        orderBy: { date: 'desc' },
+        select: { totalBytes: true },
+      })
+
+      let storageTrend: number | null = null
+      if (currentSnapshot && previousSnapshot) {
+        const current = Number(currentSnapshot.totalBytes)
+        const previous = Number(previousSnapshot.totalBytes)
+        if (previous > 0) {
+          storageTrend = ((current - previous) / previous) * 100
+        }
+      }
+
+      // ── Traffic Metrics ──────────────────────────────────────────
+      // Lookup customer for UsageRecord queries
+      const customer = await context.prisma.customer.findUnique({
+        where: { userId: context.userId },
+        select: { id: true },
+      })
+
+      let totalRequests = 0
+      let totalBandwidthBytes = 0
+      let trafficTrend: number | null = null
+
+      if (customer) {
+        // Current period (last 30 days)
+        const currentRecords = await context.prisma.usageRecord.findMany({
+          where: {
+            customerId: customer.id,
+            type: { in: ['REQUESTS', 'BANDWIDTH'] },
+            periodStart: { gte: thirtyDaysAgo },
+          },
+          select: { type: true, quantity: true },
+        })
+
+        for (const rec of currentRecords) {
+          if (rec.type === 'REQUESTS') totalRequests += rec.quantity
+          if (rec.type === 'BANDWIDTH') totalBandwidthBytes += rec.quantity
+        }
+
+        // Previous period (30-60 days ago) for trend
+        const previousRecords = await context.prisma.usageRecord.findMany({
+          where: {
+            customerId: customer.id,
+            type: 'REQUESTS',
+            periodStart: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
+          },
+          select: { quantity: true },
+        })
+
+        const previousRequests = previousRecords.reduce(
+          (sum: number, r: { quantity: number }) => sum + r.quantity,
+          0
+        )
+
+        if (previousRequests > 0) {
+          trafficTrend =
+            ((totalRequests - previousRequests) / previousRequests) * 100
+        }
+      }
+
+      // Also add live counters from UsageBuffer
+      const usageBuffer = await context.prisma.usageBuffer.findUnique({
+        where: { userId: context.userId },
+      })
+
+      if (usageBuffer) {
+        totalRequests += usageBuffer.requests
+        totalBandwidthBytes += usageBuffer.bandwidth
+      }
+
+      const trafficFormatted = formatCount(totalRequests) + ' requests'
+
+      return {
+        compute: {
+          activeDeploys: activeDeployments.length,
+          totalCpuMillicores,
+          totalMemoryMb,
+          formatted: computeFormatted,
+          trend: null, // Compute trend requires historical snapshots not yet tracked
+        },
+        storage: {
+          totalBytes,
+          formatted: storageFormatted,
+          pinCount,
+          trend: storageTrend,
+        },
+        traffic: {
+          totalRequests,
+          totalBandwidthBytes,
+          formatted: trafficFormatted,
+          trend: trafficTrend,
+        },
+      }
+    },
+
+    // Unified Deployments (all deployment types across all services)
+    allDeployments: async (
+      _: unknown,
+      { projectId, limit = 50 }: { projectId?: string; limit?: number },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      // Build project filter: specific project, or all user's projects
+      const projectWhere = projectId
+        ? { id: projectId }
+        : { userId: context.userId }
+
+      const projects = await context.prisma.project.findMany({
+        where: projectWhere,
+        select: { id: true, name: true },
+      })
+      const projectIds = projects.map(p => p.id)
+      const projectMap = new Map(projects.map(p => [p.id, p.name]))
+
+      if (projectIds.length === 0) return []
+
+      // Fetch the user for author info
+      const user = await context.prisma.user.findUnique({
+        where: { id: context.userId },
+        select: { id: true, username: true, email: true },
+      })
+      const authorInfo = user
+        ? {
+            id: user.id,
+            name: user.username || user.email || 'Unknown',
+            avatarUrl: null,
+          }
+        : { id: context.userId, name: 'Unknown', avatarUrl: null }
+
+      const unified: Array<{
+        id: string
+        shortId: string
+        status: string
+        kind: string
+        serviceName: string
+        serviceType: string
+        projectId: string | null
+        projectName: string | null
+        source: string
+        image: string | null
+        statusMessage: string | null
+        createdAt: Date
+        updatedAt: Date | null
+        author: { id: string; name: string; avatarUrl: string | null }
+      }> = []
+
+      // 1. Site Deployments (IPFS/Arweave uploads)
+      const siteDeployments = await context.prisma.deployment.findMany({
+        where: {
+          site: { projectId: { in: projectIds } },
+        },
+        include: {
+          site: { select: { name: true, projectId: true, serviceId: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+
+      for (const dep of siteDeployments) {
+        const statusMap: Record<string, string> = {
+          PENDING: 'QUEUED',
+          BUILDING: 'BUILDING',
+          UPLOADING: 'DEPLOYING',
+          SUCCESS: 'READY',
+          FAILED: 'FAILED',
+        }
+        unified.push({
+          id: dep.id,
+          shortId: dep.id.slice(-8),
+          status: statusMap[dep.status] || dep.status,
+          kind: 'SITE',
+          serviceName: dep.site?.name || 'Site',
+          serviceType: 'SITE',
+          projectId: dep.site?.projectId || null,
+          projectName: dep.site?.projectId ? (projectMap.get(dep.site.projectId) || null) : null,
+          source: 'cli',
+          image: dep.cid ? `ipfs://${dep.cid}` : null,
+          statusMessage: dep.status === 'SUCCESS' ? 'Deployment successful' : null,
+          createdAt: dep.createdAt,
+          updatedAt: dep.updatedAt,
+          author: authorInfo,
+        })
+      }
+
+      // 2. Function Deployments (code uploads)
+      const funcDeployments = await context.prisma.aFFunctionDeployment.findMany({
+        where: {
+          afFunction: { projectId: { in: projectIds } },
+        },
+        include: {
+          afFunction: { select: { name: true, projectId: true, status: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+
+      for (const dep of funcDeployments) {
+        unified.push({
+          id: dep.id,
+          shortId: dep.id.slice(-8),
+          status: dep.afFunction?.status === 'ACTIVE' ? 'ACTIVE' : 'READY',
+          kind: 'FUNCTION',
+          serviceName: dep.afFunction?.name || 'Function',
+          serviceType: 'FUNCTION',
+          projectId: dep.afFunction?.projectId || null,
+          projectName: dep.afFunction?.projectId ? (projectMap.get(dep.afFunction.projectId) || null) : null,
+          source: 'cli',
+          image: dep.cid ? `ipfs://${dep.cid}` : null,
+          statusMessage: 'Function deployed',
+          createdAt: dep.createdAt,
+          updatedAt: dep.updatedAt,
+          author: authorInfo,
+        })
+      }
+
+      // 3. Akash Deployments (compute containers)
+      const akashDeployments = await context.prisma.akashDeployment.findMany({
+        where: {
+          service: { projectId: { in: projectIds } },
+        },
+        include: {
+          service: { select: { name: true, type: true, projectId: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+
+      for (const dep of akashDeployments) {
+        const akashStatusMap: Record<string, string> = {
+          CREATING: 'INITIALIZING',
+          WAITING_BIDS: 'QUEUED',
+          SELECTING_BID: 'QUEUED',
+          CREATING_LEASE: 'DEPLOYING',
+          SENDING_MANIFEST: 'DEPLOYING',
+          DEPLOYING: 'DEPLOYING',
+          ACTIVE: 'ACTIVE',
+          FAILED: 'FAILED',
+          CLOSED: 'REMOVED',
+        }
+
+        // Try to extract image from SDL
+        const imageMatch = dep.sdlContent.match(/image:\s*["']?([^\s"']+)/)
+        const image = imageMatch ? imageMatch[1] : null
+
+        unified.push({
+          id: dep.id,
+          shortId: dep.id.slice(-8),
+          status: akashStatusMap[dep.status] || dep.status,
+          kind: 'AKASH',
+          serviceName: dep.service?.name || 'Service',
+          serviceType: dep.service?.type || 'FUNCTION',
+          projectId: dep.service?.projectId || null,
+          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
+          source: 'docker',
+          image,
+          statusMessage: dep.errorMessage || (dep.status === 'ACTIVE' ? 'Running on Akash' : null),
+          createdAt: dep.createdAt,
+          updatedAt: dep.updatedAt,
+          author: authorInfo,
+        })
+      }
+
+      // Sort all by createdAt descending
+      unified.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+
+      return unified.slice(0, limit)
     },
 
     // System Health
