@@ -224,6 +224,7 @@ jobs:
           echo "SDL prepared with secrets"
 
       - name: Update deployment on-chain
+        continue-on-error: true
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
