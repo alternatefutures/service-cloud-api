@@ -46,16 +46,15 @@ concurrency:
 
 env:
   # Service DSEQ mapping — UPDATE THESE after full redeploy!
-  # Previous values are stale (deployments were closed).
   # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
-  DSEQ_api: "UPDATE_AFTER_REDEPLOY"
+  DSEQ_api: "25411473"
   DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
   DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
   DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
   DSEQ_caddy: "UPDATE_AFTER_REDEPLOY"
 
   # Provider mapping — UPDATE THESE after full redeploy!
-  PROVIDER_api: "UPDATE_AFTER_REDEPLOY"
+  PROVIDER_api: "akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj"
   PROVIDER_auth: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_gateway: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_infisical: "UPDATE_AFTER_REDEPLOY"
@@ -117,21 +116,16 @@ jobs:
 
       - name: Install Akash CLI and provider-services
         run: |
-          cd /tmp
-
-          # Install akash CLI
-          curl -sfL "https://github.com/akash-network/node/releases/download/v1.0.2/akash_1.0.2_linux_amd64.zip" -o akash.zip
-          unzip akash.zip
-          sudo mv akash /usr/local/bin/
-          chmod +x /usr/local/bin/akash
-
-          # Install provider-services CLI for manifest send
-          curl -sfL "https://github.com/akash-network/provider/releases/download/v0.6.9/provider-services_0.6.9_linux_amd64.zip" -o provider.zip
-          unzip provider.zip
-          sudo mv provider-services /usr/local/bin/
-          chmod +x /usr/local/bin/provider-services
-
+          # Install latest akash node CLI
+          curl -sSfL https://raw.githubusercontent.com/akash-network/node/master/install.sh | sh -s -- -b /usr/local/bin
           akash version
+
+          # Install latest provider-services CLI
+          PROVIDER_VERSION=$(curl -s https://api.github.com/repos/akash-network/provider/releases/latest | jq -r '.tag_name')
+          echo "Installing provider-services $PROVIDER_VERSION"
+          curl -sSfL "https://github.com/akash-network/provider/releases/download/${PROVIDER_VERSION}/provider-services_linux_amd64.zip" -o /tmp/provider.zip
+          unzip -o /tmp/provider.zip -d /usr/local/bin/
+          chmod +x /usr/local/bin/provider-services
           provider-services version
 
       - name: Setup Akash wallet
@@ -140,8 +134,9 @@ jobs:
           AKASH_KEY_NAME: deploy
           AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
         run: |
-          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test
-          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test)
+          mkdir -p $HOME/.akash
+          echo "$AKASH_MNEMONIC" | akash keys add $AKASH_KEY_NAME --recover --keyring-backend test --home $HOME/.akash
+          AKASH_ADDRESS=$(akash keys show $AKASH_KEY_NAME -a --keyring-backend test --home $HOME/.akash)
           echo "AKASH_ADDRESS=$AKASH_ADDRESS" >> $GITHUB_ENV
           echo "Wallet address: $AKASH_ADDRESS"
 
@@ -172,25 +167,27 @@ jobs:
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
           AKASH_CHAIN_ID: akashnet-2
-          AKASH_KEYRING_BACKEND: test
-          AKASH_KEY_NAME: deploy
-          AKASH_CLIENT_CRT: ${{ secrets.AKASH_CLIENT_CRT }}
-          AKASH_CLIENT_KEY: ${{ secrets.AKASH_CLIENT_KEY }}
         run: |
-          CERT_PATH="$HOME/.akash/certs"
-          mkdir -p "$CERT_PATH"
+          echo "Generating and publishing fresh certificate..."
 
-          if [ -n "$AKASH_CLIENT_CRT" ] && [ -n "$AKASH_CLIENT_KEY" ]; then
-            echo "Restoring certificates from GitHub Secrets..."
-            echo "$AKASH_CLIENT_CRT" | base64 -d > "$CERT_PATH/client.crt"
-            echo "$AKASH_CLIENT_KEY" | base64 -d > "$CERT_PATH/client.key"
-            chmod 600 "$CERT_PATH/client.crt" "$CERT_PATH/client.key"
-            echo "Certificates restored"
-          else
-            echo "::error::No certificates found in secrets."
-            echo "Run the 'Setup Akash Certificates' workflow first."
-            exit 1
-          fi
+          akash tx cert generate client \
+            --from deploy \
+            --keyring-backend test \
+            --home $HOME/.akash
+
+          akash tx cert publish client \
+            --from deploy \
+            --keyring-backend test \
+            --home $HOME/.akash \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas-prices 0.025uakt \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            -y || echo "Certificate may already be published"
+
+          sleep 10
+          echo "Certificate setup complete"
 
       - name: Substitute secrets in SDL
         env:
@@ -226,6 +223,32 @@ jobs:
 
           echo "SDL prepared with secrets"
 
+      - name: Update deployment on-chain
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          echo "=== Updating Deployment On-Chain ==="
+          echo "DSEQ: ${{ env.DSEQ }}"
+          echo "This updates the on-chain version hash to match the new SDL."
+
+          akash tx deployment update deploy-final.yaml \
+            --dseq ${{ env.DSEQ }} \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --home $HOME/.akash \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --gas-prices 0.025uakt \
+            --gas auto \
+            --gas-adjustment 1.5 \
+            -y
+
+          sleep 10
+          echo "Deployment updated on-chain"
+
       - name: Send manifest to provider
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
@@ -244,8 +267,6 @@ jobs:
             --provider ${{ env.PROVIDER }} \
             --from $AKASH_KEY_NAME \
             --keyring-backend test \
-            --node $AKASH_NODE \
-            --chain-id $AKASH_CHAIN_ID \
             --home $HOME/.akash
 
           echo ""

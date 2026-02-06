@@ -27,11 +27,18 @@ services:
       - YSQL_PASSWORD=your_secure_password_here_change_this
       - YSQL_DB=alternatefutures
     expose:
-      # YSQL (PostgreSQL-compatible API) - for app connections
+      # YSQL (PostgreSQL-compatible API) - for internal app connections
       - port: 5433
         as: 5433
         to:
           - service: api
+      # YSQL - global TCP access for standalone services (e.g. service-auth)
+      # Protected by YSQL_PASSWORD (auth enabled via --tserver_flags=ysql_enable_auth=true)
+      - port: 5433
+        as: 5433
+        proto: tcp
+        to:
+          - global: true
       # Master RPC - for cluster coordination
       - port: 7100
         as: 7100
