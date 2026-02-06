@@ -1,200 +1,103 @@
-# Akash Deployments - AlternateFutures
+# Akash Deployments — AlternateFutures
 
 **Owner:** `akash1degudmhf24auhfnqtn99mkja3xt7clt9um77tn`
 
 ## Active Deployments
 
-### 1. Auth Service
+### 1. service-cloud-api (Full Stack)
 
-| Field         | Value                                                                          |
-| ------------- | ------------------------------------------------------------------------------ |
-| **Name**      | Auth API                                                                       |
-| **DSEQ**      | `24492663`                                                                     |
-| **Provider**  | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots)                     |
-| **Status**    | ✅ Active                                                                      |
-| **Services**  | `auth-api`                                                                     |
-| **URLs**      | `auth.alternatefutures.ai`, `6ndirokr8hfs121h8k63mp04ig.ingress.europlots.com` |
-| **CI/CD**     | ✅ GitHub Actions workflow                                                     |
-| **Resources** | 1 CPU, 1Gi RAM                                                                 |
-| **Cost**      | ~7.24 uakt/block                                                               |
+| Field | Value |
+|-------|-------|
+| **DSEQ** | 25411473 |
+| **Provider** | `akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj` (leet.haus) |
+| **Status** | Running |
+| **Services** | API + YugabyteDB + IPFS (Kubo) + Jaeger + OTel Collector |
+| **URLs** | api.alternatefutures.ai, yb.alternatefutures.ai, ipfs.alternatefutures.ai |
+| **Resources** | 8 CPU, 20Gi RAM, 280Gi storage |
+| **CI/CD** | `deploy-akash.yml` (full) / `update-manifest.yml` (in-place) |
 
 ---
 
-### 2. Cloud API Postgres Database
+### 2. service-auth (Authentication)
 
-| Field          | Value                                                      |
-| -------------- | ---------------------------------------------------------- |
-| **Name**       | Cloud API Postgres                                         |
-| **DSEQ**       | `24520638`                                                 |
-| **Provider**   | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots) |
-| **Status**     | ✅ Active                                                  |
-| **Services**   | `postgres`                                                 |
-| **Connection** | `provider.europlots.com:30155`                             |
-| **Database**   | `alternatefutures`                                         |
-| **Resources**  | 1 CPU, 1Gi RAM, 10Gi persistent storage                    |
-| **Cost**       | ~7.0 uakt/block                                            |
-| **Used By**    | API Service (service-cloud-api)                            |
-| **SDL**        | `infra/postgres-standalone.yaml`                           |
-| **1Password**  | `Alternate Cloud PostgreSQL`                               |
+| Field | Value |
+|-------|-------|
+| **DSEQ** | 25412621 |
+| **Provider** | `akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac` (tagus.host) |
+| **Status** | Running |
+| **Services** | auth-api |
+| **URLs** | auth.alternatefutures.ai |
+| **Resources** | 1 CPU, 1Gi RAM, 1Gi storage |
+| **CI/CD** | `deploy-akash.yml` (full) / `update-manifest.yml` (in-place) |
 
 ---
 
-### 2b. Auth Postgres Database
+### 3. infrastructure-proxy (SSL Proxy)
 
-| Field          | Value                                                      |
-| -------------- | ---------------------------------------------------------- |
-| **Name**       | Auth Postgres                                              |
-| **DSEQ**       | `24677103`                                                 |
-| **Provider**   | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots) |
-| **Status**     | ✅ Active                                                  |
-| **Services**   | `postgres`                                                 |
-| **Connection** | `provider.europlots.com:31568`                             |
-| **Database**   | `auth`                                                     |
-| **User**       | `auth`                                                     |
-| **Resources**  | 0.5 CPU, 512Mi RAM, 5Gi persistent storage                 |
-| **Cost**       | ~5.1 uakt/block                                            |
-| **Used By**    | Auth Service (service-auth)                                |
-| **SDL**        | `service-auth/infra/postgres-standalone.yaml`              |
-| **1Password**  | `Alternate Auth PostgreSQL`                                |
+| Field | Value |
+|-------|-------|
+| **DSEQ** | 25312670 |
+| **Provider** | DigitalFrontier (`akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z`) |
+| **Status** | Running |
+| **Dedicated IP** | 77.76.13.213 |
+| **Domains** | auth, api, app, docs.alternatefutures.ai |
+| **Image** | `ghcr.io/alternatefutures/infrastructure-proxy-pingap:main` |
 
 ---
 
-### 3. Main API (Legacy - To Be Replaced)
+### 4. Infisical Secrets Manager
 
-| Field         | Value                                                                         |
-| ------------- | ----------------------------------------------------------------------------- |
-| **Name**      | API Service + Embedded Postgres                                               |
-| **DSEQ**      | `24363709`                                                                    |
-| **Provider**  | `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` (europlots)                    |
-| **Status**    | ⚠️ Pending replacement                                                        |
-| **Services**  | `api`, `postgres`                                                             |
-| **URLs**      | `api.alternatefutures.ai`, `cjrdmusuql9e34bevi8mjgj8pg.ingress.europlots.com` |
-| **Resources** | 2 CPU + 2Gi RAM (API), 1 CPU + 1Gi RAM (Postgres)                             |
-| **Cost**      | ~19.60 uakt/block                                                             |
-| **Note**      | Will be replaced with standalone API using external Postgres                  |
+| Field | Value |
+|-------|-------|
+| **DSEQ** | 25354545 |
+| **Provider** | Europlots (`akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc`) |
+| **Status** | Running |
+| **Ingress** | `uvhirubqe1aa1att76elejdi3c.ingress.europlots.com` |
+| **URL** | secrets.alternatefutures.ai (direct, not through proxy) |
 
 ---
 
-### 4. Caddy Edge Proxy
+## Quick Reference: DSEQ to Service
 
-| Field         | Value                                                      |
-| ------------- | ---------------------------------------------------------- |
-| **Name**      | Caddy Edge Proxy                                           |
-| **DSEQ**      | `24489905`                                                 |
-| **Provider**  | `akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj` (leet.haus) |
-| **Status**    | ✅ Active                                                  |
-| **Services**  | `caddy`                                                    |
-| **URLs**      | `8etps07re99of8us93gd76p9gs.ingress.dal.leet.haus`         |
-| **Static IP** | `170.75.255.101` (ports 80, 443 via IP lease)              |
-| **SSL Cert**  | Let's Encrypt E8 (valid Dec 3, 2025 - Mar 3, 2026)         |
-| **Domains**   | api, auth, secrets.alternatefutures.ai                     |
-| **Admin API** | Port 2019 (external: 31799)                                |
-| **Cost**      | ~31.22 uakt/block                                          |
-| **SDL**       | `edge/caddy-akash-ip-lease.yaml`                           |
+| DSEQ | Service | Primary URL |
+|------|---------|-------------|
+| 25411473 | service-cloud-api (full stack) | api.alternatefutures.ai |
+| 25412621 | service-auth | auth.alternatefutures.ai |
+| 25312670 | infrastructure-proxy (SSL) | 77.76.13.213 |
+| 25354545 | Infisical Secrets | secrets.alternatefutures.ai |
 
----
-
-### 5. Gateway Service
-
-| Field         | Value                                                  |
-| ------------- | ------------------------------------------------------ |
-| **Name**      | Gateway                                                |
-| **DSEQ**      | `24452456`                                             |
-| **Provider**  | `akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac` (tagus) |
-| **Status**    | Active                                                 |
-| **Services**  | `gateway`                                              |
-| **URLs**      | `d5s3eedndp9e740i6begtat6sg.ingress.akash.tagus.host`  |
-| **Resources** | 0.5 CPU, 512Mi RAM                                     |
-| **Cost**      | ~2.06 uakt/block                                       |
-
----
-
-### 6. Infisical Secrets Manager
-
-| Field           | Value                                                                               |
-| --------------- | ----------------------------------------------------------------------------------- |
-| **Name**        | Infisical Secrets Manager                                                           |
-| **DSEQ**        | `24458239`                                                                          |
-| **Provider**    | `akash1gq42nhp64xrkxlawvchfguuq0wpdx68rkzfnw6` (parallelnode.de)                    |
-| **Status**      | ✅ Active                                                                           |
-| **Services**    | `infisical`, `postgres`, `redis`                                                    |
-| **URLs**        | `secrets.alternatefutures.ai`, `9tnnbebe65bvt1vd2g6k67a72g.ingress.parallelnode.de` |
-| **Resources**   | 1 CPU + 1Gi (Infisical), 0.5 CPU + 512Mi (Postgres), 0.25 CPU + 256Mi (Redis)       |
-| **Cost**        | ~11.73 uakt/block                                                                   |
-| **Admin Setup** | Visit https://secrets.alternatefutures.ai/admin/signup                              |
-
----
-
-## DNS Configuration
-
-| Domain                        | Target                  | Status    |
-| ----------------------------- | ----------------------- | --------- |
-| `auth.alternatefutures.ai`    | Points to dseq 24363650 | ✅ Active |
-| `api.alternatefutures.ai`     | Points to dseq 24363709 | ✅ Active |
-| `secrets.alternatefutures.ai` | Points to dseq 24458239 | ✅ Active |
-
----
-
-## Quick Reference: DSEQ to Service Name
-
-Since Akash Console shows deployments as "unknown", use this reference:
-
-| DSEQ       | Service Name                 | Primary URL                                         |
-| ---------- | ---------------------------- | --------------------------------------------------- |
-| `24492663` | Auth API                     | auth.alternatefutures.ai                            |
-| `24520638` | Cloud API Postgres           | provider.europlots.com:30155                        |
-| `24677103` | Auth Postgres                | provider.europlots.com:31568                        |
-| `24363709` | Main API + Postgres (legacy) | api.alternatefutures.ai                             |
-| `24489905` | Caddy Edge Proxy             | 170.75.255.101                                      |
-| `24452456` | Gateway Service              | d5s3eedndp9e740i6begtat6sg.ingress.akash.tagus.host |
-| `24458239` | Infisical Secrets            | secrets.alternatefutures.ai                         |
-
-> **Note:** Akash Network does not support deployment naming/labels in SDL files.
-> The Console will always show "unknown" - use this DSEQ reference instead.
-
----
+> **Note:** Akash Console shows deployments as "Unknown" — use this DSEQ reference.
 
 ## Provider Reference
 
-| Provider                                       | Name            | Reliability                          |
-| ---------------------------------------------- | --------------- | ------------------------------------ |
-| `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` | europlots.com   | Good                                 |
-| `akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac` | tagus.host      | Good                                 |
-| `akash1gq42nhp64xrkxlawvchfguuq0wpdx68rkzfnw6` | parallelnode.de | Good (recommended for multi-service) |
-| `akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj` | leet.haus       | Good (supports IP leases)            |
-
----
+| Provider | Name | Used For |
+|----------|------|----------|
+| `akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj` | leet.haus | service-cloud-api |
+| `akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac` | tagus.host | service-auth |
+| `akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z` | DigitalFrontier | SSL proxy |
+| `akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc` | Europlots | Infisical (BLOCKED for other services) |
 
 ## Commands
 
 ### Check deployment status
-
 ```bash
-# Using Akash MCP
-mcp__akash__get-deployment with dseq: <DSEQ>
+# Using Akash Console
+https://deploy.cloudmos.io/deployment/akash1degudmhf24auhfnqtn99mkja3xt7clt9um77tn/<DSEQ>
 
 # Using Akash CLI
 akash query deployment get --owner akash1degudmhf24auhfnqtn99mkja3xt7clt9um77tn --dseq <DSEQ>
 ```
 
-### Get services/URLs
-
+### Update a service (code change)
 ```bash
-mcp__akash__get-services with owner, dseq, gseq: 1, oseq: 1, provider: <PROVIDER>
+# Push to main — CI/CD handles the rest
+git push origin main
 ```
 
-### Get container logs
-
-```bash
-mcp__akash__get-logs with owner, dseq, gseq: 1, oseq: 1, provider: <PROVIDER>, service: <SERVICE_NAME>
-```
-
-### Close a deployment
-
-```bash
-mcp__akash__close-deployment with dseq: <DSEQ>
-```
+### Full redeploy
+See the service-specific deployment docs:
+- [service-auth deployment guide](../service-auth/AKASH_DEPLOYMENT.md)
 
 ---
 
-_Last updated: December 7, 2025_
+*Last updated: 2026-02-06*
