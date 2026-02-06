@@ -405,7 +405,6 @@ jobs:
       - name: Send manifest to provider
         env:
           AKASH_NODE: https://rpc.akashnet.net:443
-          AKASH_CHAIN_ID: akashnet-2
           AKASH_KEYRING_BACKEND: test
           AKASH_KEY_NAME: deploy
         run: |
@@ -418,7 +417,6 @@ jobs:
             --from $AKASH_KEY_NAME \
             --keyring-backend test \
             --node $AKASH_NODE \
-            --chain-id $AKASH_CHAIN_ID \
             --home $HOME/.akash
 
           echo "Manifest sent successfully!"
