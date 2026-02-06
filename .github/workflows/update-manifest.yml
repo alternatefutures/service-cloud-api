@@ -10,6 +10,13 @@ permissions:
 # use the "Deploy to Akash Network (Full Redeploy)" workflow instead.
 
 on:
+  # Auto-trigger after successful Docker image build+push
+  workflow_run:
+    workflows: ["Build and Push Docker Image to GHCR"]
+    types:
+      - completed
+    branches: [main]
+
   workflow_dispatch:
     inputs:
       service:
@@ -17,11 +24,11 @@ on:
         required: true
         type: choice
         options:
-          - api        # Main API (DSEQ: 24363709)
-          - auth       # Auth Service (DSEQ: 24492663)
-          - gateway    # Gateway Service (DSEQ: 24452456)
-          - infisical  # Secrets Manager (DSEQ: 24458239)
-          - caddy      # Edge Proxy (DSEQ: 24489905)
+          - api        # Main API
+          - auth       # Auth Service
+          - gateway    # Gateway Service
+          - infisical  # Secrets Manager
+          - caddy      # Edge Proxy
       sdl_file:
         description: 'SDL file to deploy (relative to repo root)'
         required: true
@@ -38,32 +45,54 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Service DSEQ mapping (from AKASH_DEPLOYMENTS.md)
-  DSEQ_api: "24363709"
-  DSEQ_auth: "24492663"
-  DSEQ_gateway: "24452456"
-  DSEQ_infisical: "24458239"
-  DSEQ_caddy: "24489905"
+  # Service DSEQ mapping — UPDATE THESE after full redeploy!
+  # Previous values are stale (deployments were closed).
+  # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
+  DSEQ_api: "UPDATE_AFTER_REDEPLOY"
+  DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
+  DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
+  DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
+  DSEQ_caddy: "UPDATE_AFTER_REDEPLOY"
 
-  # Provider mapping
-  PROVIDER_api: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
-  PROVIDER_auth: "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc"
-  PROVIDER_gateway: "akash1xmjzu9dczlg9fa4v3pfvwzn7ty89r003laj4ac"
-  PROVIDER_infisical: "akash1gq42nhp64xrkxlawvchfguuq0wpdx68rkzfnw6"
-  PROVIDER_caddy: "akash1kqzpqqhm39umt06wu8m4hx63v5hefhrfmjf9dj"
+  # Provider mapping — UPDATE THESE after full redeploy!
+  PROVIDER_api: "UPDATE_AFTER_REDEPLOY"
+  PROVIDER_auth: "UPDATE_AFTER_REDEPLOY"
+  PROVIDER_gateway: "UPDATE_AFTER_REDEPLOY"
+  PROVIDER_infisical: "UPDATE_AFTER_REDEPLOY"
+  PROVIDER_caddy: "UPDATE_AFTER_REDEPLOY"
 
 jobs:
   update-manifest:
     runs-on: ubuntu-latest
     environment: production
+    # Skip if triggered by workflow_run and the build failed
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate DSEQ is configured
+        run: |
+          if [ "${{ env.DSEQ_api }}" == "UPDATE_AFTER_REDEPLOY" ]; then
+            echo "::error::DSEQ values have not been updated after the full redeploy."
+            echo "Update the env vars in this workflow file with the new DSEQs and providers."
+            exit 1
+          fi
+
       - name: Set deployment variables
         run: |
-          SERVICE="${{ inputs.service }}"
+          # When auto-triggered by Docker build, default to 'api' service
+          if [ "${{ github.event_name }}" == "workflow_run" ]; then
+            SERVICE="api"
+            SDL_FILE="deploy-mainnet.yaml"
+            echo "Auto-triggered by Docker build. Updating API manifest."
+          else
+            SERVICE="${{ inputs.service }}"
+            SDL_FILE="${{ inputs.sdl_file }}"
+          fi
 
           # Get DSEQ for selected service
           case "$SERVICE" in
@@ -78,12 +107,13 @@ jobs:
           echo "DSEQ=$DSEQ" >> $GITHUB_ENV
           echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
           echo "SERVICE=$SERVICE" >> $GITHUB_ENV
+          echo "SDL_FILE=$SDL_FILE" >> $GITHUB_ENV
 
           echo "=== Manifest Update Configuration ==="
           echo "Service:  $SERVICE"
           echo "DSEQ:     $DSEQ"
           echo "Provider: $PROVIDER"
-          echo "SDL File: ${{ inputs.sdl_file }}"
+          echo "SDL File: $SDL_FILE"
 
       - name: Install Akash CLI and provider-services
         run: |
@@ -174,10 +204,9 @@ jobs:
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
           INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          SDL_FILE: ${{ inputs.sdl_file }}
           USE_INFISICAL: ${{ inputs.use_infisical || 'false' }}
         run: |
-          cp $SDL_FILE deploy-final.yaml
+          cp ${{ env.SDL_FILE }} deploy-final.yaml
 
           if [ "$USE_INFISICAL" == "true" ]; then
             echo "Using Infisical for secrets management"
@@ -256,7 +285,7 @@ jobs:
           echo "| **Service** | ${{ env.SERVICE }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **DSEQ** | ${{ env.DSEQ }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Provider** | ${{ env.PROVIDER }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **SDL File** | ${{ inputs.sdl_file }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SDL File** | ${{ env.SDL_FILE }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### What This Means" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -379,6 +379,7 @@ jobs:
 
           echo ""
           echo "Accepting bid from provider: $PROVIDER (Price: $PRICE uakt)"
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
 
           akash tx market lease create \
             --dseq ${{ env.DSEQ }} \
@@ -391,6 +392,36 @@ jobs:
             --gas-adjustment 1.5 \
             --gas-prices 0.025uakt \
             -y
+
+      - name: Install provider-services CLI
+        run: |
+          PROVIDER_VERSION=$(curl -s https://api.github.com/repos/akash-network/provider/releases/latest | jq -r '.tag_name')
+          echo "Installing provider-services $PROVIDER_VERSION"
+          curl -sSfL "https://github.com/akash-network/provider/releases/download/${PROVIDER_VERSION}/provider-services_linux_amd64.zip" -o /tmp/provider.zip
+          unzip -o /tmp/provider.zip -d /usr/local/bin/
+          chmod +x /usr/local/bin/provider-services
+          provider-services version
+
+      - name: Send manifest to provider
+        env:
+          AKASH_NODE: https://rpc.akashnet.net:443
+          AKASH_CHAIN_ID: akashnet-2
+          AKASH_KEYRING_BACKEND: test
+          AKASH_KEY_NAME: deploy
+        run: |
+          echo "Sending manifest to provider ${{ env.PROVIDER }}..."
+          sleep 10
+
+          provider-services send-manifest deploy-final.yaml \
+            --dseq ${{ env.DSEQ }} \
+            --provider ${{ env.PROVIDER }} \
+            --from $AKASH_KEY_NAME \
+            --keyring-backend test \
+            --node $AKASH_NODE \
+            --chain-id $AKASH_CHAIN_ID \
+            --home $HOME/.akash
+
+          echo "Manifest sent successfully!"
 
       - name: Get lease status and service URIs
         env:
