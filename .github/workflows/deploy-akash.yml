@@ -321,8 +321,17 @@ jobs:
           # Create a filtered bids array
           FILTERED_BIDS="[]"
 
+          # Blocked providers (broken hostnames, NAT hairpin, known bad)
+          BLOCKED_PROVIDERS="akash1smapjx8m8363nmdvc2yr9atlqy8vcql73m9l0v"
+
           for PROVIDER_ADDR in $PROVIDERS; do
             echo "Checking provider: $PROVIDER_ADDR"
+
+            # Skip blocked providers
+            if echo "$BLOCKED_PROVIDERS" | grep -q "$PROVIDER_ADDR"; then
+              echo "  ✗ BLOCKED provider - skipping"
+              continue
+            fi
 
             # Query provider attributes from Akash
             PROVIDER_INFO=$(akash query provider get "$PROVIDER_ADDR" --node $AKASH_NODE --output json 2>/dev/null || echo '{}')
