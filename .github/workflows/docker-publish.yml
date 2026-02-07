@@ -4,10 +4,10 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'src/**'
-      - 'prisma/**'
-      - 'package.json'
-      - 'Dockerfile'
+      - 'service-cloud-api/src/**'
+      - 'service-cloud-api/prisma/**'
+      - 'service-cloud-api/package.json'
+      - 'service-cloud-api/Dockerfile'
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -46,6 +46,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: service-cloud-api/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

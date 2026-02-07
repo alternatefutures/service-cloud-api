@@ -112,6 +112,10 @@ jobs:
           ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
           FILECOIN_WALLET_KEY: ${{ secrets.FILECOIN_WALLET_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+          RPC_ENDPOINT: ${{ secrets.RPC_ENDPOINT }}
+          GRPC_ENDPOINT: ${{ secrets.GRPC_ENDPOINT }}
+          AKASH_MCP_PATH: ${{ secrets.AKASH_MCP_PATH }}
           INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_SERVICE_TOKEN }}
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
@@ -137,6 +141,10 @@ jobs:
             sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
             sed -i "s|your_filecoin_wallet_key|${FILECOIN_WALLET_KEY:-placeholder}|g" deploy-final.yaml
             sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+            sed -i "s|__AKASH_MNEMONIC__|${AKASH_MNEMONIC:-placeholder}|g" deploy-final.yaml
+            sed -i "s|__RPC_ENDPOINT__|${RPC_ENDPOINT:-https://rpc.akashnet.net:443}|g" deploy-final.yaml
+            sed -i "s|__GRPC_ENDPOINT__|${GRPC_ENDPOINT:-https://akash-grpc.publicnode.com:443}|g" deploy-final.yaml
+            sed -i "s|__AKASH_MCP_PATH__|${AKASH_MCP_PATH:-/app/akash-mcp/dist/index.js}|g" deploy-final.yaml
           fi
 
           echo "✅ SDL prepared with secrets"
@@ -517,15 +525,47 @@ jobs:
             fi
           fi
 
-      - name: Setup Node.js for DNS sync
+      - name: Setup Node.js for DNS sync and DB verification
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Install dependencies for DNS sync
+      - name: Install dependencies for DNS sync and DB tools
         run: |
-          npm install -g tsx
+          npm install -g tsx prisma
           npm install
+
+      # ─── Database Schema Safety ──────────────────────────────────────────────
+      # After a full redeploy, the cloud API container's entrypoint runs prisma
+      # migrate deploy. This step verifies that auth tables (from the separate
+      # service-auth schema) still exist in the shared database, and re-pushes
+      # + seeds them if they're missing. This prevents the auth service from
+      # breaking due to missing tables after cloud API redeployment.
+      # See: REDEPLOYMENT-INCIDENT-REPORT.md Phase 9 & 10.
+      - name: Verify and restore auth schema if needed
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.AUTH_DATABASE_URL }}
+        run: |
+          echo "=== Shared Database Integrity Check ==="
+          echo "Checking if auth tables exist after cloud API deployment..."
+
+          # Check for auth tables by trying to query one
+          AUTH_TABLES=$(psql "$DATABASE_URL" -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'auth_%';" 2>/dev/null || echo "0")
+          AUTH_TABLES=$(echo "$AUTH_TABLES" | tr -d ' ')
+
+          if [ "$AUTH_TABLES" -lt "10" ] 2>/dev/null; then
+            echo "::warning::Only $AUTH_TABLES auth tables found (expected ~20+). Auth schema may need restoration."
+            echo "IMPORTANT: Run the following manually to restore auth schema:"
+            echo "  cd service-auth"
+            echo "  DATABASE_URL=<prod_url> npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script > /tmp/auth.sql"
+            echo "  DATABASE_URL=<prod_url> npx prisma db execute --stdin < /tmp/auth.sql"
+            echo "  DATABASE_URL=<prod_url> npx tsx scripts/seed-plans.ts"
+            echo ""
+            echo "See REDEPLOYMENT-INCIDENT-REPORT.md Phase 10 for detailed instructions."
+          else
+            echo "✓ Found $AUTH_TABLES auth tables — schema intact."
+          fi
 
       - name: Sync DNS records
         continue-on-error: true

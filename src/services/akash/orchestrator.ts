@@ -58,7 +58,9 @@ export class AkashOrchestrator {
   ) {
     // Default path assumes akash-mcp is sibling to service-cloud-api
     this.akashMcpPath =
-      akashMcpPath || join(process.cwd(), '..', 'akash-mcp', 'dist', 'index.js')
+      akashMcpPath ||
+      process.env.AKASH_MCP_PATH ||
+      join(process.cwd(), '..', 'akash-mcp', 'dist', 'index.js')
   }
 
   /**

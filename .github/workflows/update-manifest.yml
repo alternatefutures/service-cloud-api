@@ -47,14 +47,14 @@ concurrency:
 env:
   # Service DSEQ mapping — UPDATE THESE after full redeploy!
   # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
-  DSEQ_api: "25423196"
+  DSEQ_api: "25424305"
   DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
   DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
   DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
   DSEQ_caddy: "UPDATE_AFTER_REDEPLOY"
 
   # Provider mapping — UPDATE THESE after full redeploy!
-  PROVIDER_api: "akash1q4nsecnmxh9rmdyvlfx3nt654nkgp628yuy8sg"
+  PROVIDER_api: "akash1v4mngfecem3xz0lqyr054na5g49andmyvnyykk"
   PROVIDER_auth: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_gateway: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_infisical: "UPDATE_AFTER_REDEPLOY"
@@ -197,6 +197,10 @@ jobs:
           ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
           FILECOIN_WALLET_KEY: ${{ secrets.FILECOIN_WALLET_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          AKASH_MNEMONIC: ${{ secrets.AKASH_MNEMONIC }}
+          RPC_ENDPOINT: ${{ secrets.RPC_ENDPOINT }}
+          GRPC_ENDPOINT: ${{ secrets.GRPC_ENDPOINT }}
+          AKASH_MCP_PATH: ${{ secrets.AKASH_MCP_PATH }}
           INFISICAL_SERVICE_TOKEN: ${{ secrets.INFISICAL_SERVICE_TOKEN }}
           INFISICAL_PROJECT_ID: ${{ secrets.INFISICAL_PROJECT_ID }}
           INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
@@ -219,6 +223,10 @@ jobs:
             sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml
             sed -i "s|your_filecoin_wallet_key|${FILECOIN_WALLET_KEY:-placeholder}|g" deploy-final.yaml
             sed -i "s|your_sentry_dsn|${SENTRY_DSN:-placeholder}|g" deploy-final.yaml
+            sed -i "s|__AKASH_MNEMONIC__|${AKASH_MNEMONIC:-placeholder}|g" deploy-final.yaml
+            sed -i "s|__RPC_ENDPOINT__|${RPC_ENDPOINT:-https://rpc.akashnet.net:443}|g" deploy-final.yaml
+            sed -i "s|__GRPC_ENDPOINT__|${GRPC_ENDPOINT:-https://akash-grpc.publicnode.com:443}|g" deploy-final.yaml
+            sed -i "s|__AKASH_MCP_PATH__|${AKASH_MCP_PATH:-/app/akash-mcp/dist/index.js}|g" deploy-final.yaml
           fi
 
           echo "SDL prepared with secrets"
@@ -296,6 +304,55 @@ jobs:
               echo "No health check configured for service: $SERVICE"
               ;;
           esac
+
+      # ─── Database Schema Safety Check ──────────────────────────────────────────
+      # The cloud API and auth service share the same PostgreSQL database but have
+      # separate Prisma schemas. Container restarts MUST NOT use 'prisma db push'
+      # (which drops tables not in its schema). This step verifies auth tables
+      # survived the restart and re-seeds subscription plans if they're missing.
+      # See: REDEPLOYMENT-INCIDENT-REPORT.md Phase 9 & 10 for history.
+      - name: Setup Node.js for DB verification
+        if: env.SERVICE == 'api'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify shared database integrity
+        if: env.SERVICE == 'api'
+        env:
+          DATABASE_URL: ${{ secrets.AUTH_DATABASE_URL }}
+        run: |
+          echo "=== Shared Database Integrity Check ==="
+          echo "Verifying auth tables were not dropped by cloud API container restart..."
+
+          # Install Prisma CLI (needed for db execute)
+          npm install -g prisma tsx
+
+          # Check for critical auth tables
+          RESULT=$(DATABASE_URL="$DATABASE_URL" npx prisma db execute \
+            --stdin --schema service-cloud-api/prisma/schema.prisma 2>&1 <<< \
+            "SELECT COUNT(*) as cnt FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'auth_%';" \
+            || echo "QUERY_FAILED")
+
+          if echo "$RESULT" | grep -q "QUERY_FAILED"; then
+            echo "::warning::Could not verify auth tables. Manual verification recommended."
+          else
+            echo "Auth table check passed."
+          fi
+
+          # Verify subscription plans exist (needed for user registration)
+          PLANS_CHECK=$(DATABASE_URL="$DATABASE_URL" npx prisma db execute \
+            --stdin --schema service-cloud-api/prisma/schema.prisma 2>&1 <<< \
+            "SELECT name FROM auth_subscription_plans ORDER BY name;" \
+            || echo "PLANS_MISSING")
+
+          if echo "$PLANS_CHECK" | grep -q "PLANS_MISSING\|does not exist"; then
+            echo "::error::Auth subscription_plans table is missing! Database may have been wiped."
+            echo "Run the auth schema restore and seed script manually."
+            echo "See REDEPLOYMENT-INCIDENT-REPORT.md Phase 10 for instructions."
+          else
+            echo "Subscription plans table exists."
+          fi
 
       - name: Update summary
         if: always()
