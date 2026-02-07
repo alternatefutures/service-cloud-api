@@ -1,0 +1,166 @@
+---
+# Akash SDL - IPFS + Jaeger + OTel Collector (standalone data services)
+version: "2.0"
+
+services:
+  # IPFS Node (Kubo)
+  ipfs:
+    image: ipfs/kubo:latest
+    env:
+      - IPFS_PROFILE=server
+      - IPFS_PATH=/data/ipfs
+    expose:
+      # API port (public - used by api service)
+      - port: 5001
+        as: 5001
+        to:
+          - global: true
+      # Gateway port
+      - port: 8080
+        as: 8080
+        to:
+          - global: true
+        accept:
+          - ipfs.alternatefutures.ai
+      # Swarm port
+      - port: 4001
+        as: 4001
+        proto: tcp
+        to:
+          - global: true
+    params:
+      storage:
+        data:
+          mount: /data/ipfs
+          readOnly: false
+
+  # Jaeger - Tracing storage and UI
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    env:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=badger
+      - BADGER_EPHEMERAL=false
+      - BADGER_DIRECTORY_VALUE=/badger/data
+      - BADGER_DIRECTORY_KEY=/badger/key
+    expose:
+      # Jaeger UI
+      - port: 16686
+        as: 80
+        to:
+          - global: true
+        accept:
+          - jaeger.alternatefutures.ai
+      # OTLP gRPC receiver (OTel collector disabled, expose globally for direct use)
+      - port: 4317
+        as: 4317
+        to:
+          - global: true
+      # OTLP HTTP receiver
+      - port: 4318
+        as: 4318
+        to:
+          - global: true
+    params:
+      storage:
+        data:
+          mount: /badger
+          readOnly: false
+
+  # OpenTelemetry Collector — TEMPORARILY DISABLED
+  # The ghcr.io/alternatefutures/otel-collector:latest image is failing to pull
+  # on Akash providers (available: 0/1). Re-enable once the image is confirmed
+  # pushed to GHCR. OTel is optional — services work without it.
+  #
+  # otel-collector:
+  #   image: ghcr.io/alternatefutures/otel-collector:latest
+  #   env:
+  #     - JAEGER_ENDPOINT=jaeger:4317
+  #   expose:
+  #     - port: 4317
+  #       as: 4317
+  #       to:
+  #         - global: true
+  #     - port: 4318
+  #       as: 4318
+  #       to:
+  #         - global: true
+  #     - port: 8888
+  #       as: 8888
+  #       to:
+  #         - global: true
+  #       accept:
+  #         - otel-metrics.alternatefutures.ai
+  #     - port: 13133
+  #       as: 13133
+  #       to:
+  #         - global: true
+  #   depends_on:
+  #     - jaeger
+
+profiles:
+  compute:
+    ipfs:
+      resources:
+        cpu:
+          units: 2.0
+        memory:
+          size: 4Gi
+        storage:
+          - size: 1Gi
+          - name: data
+            size: 100Gi
+            attributes:
+              persistent: true
+              class: beta3
+    jaeger:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1.5Gi
+        storage:
+          - size: 1Gi
+          - name: data
+            size: 10Gi
+            attributes:
+              persistent: true
+              class: beta3
+    # otel-collector: (disabled — see above)
+    #   resources:
+    #     cpu:
+    #       units: 0.5
+    #     memory:
+    #       size: 512Mi
+    #     storage:
+    #       - size: 256Mi
+
+  placement:
+    dcloud:
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      pricing:
+        ipfs:
+          denom: uakt
+          amount: 100
+        jaeger:
+          denom: uakt
+          amount: 50
+        # otel-collector: (disabled)
+        #   denom: uakt
+        #   amount: 25
+
+deployment:
+  ipfs:
+    dcloud:
+      profile: ipfs
+      count: 1
+  jaeger:
+    dcloud:
+      profile: jaeger
+      count: 1
+  # otel-collector: (disabled)
+  #   dcloud:
+  #     profile: otel-collector
+  #     count: 1

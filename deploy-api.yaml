@@ -1,0 +1,76 @@
+---
+# Akash SDL - API service only (standalone)
+version: "2.0"
+
+services:
+  api:
+    image: ghcr.io/alternatefutures/service-cloud-api:latest
+    env:
+      # Database - YugabyteDB (public TCP)
+      - DATABASE_URL=__DATABASE_URL__
+
+      # App Config
+      - NODE_ENV=production
+      - PORT=4000
+
+      # JWT Secret
+      - JWT_SECRET=your_jwt_secret_min_32_chars_please_change_this_in_production
+
+      # Authentication Service
+      - AUTH_SERVICE_URL=https://auth.alternatefutures.ai
+
+      # Email (Resend)
+      - RESEND_API_KEY=your_resend_api_key
+
+      # Storage - IPFS
+      - IPFS_API_URL=__IPFS_API_URL__
+      - IPFS_GATEWAY_URL=https://ipfs.alternatefutures.ai
+
+      # Storage - Arweave (Optional)
+      - ARWEAVE_WALLET=your_arweave_wallet
+
+      # Storage - Filecoin
+      - FILECOIN_RPC_URL=https://api.node.glif.io/rpc/v0
+      - FILECOIN_WALLET_KEY=your_filecoin_wallet_key
+
+      # OpenTelemetry Configuration
+      - OTEL_EXPORTER_OTLP_ENDPOINT=__OTEL_ENDPOINT__
+      - OTEL_SERVICE_NAME=alternatefutures-api
+      - OTEL_TRACES_SAMPLER=always_on
+      - OTEL_METRICS_EXPORTER=otlp
+      - OTEL_LOGS_EXPORTER=otlp
+
+      # Sentry (optional)
+      - SENTRY_DSN=your_sentry_dsn
+
+    expose:
+      - port: 4000
+        as: 80
+        to:
+          - global: true
+        accept:
+          - api.alternatefutures.ai
+
+profiles:
+  compute:
+    api:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 1Gi
+        storage:
+          size: 512Mi
+
+  placement:
+    dcloud:
+      pricing:
+        api:
+          denom: uakt
+          amount: 30
+
+deployment:
+  api:
+    dcloud:
+      profile: api
+      count: 1
