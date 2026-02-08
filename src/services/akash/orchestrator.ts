@@ -769,7 +769,11 @@ export class AkashOrchestrator {
   }
 
   /**
-   * Generate SDL based on service type
+   * Generate SDL based on service type.
+   *
+   * FUNCTION uses special source-code injection logic (inline SDL generation).
+   * SITE, VM, DATABASE now use the template system for SDL generation.
+   * Any service type with a matching template definition will use the template converter.
    */
   private async generateSDLForService(
     service: {
@@ -780,13 +784,35 @@ export class AkashOrchestrator {
       afFunction?: { id: string; sourceCode: string | null } | null
     }
   ): Promise<string> {
-    switch (service.type) {
-      case 'FUNCTION':
-        if (!service.afFunction?.sourceCode) {
-          throw new Error('Function has no source code')
-        }
-        return this.generateFunctionSDL(service.slug, service.afFunction.sourceCode)
+    // FUNCTION has special source-code-injection logic, keep inline
+    if (service.type === 'FUNCTION') {
+      if (!service.afFunction?.sourceCode) {
+        throw new Error('Function has no source code')
+      }
+      return this.generateFunctionSDL(service.slug, service.afFunction.sourceCode)
+    }
 
+    // For other types, try the template system first (unified SDL generation)
+    const { getTemplateById, generateSDLFromTemplate } = await import('../../templates/index.js')
+
+    // Map service types to default template IDs
+    const typeToTemplate: Record<string, string> = {
+      SITE: 'nginx-site',     // no template yet — fall back to legacy
+      VM: 'node-ws-gameserver', // will use template if deploying a template
+      DATABASE: 'postgres',
+    }
+
+    // Try to find a matching template
+    const templateId = typeToTemplate[service.type]
+    if (templateId) {
+      const template = getTemplateById(templateId)
+      if (template) {
+        return generateSDLFromTemplate(template, { serviceName: service.slug })
+      }
+    }
+
+    // Fall back to legacy inline SDL generators
+    switch (service.type) {
       case 'SITE':
         return this.generateSiteSDL(service.slug)
 

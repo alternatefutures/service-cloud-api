@@ -19,6 +19,10 @@ import {
   akashMutations,
   akashFieldResolvers,
 } from './akash.js'
+import {
+  templateQueries,
+  templateMutations,
+} from './templates.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
@@ -976,6 +980,9 @@ export const resolvers = {
     // Observability queries (from observability resolvers)
     ...observabilityQueries,
 
+    // Template queries
+    ...templateQueries,
+
     // Akash deployment queries
     ...akashQueries,
 
@@ -1492,6 +1499,9 @@ export const resolvers = {
 
     // Observability mutations (from observability resolvers)
     ...observabilityMutations,
+
+    // Template mutations
+    ...templateMutations,
 
     // Akash deployment mutations
     ...akashMutations,

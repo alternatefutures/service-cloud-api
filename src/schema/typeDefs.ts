@@ -1159,12 +1159,97 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # TEMPLATES
+  # ============================================
+
+  enum TemplateCategory {
+    GAME_SERVER
+    WEB_SERVER
+    DATABASE
+    AI_ML
+    DEVTOOLS
+    CUSTOM
+  }
+
+  type TemplateEnvVar {
+    key: String!
+    default: String
+    description: String!
+    required: Boolean!
+    secret: Boolean
+  }
+
+  type TemplateResources {
+    cpu: Float!
+    memory: String!
+    storage: String!
+  }
+
+  type TemplatePort {
+    port: Int!
+    as: Int!
+    global: Boolean!
+  }
+
+  type TemplateHealthCheck {
+    path: String!
+    port: Int!
+  }
+
+  type TemplatePersistentStorage {
+    name: String!
+    size: String!
+    mountPath: String!
+  }
+
+  type Template {
+    id: ID!
+    name: String!
+    description: String!
+    category: TemplateCategory!
+    tags: [String!]!
+    icon: String
+    repoUrl: String!
+    dockerImage: String!
+    serviceType: String!
+    envVars: [TemplateEnvVar!]!
+    resources: TemplateResources!
+    ports: [TemplatePort!]!
+    healthCheck: TemplateHealthCheck
+    persistentStorage: [TemplatePersistentStorage!]
+    pricingUakt: Int
+  }
+
+  input EnvOverrideInput {
+    key: String!
+    value: String!
+  }
+
+  input ResourceOverrideInput {
+    cpu: Float
+    memory: String
+    storage: String
+  }
+
+  input DeployFromTemplateInput {
+    templateId: String!
+    projectId: ID!
+    serviceName: String
+    envOverrides: [EnvOverrideInput!]
+    resourceOverrides: ResourceOverrideInput
+  }
+
+  # ============================================
   # QUERIES
   # ============================================
 
   type Query {
     # Version
     version: Version!
+
+    # Templates
+    templates(category: TemplateCategory): [Template!]!
+    template(id: ID!): Template
 
     # User & Auth
     me: User
@@ -1389,6 +1474,9 @@ export const typeDefs = /* GraphQL */ `
     deployFunctionToAkash(input: DeployFunctionToAkashInput!): AkashDeployment!
     # Close an Akash deployment
     closeAkashDeployment(id: ID!): AkashDeployment!
+
+    # Templates
+    deployFromTemplate(input: DeployFromTemplateInput!): AkashDeployment!
   }
 
   # ============================================
