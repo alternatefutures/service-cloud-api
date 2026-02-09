@@ -76,7 +76,7 @@ ${storageProfileBlock}
     dcloud:
       signedBy:
         anyOf:
-          - akash1365ez8fqp2yqglj7dz40kdzx7q0mxj4hqh4uk
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
         ${serviceName}:
           denom: uakt
@@ -147,7 +147,6 @@ function buildParamsBlock(template: Template): string {
     return ''
   }
 
-  const serviceName = slugify(template.id)
   const mounts = template.persistentStorage
     .map(
       vol => `        ${vol.name}:
@@ -157,8 +156,7 @@ function buildParamsBlock(template: Template): string {
     .join('\n')
 
   return `    params:
-      ${serviceName}:
-        storage:
+      storage:
 ${mounts}
 `
 }

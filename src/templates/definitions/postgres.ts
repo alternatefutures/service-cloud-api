@@ -31,6 +31,12 @@ export const postgres: Template = {
       required: true,
       secret: true,
     },
+    {
+      key: 'PGDATA',
+      default: '/var/lib/postgresql/data/pgdata',
+      description: 'PostgreSQL data directory (must be a subdirectory of the mount point)',
+      required: true,
+    },
   ],
   resources: {
     cpu: 0.5,

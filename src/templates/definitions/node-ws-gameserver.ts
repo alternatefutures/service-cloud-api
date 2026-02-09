@@ -4,12 +4,12 @@ export const nodeWsGameserver: Template = {
   id: 'node-ws-gameserver',
   name: 'Node.js Game Server',
   description:
-    'Production-grade WebSocket game server with room-based architecture, binary protocol (msgpack), server-authoritative tick loop, and per-client rate limiting.',
+    'Protocol-agnostic WebSocket relay server with room-based architecture and binary protocol (msgpack). Relays any game data between peers without inspecting payloads.',
   category: 'GAME_SERVER',
   tags: ['websocket', 'multiplayer', 'realtime', 'gameserver', 'msgpack', 'node'],
   icon: '🎮',
-  repoUrl: 'https://github.com/alternatefutures/node-ws-gameserver',
-  dockerImage: 'ghcr.io/alternatefutures/node-ws-gameserver:latest',
+  repoUrl: 'https://github.com/mavisakalyan/node-ws-gameserver',
+  dockerImage: 'ghcr.io/mavisakalyan/node-ws-gameserver:latest',
   serviceType: 'VM',
   envVars: [
     {
@@ -22,12 +22,6 @@ export const nodeWsGameserver: Template = {
       key: 'ALLOWED_ORIGINS',
       default: '*',
       description: 'Comma-separated allowed origins for WebSocket connections',
-      required: false,
-    },
-    {
-      key: 'SNAPSHOT_HZ',
-      default: '20',
-      description: 'Server tick rate — snapshots broadcast per second',
       required: false,
     },
     {

@@ -1,5 +1,5 @@
 ---
-# Akash SDL - IPFS + Jaeger + OTel Collector (standalone data services)
+# Akash SDL - IPFS + Jaeger (standalone data services)
 version: "2.0"
 
 services:

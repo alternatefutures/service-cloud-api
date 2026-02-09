@@ -103,20 +103,33 @@ export const templateMutations = {
 
     // ── Deploy to Akash via orchestrator ─────────────────────
     // Import dynamically to avoid circular deps
-    const { AkashOrchestrator } = await import(
+    const { getAkashOrchestrator } = await import(
       '../services/akash/orchestrator.js'
     )
-    const orchestrator = AkashOrchestrator.getInstance()
+    const orchestrator = getAkashOrchestrator(context.prisma)
 
     try {
-      const deployment = await orchestrator.deployService(service.id, {
+      const deploymentId = await orchestrator.deployService(service.id, {
         sdlContent,
         deposit: input.envOverrides
           ? undefined // Use default deposit
           : undefined,
       })
 
-      return deployment
+      // deployService returns a string ID — fetch the full record for GraphQL
+      const deployment = await context.prisma.akashDeployment.findUnique({
+        where: { id: deploymentId },
+      })
+
+      if (!deployment) {
+        throw new GraphQLError('Deployment record not found after creation')
+      }
+
+      return {
+        ...deployment,
+        dseq: deployment.dseq.toString(),
+        depositUakt: deployment.depositUakt?.toString() ?? null,
+      }
     } catch (error: any) {
       // If deployment fails, still return a useful error
       // The AkashDeployment record is created with FAILED status by the orchestrator

@@ -1,6 +1,11 @@
 #!/bin/bash
 # Get Akash deployment information for DNS setup
 # Usage: ./scripts/get-deployment-info.sh [DSEQ]
+#
+# DEPRECATED:
+# This script was written for the legacy “full stack” Yugabyte deployments.
+# Current production deploys components separately (Postgres + data services + API-only),
+# and deployment state is tracked in repo root `DEPLOYMENTS.md` / `.github/DEPLOYMENTS.md`.
 
 set -e
 
@@ -70,8 +75,10 @@ echo ""
 echo "Look for the 'Get lease status and service URIs' step in the latest successful deployment."
 echo ""
 echo "Then create A records:"
-echo "  api.alternatefutures.ai  → API service IP"
-echo "  yb.alternatefutures.ai   → YugabyteDB UI IP (yb-node-1)"
-echo "  ipfs.alternatefutures.ai → IPFS gateway IP"
+echo "  api.alternatefutures.ai   → (typically routed via SSL proxy)"
+echo "  auth.alternatefutures.ai  → (typically routed via SSL proxy)"
+echo "  app.alternatefutures.ai   → Vercel"
+echo ""
+echo "See repo root `.github/DEPLOYMENTS.md` for current routing and endpoints."
 echo ""
 echo "TTL: 300 (5 minutes) for easy updates"

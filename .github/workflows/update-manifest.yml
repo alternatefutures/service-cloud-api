@@ -47,7 +47,7 @@ concurrency:
 env:
   # Service DSEQ mapping — UPDATE THESE after full redeploy!
   # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
-  DSEQ_api: "25424305"
+  DSEQ_api: "25455635"
   DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
   DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
   DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
@@ -86,7 +86,7 @@ jobs:
           # When auto-triggered by Docker build, default to 'api' service
           if [ "${{ github.event_name }}" == "workflow_run" ]; then
             SERVICE="api"
-            SDL_FILE="deploy-mainnet.yaml"
+            SDL_FILE="deploy-api.yaml"
             echo "Auto-triggered by Docker build. Updating API manifest."
           else
             SERVICE="${{ inputs.service }}"
@@ -192,6 +192,10 @@ jobs:
       - name: Substitute secrets in SDL
         env:
           YUGABYTE_PASSWORD: ${{ secrets.YUGABYTE_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          IPFS_API_URL: ${{ secrets.IPFS_API_URL }}
+          OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
+          AKASH_CERT_JSON: ${{ secrets.AKASH_CERT_JSON }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           ARWEAVE_WALLET: ${{ secrets.ARWEAVE_WALLET }}
@@ -217,7 +221,36 @@ jobs:
             sed -i "s|PLACEHOLDER_CLIENT_SECRET|$INFISICAL_CLIENT_SECRET|g" deploy-final.yaml
           else
             echo "Using direct secrets substitution"
-            sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
+            # Substitute secrets directly (supports multiple SDL variants)
+
+            # Yugabyte (legacy) password placeholder
+            if grep -q "your_secure_password_here_change_this" deploy-final.yaml; then
+              if [ -z "$YUGABYTE_PASSWORD" ]; then
+                echo "::error::YUGABYTE_PASSWORD is required for this SDL (legacy Yugabyte stack)."
+                exit 1
+              fi
+              sed -i "s|your_secure_password_here_change_this|$YUGABYTE_PASSWORD|g" deploy-final.yaml
+            fi
+
+            # Postgres (current) connection placeholders
+            if grep -q "__DATABASE_URL__" deploy-final.yaml; then
+              if [ -z "$DATABASE_URL" ]; then
+                echo "::error::DATABASE_URL is required for this SDL."
+                exit 1
+              fi
+              sed -i "s|__DATABASE_URL__|$DATABASE_URL|g" deploy-final.yaml
+            fi
+            if grep -q "__IPFS_API_URL__" deploy-final.yaml; then
+              if [ -z "$IPFS_API_URL" ]; then
+                echo "::error::IPFS_API_URL is required for this SDL."
+                exit 1
+              fi
+              sed -i "s|__IPFS_API_URL__|$IPFS_API_URL|g" deploy-final.yaml
+            fi
+            # Optional (leave blank if unused)
+            sed -i "s|__OTEL_ENDPOINT__|${OTEL_ENDPOINT:-}|g" deploy-final.yaml
+            sed -i "s|__AKASH_CERT_JSON__|${AKASH_CERT_JSON:-}|g" deploy-final.yaml
+
             sed -i "s|your_jwt_secret_min_32_chars_please_change_this_in_production|$JWT_SECRET|g" deploy-final.yaml
             sed -i "s|your_resend_api_key|${RESEND_API_KEY:-placeholder}|g" deploy-final.yaml
             sed -i "s|your_arweave_wallet|${ARWEAVE_WALLET:-placeholder}|g" deploy-final.yaml

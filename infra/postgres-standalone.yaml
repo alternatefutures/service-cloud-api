@@ -2,12 +2,9 @@
 # Standalone Postgres Database
 # Shared by: API, Auth, and future services
 #
-# After deployment, add connection details to Infisical:
-#   DATABASE_HOST=<ingress-url>
-#   DATABASE_PORT=5432
-#   DATABASE_USER=alternatefutures
-#   DATABASE_PASSWORD=<from-secrets>
-#   DATABASE_NAME=alternatefutures
+# After deployment, record the connection details (do not commit secrets):
+# - Store `DATABASE_URL` in your secret manager (recommended) or CI secrets.
+# - Example format: postgresql://alternatefutures:<password>@<host>:<port>/alternatefutures
 #
 version: '2.0'
 

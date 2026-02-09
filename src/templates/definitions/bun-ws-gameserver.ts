@@ -4,12 +4,12 @@ export const bunWsGameserver: Template = {
   id: 'bun-ws-gameserver',
   name: 'Bun Game Server',
   description:
-    'Bun-native WebSocket game server — same protocol as the Node.js version but 5-8x faster. Uses Bun built-in pub/sub for room broadcasting.',
+    'Bun-native WebSocket relay server — same protocol as the Node.js version but 5-8x faster. Protocol-agnostic relay with Bun built-in pub/sub for room broadcasting.',
   category: 'GAME_SERVER',
   tags: ['websocket', 'multiplayer', 'realtime', 'gameserver', 'msgpack', 'bun'],
   icon: '⚡',
-  repoUrl: 'https://github.com/alternatefutures/bun-ws-gameserver',
-  dockerImage: 'ghcr.io/alternatefutures/bun-ws-gameserver:latest',
+  repoUrl: 'https://github.com/mavisakalyan/bun-ws-gameserver',
+  dockerImage: 'ghcr.io/mavisakalyan/bun-ws-gameserver:latest',
   serviceType: 'VM',
   envVars: [
     {
@@ -22,12 +22,6 @@ export const bunWsGameserver: Template = {
       key: 'ALLOWED_ORIGINS',
       default: '*',
       description: 'Comma-separated allowed origins for WebSocket connections',
-      required: false,
-    },
-    {
-      key: 'SNAPSHOT_HZ',
-      default: '20',
-      description: 'Server tick rate — snapshots broadcast per second',
       required: false,
     },
     {

@@ -1,12 +1,14 @@
 ---
-# Akash SDL (Stack Definition Language) for Alternate Futures Backend
-# This deploys the GraphQL API + YugabyteDB (3-node cluster) + Self-Hosted IPFS to Akash Network
+# DEPRECATED (legacy stack)
 #
-# YugabyteDB replaces both PostgreSQL and Redis with:
-# - Distributed SQL database (PostgreSQL-compatible)
-# - Built-in high availability (survives 1 node failure)
-# - Automatic replication (3x by default)
-# - Open source (Apache 2.0)
+# This SDL deploys a **legacy** “full stack” (API + YugabyteDB + IPFS + tracing).
+# Current production uses separate deployments (PostgreSQL + data services + API-only)
+# and is tracked in repo root `DEPLOYMENTS.md` / `.github/DEPLOYMENTS.md`.
+#
+# Prefer:
+# - `deploy-api.yaml` (API-only)
+# - `deploy-data.yaml` (IPFS + Jaeger)
+# - `infra/postgres-standalone.yaml` (PostgreSQL)
 
 version: "2.0"
 

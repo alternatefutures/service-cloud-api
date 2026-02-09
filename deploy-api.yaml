@@ -6,7 +6,7 @@ services:
   api:
     image: ghcr.io/alternatefutures/service-cloud-api:latest
     env:
-      # Database - YugabyteDB (public TCP)
+      # Database - PostgreSQL (public TCP)
       - DATABASE_URL=__DATABASE_URL__
 
       # App Config
