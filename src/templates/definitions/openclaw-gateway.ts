@@ -23,8 +23,9 @@ export const openclawGateway: Template = {
   // Emoji here so frontend can render a consistent react-icon.
   icon: '🦞',
   repoUrl: 'https://github.com/openclaw/openclaw',
-  // Docker Hub mirror of the official image (source: ghcr.io/openclaw/openclaw)
-  dockerImage: 'alpine/openclaw:main',
+  // Wrapper image for Akash: fixes persistent-volume permissions at boot
+  // (chown /home/node/.openclaw then drop to node user).
+  dockerImage: 'ghcr.io/alternatefutures/openclaw-akash:main',
   serviceType: 'VM',
   envVars: [
     // Gateway access control
@@ -99,7 +100,7 @@ export const openclawGateway: Template = {
   ],
   resources: {
     cpu: 1,
-    memory: '1Gi',
+    memory: '2Gi',
     storage: '2Gi',
   },
   ports: [
@@ -117,9 +118,5 @@ export const openclawGateway: Template = {
     },
   ],
   pricingUakt: 2500,
-  // Docker defaults bind to loopback; for cloud deployments we need LAN bind.
-  // Use an absolute path so it works even if the container CWD is "/".
-  startCommand:
-    'node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789',
 }
 
