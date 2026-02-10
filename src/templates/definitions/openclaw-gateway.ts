@@ -23,8 +23,8 @@ export const openclawGateway: Template = {
   // Emoji here so frontend can render a consistent react-icon.
   icon: '🦞',
   repoUrl: 'https://github.com/openclaw/openclaw',
-  // Official Docker Hub image (fourplayers/openclaw)
-  dockerImage: 'fourplayers/openclaw:latest',
+  // Docker Hub mirror of the official image (source: ghcr.io/openclaw/openclaw)
+  dockerImage: 'alpine/openclaw:main',
   serviceType: 'VM',
   envVars: [
     // Gateway access control
@@ -118,6 +118,8 @@ export const openclawGateway: Template = {
   ],
   pricingUakt: 2500,
   // Docker defaults bind to loopback; for cloud deployments we need LAN bind.
-  startCommand: 'node dist/index.js gateway --bind lan --port 18789 --allow-unconfigured',
+  // Use an absolute path so it works even if the container CWD is "/".
+  startCommand:
+    'node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789',
 }
 
