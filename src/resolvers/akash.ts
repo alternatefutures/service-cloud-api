@@ -257,35 +257,38 @@ export const akashMutations = {
       throw new GraphQLError('Deployment is already closed')
     }
 
+    // Try to close on-chain, but force-close the DB record even if it fails
+    // (the dseq may not exist on-chain, may already be closed, or may be corrupt)
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
       await orchestrator.closeDeployment(Number(deployment.dseq))
+    } catch (error) {
+      console.warn(
+        `[closeAkashDeployment] On-chain close failed for dseq=${deployment.dseq}: ${error instanceof Error ? error.message : 'Unknown error'}. Force-closing DB record.`
+      )
+      // Continue — we still mark as CLOSED in the DB below
+    }
 
-      const updated = await context.prisma.akashDeployment.update({
-        where: { id },
+    const updated = await context.prisma.akashDeployment.update({
+      where: { id },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+      },
+    })
+
+    // Update the specific resource status based on service type
+    if (deployment.service.type === 'FUNCTION' && deployment.afFunctionId) {
+      await context.prisma.aFFunction.update({
+        where: { id: deployment.afFunctionId },
         data: {
-          status: 'CLOSED',
-          closedAt: new Date(),
+          status: 'INACTIVE',
+          invokeUrl: null,
         },
       })
-
-      // Update the specific resource status based on service type
-      if (deployment.service.type === 'FUNCTION' && deployment.afFunctionId) {
-        await context.prisma.aFFunction.update({
-          where: { id: deployment.afFunctionId },
-          data: {
-            status: 'INACTIVE',
-            invokeUrl: null,
-          },
-        })
-      }
-
-      return formatDeployment(updated)
-    } catch (error) {
-      throw new GraphQLError(
-        `Failed to close deployment: ${error instanceof Error ? error.message : 'Unknown error'}`
-      )
     }
+
+    return formatDeployment(updated)
   },
 }
 
