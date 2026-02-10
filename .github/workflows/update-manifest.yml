@@ -47,14 +47,14 @@ concurrency:
 env:
   # Service DSEQ mapping — UPDATE THESE after full redeploy!
   # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
-  DSEQ_api: "25460930"
+  DSEQ_api: "25466235"
   DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
   DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
   DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
   DSEQ_caddy: "UPDATE_AFTER_REDEPLOY"
 
   # Provider mapping — UPDATE THESE after full redeploy!
-  PROVIDER_api: "akash1v4mngfecem3xz0lqyr054na5g49andmyvnyykk"
+  PROVIDER_api: "akash1zlsep362zz46qlwzttm06t8lv9qtg8gtaya97u"
   PROVIDER_auth: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_gateway: "UPDATE_AFTER_REDEPLOY"
   PROVIDER_infisical: "UPDATE_AFTER_REDEPLOY"

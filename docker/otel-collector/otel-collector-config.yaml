@@ -1,6 +1,6 @@
 # OpenTelemetry Collector Configuration
-# Multi-tenant observability for AlternateFutures APM platform
-# Receives telemetry from applications and routes to ClickHouse with project partitioning
+# Simplified for production: Jaeger traces + Prometheus metrics
+# ClickHouse and billing pipelines removed (not deployed on Akash)
 
 receivers:
   otlp:
@@ -9,7 +9,6 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
-        # Include headers for tenant extraction
         include_metadata: true
 
 processors:
@@ -23,8 +22,7 @@ processors:
     limit_mib: 400
     spike_limit_mib: 100
 
-  # Extract tenant info from X-AF-Project-ID and X-AF-Project-Slug headers
-  # These are set by customers in their OTLP export configuration
+  # Extract tenant info from X-AF-Project-ID headers
   attributes/tenant:
     actions:
       - key: af.project.id
@@ -38,50 +36,16 @@ processors:
   resource:
     attributes:
       - key: deployment.environment
-        value: ${DEPLOYMENT_ENV:production}
+        value: production
         action: upsert
       - key: service.namespace
         value: alternatefutures
         action: upsert
 
-  # Filter out telemetry without valid project ID (reject anonymous)
-  filter/require_project:
-    error_mode: ignore
-    traces:
-      span:
-        - 'attributes["af.project.id"] == nil or attributes["af.project.id"] == ""'
-    metrics:
-      metric:
-        - 'resource.attributes["af.project.id"] == nil'
-    logs:
-      log_record:
-        - 'attributes["af.project.id"] == nil or attributes["af.project.id"] == ""'
-
 exporters:
-  # ClickHouse for multi-tenant storage
-  clickhouse:
-    endpoint: ${CLICKHOUSE_ENDPOINT:tcp://clickhouse:9000}
-    database: observability
-    username: ${CLICKHOUSE_USER:default}
-    password: ${CLICKHOUSE_PASSWORD:}
-    ttl: 0 # Use table-level TTL instead
-    traces_table_name: traces
-    metrics_table_name: metrics
-    logs_table_name: logs
-    timeout: 10s
-    sending_queue:
-      enabled: true
-      num_consumers: 10
-      queue_size: 1000
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
-
-  # Export traces to Jaeger (for internal debugging/visualization)
-  otlp/jaeger:
-    endpoint: ${JAEGER_ENDPOINT:jaeger:4317}
+  # Export traces to Jaeger (co-deployed in data services)
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
     tls:
       insecure: true
 
@@ -92,105 +56,36 @@ exporters:
     resource_to_telemetry_conversion:
       enabled: true
 
-  # Billing webhook - sends ingestion events to API for usage tracking
-  otlphttp/billing:
-    endpoint: ${BILLING_WEBHOOK_ENDPOINT:http://api:4000/internal/telemetry/ingestion-webhook}
-    tls:
-      insecure: true
-    headers:
-      X-Internal-Auth: ${INTERNAL_AUTH_TOKEN:}
-
-  # Logging exporter for debugging
-  logging:
+  # Debug exporter (replaces deprecated logging exporter)
+  debug:
     verbosity: normal
     sampling_initial: 5
     sampling_thereafter: 200
-
-connectors:
-  # Count connector for billing - tracks ingestion volume per project
-  count:
-    spans:
-      af.ingestion.spans:
-        description: 'Count of spans ingested per project'
-        conditions:
-          - 'attributes["af.project.id"] != ""'
-        attributes:
-          - key: af.project.id
-            default_value: unknown
-    metrics:
-      af.ingestion.metrics:
-        description: 'Count of metric points ingested per project'
-        conditions:
-          - 'resource.attributes["af.project.id"] != ""'
-        attributes:
-          - key: af.project.id
-            default_value: unknown
-    logs:
-      af.ingestion.logs:
-        description: 'Count of logs ingested per project'
-        conditions:
-          - 'attributes["af.project.id"] != ""'
-        attributes:
-          - key: af.project.id
-            default_value: unknown
 
 service:
   extensions: []
 
   pipelines:
-    # Traces pipeline - extract tenant, store in ClickHouse
+    # Traces pipeline -> Jaeger
     traces:
       receivers: [otlp]
-      processors:
-        [
-          memory_limiter,
-          attributes/tenant,
-          filter/require_project,
-          batch,
-          resource,
-        ]
-      exporters: [clickhouse, otlp/jaeger, logging]
+      processors: [memory_limiter, attributes/tenant, batch, resource]
+      exporters: [otlp_grpc/jaeger, debug]
 
-    # Metrics pipeline - extract tenant, store in ClickHouse
+    # Metrics pipeline -> Prometheus
     metrics:
       receivers: [otlp]
-      processors:
-        [
-          memory_limiter,
-          attributes/tenant,
-          filter/require_project,
-          batch,
-          resource,
-        ]
-      exporters: [clickhouse, prometheus, logging]
+      processors: [memory_limiter, attributes/tenant, batch, resource]
+      exporters: [prometheus, debug]
 
-    # Logs pipeline - extract tenant, store in ClickHouse
+    # Logs pipeline
     logs:
       receivers: [otlp]
-      processors:
-        [
-          memory_limiter,
-          attributes/tenant,
-          filter/require_project,
-          batch,
-          resource,
-        ]
-      exporters: [clickhouse, logging]
-
-    # Billing metrics pipeline - count ingestion per project
-    traces/count:
-      receivers: [otlp]
-      processors: [attributes/tenant]
-      exporters: [count]
-
-    metrics/billing:
-      receivers: [count]
-      processors: [batch]
-      exporters: [otlphttp/billing]
+      processors: [memory_limiter, attributes/tenant, batch, resource]
+      exporters: [debug]
 
   telemetry:
     logs:
       level: info
     metrics:
-      address: 0.0.0.0:8889
       level: detailed

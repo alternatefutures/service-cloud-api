@@ -1,5 +1,5 @@
 ---
-# Akash SDL - IPFS + Jaeger (standalone data services)
+# Akash SDL - IPFS + Jaeger + OTel Collector (data services)
 version: "2.0"
 
 services:
@@ -51,7 +51,7 @@ services:
           - global: true
         accept:
           - jaeger.alternatefutures.ai
-      # OTLP gRPC receiver (OTel collector disabled, expose globally for direct use)
+      # OTLP gRPC receiver (fallback if otel-collector is down)
       - port: 4317
         as: 4317
         to:
@@ -67,36 +67,29 @@ services:
           mount: /badger
           readOnly: false
 
-  # OpenTelemetry Collector — TEMPORARILY DISABLED
-  # The ghcr.io/alternatefutures/otel-collector:latest image is failing to pull
-  # on Akash providers (available: 0/1). Re-enable once the image is confirmed
-  # pushed to GHCR. OTel is optional — services work without it.
-  #
-  # otel-collector:
-  #   image: ghcr.io/alternatefutures/otel-collector:latest
-  #   env:
-  #     - JAEGER_ENDPOINT=jaeger:4317
-  #   expose:
-  #     - port: 4317
-  #       as: 4317
-  #       to:
-  #         - global: true
-  #     - port: 4318
-  #       as: 4318
-  #       to:
-  #         - global: true
-  #     - port: 8888
-  #       as: 8888
-  #       to:
-  #         - global: true
-  #       accept:
-  #         - otel-metrics.alternatefutures.ai
-  #     - port: 13133
-  #       as: 13133
-  #       to:
-  #         - global: true
-  #   depends_on:
-  #     - jaeger
+  # OpenTelemetry Collector
+  otel-collector:
+    image: ghcr.io/alternatefutures/otel-collector:latest
+    expose:
+      # OTLP gRPC (services send telemetry here)
+      - port: 4317
+        as: 4317
+        to:
+          - global: true
+      # OTLP HTTP
+      - port: 4318
+        as: 4318
+        to:
+          - global: true
+      # Prometheus metrics
+      - port: 8888
+        as: 8888
+        to:
+          - global: true
+        accept:
+          - otel-metrics.alternatefutures.ai
+    depends_on:
+      - jaeger
 
 profiles:
   compute:
@@ -126,14 +119,14 @@ profiles:
             attributes:
               persistent: true
               class: beta3
-    # otel-collector: (disabled — see above)
-    #   resources:
-    #     cpu:
-    #       units: 0.5
-    #     memory:
-    #       size: 512Mi
-    #     storage:
-    #       - size: 256Mi
+    otel-collector:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          - size: 512Mi
 
   placement:
     dcloud:
@@ -147,9 +140,9 @@ profiles:
         jaeger:
           denom: uakt
           amount: 50
-        # otel-collector: (disabled)
-        #   denom: uakt
-        #   amount: 25
+        otel-collector:
+          denom: uakt
+          amount: 25
 
 deployment:
   ipfs:
@@ -160,7 +153,7 @@ deployment:
     dcloud:
       profile: jaeger
       count: 1
-  # otel-collector: (disabled)
-  #   dcloud:
-  #     profile: otel-collector
-  #     count: 1
+  otel-collector:
+    dcloud:
+      profile: otel-collector
+      count: 1
