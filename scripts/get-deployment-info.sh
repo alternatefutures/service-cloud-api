@@ -5,7 +5,7 @@
 # DEPRECATED:
 # This script was written for the legacy “full stack” Yugabyte deployments.
 # Current production deploys components separately (Postgres + data services + API-only),
-# and deployment state is tracked in repo root `DEPLOYMENTS.md` / `.github/DEPLOYMENTS.md`.
+# and deployment state is tracked in repo root `DEPLOYMENTS.md`.
 
 set -e
 
@@ -79,6 +79,6 @@ echo "  api.alternatefutures.ai   → (typically routed via SSL proxy)"
 echo "  auth.alternatefutures.ai  → (typically routed via SSL proxy)"
 echo "  app.alternatefutures.ai   → Vercel"
 echo ""
-echo "See repo root `.github/DEPLOYMENTS.md` for current routing and endpoints."
+echo "See repo root `DEPLOYMENTS.md` for current routing and endpoints."
 echo ""
 echo "TTL: 300 (5 minutes) for easy updates"

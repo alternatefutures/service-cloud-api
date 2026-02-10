@@ -138,7 +138,7 @@ nano deploy-testnet.yaml
 Change to a secure password (same password on all 3 nodes):
 
 ```yaml
-- YSQL_PASSWORD=MySecureTestnetPass2024!
+- YSQL_PASSWORD=<choose-a-strong-testnet-password>
 ```
 
 ### API Database URL (Line 151)
@@ -150,7 +150,7 @@ Change to a secure password (same password on all 3 nodes):
 Change to match your password:
 
 ```yaml
-- DATABASE_URL=postgresql://yugabyte:MySecureTestnetPass2024!@yb-node-1:5433/alternatefutures
+- DATABASE_URL=postgresql://yugabyte:<your-testnet-password>@yb-node-1:5433/alternatefutures
 ```
 
 ### API JWT Secret (Line 154)
@@ -476,7 +476,7 @@ Update the test script to connect to your testnet deployment:
 // Edit test-usage-buffer.ts
 // Change DATABASE_URL environment variable
 process.env.DATABASE_URL =
-  'postgresql://yugabyte:MySecureTestnetPass2024!@<provider-ip>:<port>/alternatefutures'
+  'postgresql://yugabyte:<your-testnet-password>@<provider-ip>:<port>/alternatefutures'
 ```
 
 Then run:

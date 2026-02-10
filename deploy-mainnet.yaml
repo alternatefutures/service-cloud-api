@@ -3,7 +3,7 @@
 #
 # This SDL deploys a **legacy** “full stack” (API + YugabyteDB + IPFS + tracing).
 # Current production uses separate deployments (PostgreSQL + data services + API-only)
-# and is tracked in repo root `DEPLOYMENTS.md` / `.github/DEPLOYMENTS.md`.
+# and is tracked in repo root `DEPLOYMENTS.md`.
 #
 # Prefer:
 # - `deploy-api.yaml` (API-only)

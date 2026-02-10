@@ -14,7 +14,7 @@ if [ -n "$AKASH_CERT_JSON" ] && [ -n "$AKASH_MNEMONIC" ]; then
 fi
 
 # NOTE: prisma CLI is a devDependency — not installed in production.
-# Migrations must be applied externally. See REDEPLOYMENT-INCIDENT-REPORT.md.
+# Migrations must be applied externally. See INCIDENTS.md (canonical runbook).
 
 echo "Starting Node.js application..."
 exec node dist/index.js

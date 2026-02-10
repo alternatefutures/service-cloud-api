@@ -73,6 +73,20 @@ export class AkashOrchestrator {
 
     return new Promise((resolve, reject) => {
       console.log('[AkashOrchestrator] Starting akash-mcp...')
+      console.log('[AkashOrchestrator] MCP path:', this.akashMcpPath)
+      console.log(
+        '[AkashOrchestrator] AKASH_MNEMONIC set:',
+        !!process.env.AKASH_MNEMONIC
+      )
+      console.log(
+        '[AkashOrchestrator] AKASH_CERT_JSON set:',
+        !!process.env.AKASH_CERT_JSON
+      )
+
+      // Collect stderr so we can report the actual crash reason instead of
+      // the opaque "MCP process not running" message.
+      let stderrBuffer = ''
+      let settled = false
 
       this.process = spawn('node', [this.akashMcpPath!], {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -80,6 +94,7 @@ export class AkashOrchestrator {
           ...process.env,
           // Pass through Akash config from env
           AKASH_MNEMONIC: process.env.AKASH_MNEMONIC,
+          AKASH_CERT_JSON: process.env.AKASH_CERT_JSON,
           RPC_ENDPOINT:
             process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443',
           GRPC_ENDPOINT:
@@ -93,29 +108,55 @@ export class AkashOrchestrator {
       })
 
       this.process.stderr?.on('data', (data: Buffer) => {
-        console.error('[akash-mcp stderr]', data.toString())
+        const text = data.toString()
+        stderrBuffer += text
+        console.error('[akash-mcp stderr]', text)
       })
 
       this.process.on('error', err => {
         console.error('[AkashOrchestrator] Process error:', err)
-        reject(err)
-      })
-
-      this.process.on('exit', code => {
-        console.log('[AkashOrchestrator] Process exited with code:', code)
-        this.process = null
-        this.initialized = false
-      })
-
-      // Initialize MCP connection
-      setTimeout(async () => {
-        try {
-          await this.initialize()
-          resolve()
-        } catch (err) {
+        if (!settled) {
+          settled = true
           reject(err)
         }
-      }, 1000)
+      })
+
+      this.process.on('exit', (code, signal) => {
+        console.log(
+          `[AkashOrchestrator] Process exited with code: ${code}, signal: ${signal}`
+        )
+        this.process = null
+        this.initialized = false
+
+        // If the process exits before we finished initializing, reject with
+        // the real error from stderr so callers see the actual crash reason.
+        if (!settled) {
+          settled = true
+          const reason = stderrBuffer.trim() || `exit code ${code}`
+          reject(
+            new Error(
+              `akash-mcp process crashed during startup: ${reason}`
+            )
+          )
+        }
+      })
+
+      // Initialize MCP connection after giving the process time to start
+      setTimeout(async () => {
+        if (settled) return // already rejected by exit/error handler
+        try {
+          await this.initialize()
+          if (!settled) {
+            settled = true
+            resolve()
+          }
+        } catch (err) {
+          if (!settled) {
+            settled = true
+            reject(err)
+          }
+        }
+      }, 2000) // increased from 1s to 2s to give MCP more startup time
     })
   }
 

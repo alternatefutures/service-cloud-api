@@ -66,7 +66,7 @@ export interface FilteredBid extends AkashBid {
  * - `AKASH_SSL_PROXY_PROVIDER_NAME`
  *
  * Source of truth for the current proxy provider:
- * - repo root `.github/DEPLOYMENTS.md`
+ * - repo root `DEPLOYMENTS.md`
  */
 const PROXY_PROVIDER = process.env.AKASH_SSL_PROXY_PROVIDER || 'akash1zlsep362zz46qlwzttm06t8lv9qtg8gtaya97u'
 const PROXY_PROVIDER_NAME = process.env.AKASH_SSL_PROXY_PROVIDER_NAME || 'america.computer'

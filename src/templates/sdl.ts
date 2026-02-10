@@ -2,7 +2,7 @@
  * Akash SDL Generator for Templates
  *
  * Takes a template definition + user config overrides and outputs
- * valid Akash SDL YAML. Follows all lessons from REDEPLOYMENT-INCIDENT-REPORT.md:
+ * valid Akash SDL YAML. Follows all lessons from INCIDENTS.md (canonical runbook):
  *   - persistent: true + class: beta3 for named storage
  *   - default ephemeral storage entry before named volumes
  *   - signedBy auditor filter

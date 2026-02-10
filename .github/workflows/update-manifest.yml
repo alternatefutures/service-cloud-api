@@ -47,7 +47,7 @@ concurrency:
 env:
   # Service DSEQ mapping — UPDATE THESE after full redeploy!
   # After redeploying via deploy-akash.yml, update with the new DSEQ from the output.
-  DSEQ_api: "25455635"
+  DSEQ_api: "25459181"
   DSEQ_auth: "UPDATE_AFTER_REDEPLOY"
   DSEQ_gateway: "UPDATE_AFTER_REDEPLOY"
   DSEQ_infisical: "UPDATE_AFTER_REDEPLOY"
@@ -343,7 +343,7 @@ jobs:
       # separate Prisma schemas. Container restarts MUST NOT use 'prisma db push'
       # (which drops tables not in its schema). This step verifies auth tables
       # survived the restart and re-seeds subscription plans if they're missing.
-      # See: REDEPLOYMENT-INCIDENT-REPORT.md Phase 9 & 10 for history.
+      # See: INCIDENTS.md (canonical runbook) for shared-DB safety rules and recovery steps.
       - name: Setup Node.js for DB verification
         if: env.SERVICE == 'api'
         uses: actions/setup-node@v4
@@ -382,7 +382,7 @@ jobs:
           if echo "$PLANS_CHECK" | grep -q "PLANS_MISSING\|does not exist"; then
             echo "::error::Auth subscription_plans table is missing! Database may have been wiped."
             echo "Run the auth schema restore and seed script manually."
-            echo "See REDEPLOYMENT-INCIDENT-REPORT.md Phase 10 for instructions."
+            echo "See INCIDENTS.md (canonical runbook) for instructions."
           else
             echo "Subscription plans table exists."
           fi

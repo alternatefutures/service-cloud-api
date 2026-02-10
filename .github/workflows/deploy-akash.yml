@@ -573,7 +573,7 @@ jobs:
       # service-auth schema) still exist in the shared database, and re-pushes
       # + seeds them if they're missing. This prevents the auth service from
       # breaking due to missing tables after cloud API redeployment.
-      # See: REDEPLOYMENT-INCIDENT-REPORT.md Phase 9 & 10.
+      # See: INCIDENTS.md (canonical runbook) for shared-DB safety rules and recovery steps.
       - name: Verify and restore auth schema if needed
         continue-on-error: true
         env:
@@ -594,7 +594,7 @@ jobs:
             echo "  DATABASE_URL=<prod_url> npx prisma db execute --stdin < /tmp/auth.sql"
             echo "  DATABASE_URL=<prod_url> npx tsx scripts/seed-plans.ts"
             echo ""
-            echo "See REDEPLOYMENT-INCIDENT-REPORT.md Phase 10 for detailed instructions."
+            echo "See INCIDENTS.md (canonical runbook) for detailed instructions."
           else
             echo "✓ Found $AUTH_TABLES auth tables — schema intact."
           fi

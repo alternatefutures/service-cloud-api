@@ -5,7 +5,6 @@ This file intentionally **does not** track “currently active” DSEQs/provider
 ## Source of truth (current production state)
 
 - `DEPLOYMENTS.md` (repo root)
-- `.github/DEPLOYMENTS.md` (repo root)
 
 ## What runs where (high level)
 
