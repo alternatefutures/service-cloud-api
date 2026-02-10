@@ -493,6 +493,11 @@ export class AkashOrchestrator {
    * Close a deployment
    */
   async closeDeployment(dseq: number): Promise<void> {
+    // Ensure orchestrator is started (same as deployService)
+    if (!this.isReady()) {
+      await this.start()
+    }
+
     const result = await this.callTool('close-deployment', { dseq })
 
     if (result.error || !result.success) {
@@ -512,6 +517,11 @@ export class AkashOrchestrator {
     service?: string,
     tail?: number
   ): Promise<string> {
+    // Ensure orchestrator is started
+    if (!this.isReady()) {
+      await this.start()
+    }
+
     const result = await this.callTool<string>('get-logs', {
       owner,
       dseq,
