@@ -23,8 +23,8 @@ export const openclawGateway: Template = {
   // Emoji here so frontend can render a consistent react-icon.
   icon: '🦞',
   repoUrl: 'https://github.com/openclaw/openclaw',
-  // Public Docker Hub mirror (official source is ghcr.io/openclaw/openclaw)
-  dockerImage: 'alpine/openclaw:main',
+  // Official Docker Hub image (fourplayers/openclaw)
+  dockerImage: 'fourplayers/openclaw:latest',
   serviceType: 'VM',
   envVars: [
     // Gateway access control
