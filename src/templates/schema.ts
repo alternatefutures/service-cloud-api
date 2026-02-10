@@ -67,6 +67,8 @@ export interface Template {
   name: string
   /** Short description (1-2 sentences) */
   description: string
+  /** Whether this template should be highlighted in the UI */
+  featured?: boolean
   /** Template category for filtering */
   category: TemplateCategory
   /** Searchable tags */

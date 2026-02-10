@@ -5,6 +5,7 @@ export const nodeWsGameserver: Template = {
   name: 'Node.js Game Server',
   description:
     'Protocol-agnostic WebSocket relay server with room-based architecture and binary protocol (msgpack). Relays any game data between peers without inspecting payloads.',
+  featured: true,
   category: 'GAME_SERVER',
   tags: ['websocket', 'multiplayer', 'realtime', 'gameserver', 'msgpack', 'node'],
   icon: '🎮',

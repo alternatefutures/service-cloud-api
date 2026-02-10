@@ -5,6 +5,7 @@ export const bunWsGameserver: Template = {
   name: 'Bun Game Server',
   description:
     'Bun-native WebSocket relay server — same protocol as the Node.js version but 5-8x faster. Protocol-agnostic relay with Bun built-in pub/sub for room broadcasting.',
+  featured: true,
   category: 'GAME_SERVER',
   tags: ['websocket', 'multiplayer', 'realtime', 'gameserver', 'msgpack', 'bun'],
   icon: '⚡',

@@ -22,6 +22,16 @@ Templates are **static TypeScript objects** — no database. The backend registr
 
 ## How to add a new template
 
+### Prerequisites — Docker image
+
+Before adding a template, the Docker image must be accessible. There are three scenarios:
+
+| Source | What to do |
+|--------|-----------|
+| **Public Docker Hub image** (e.g. `postgres:16-alpine`, `redis:7-alpine`) | Nothing — just reference it in `dockerImage`. |
+| **Existing GHCR image** (e.g. `ghcr.io/org/repo:latest`) | Verify it exists and is public (or your Akash nodes can pull it). |
+| **You need to build & push** | See [Building a Docker image](#building-a-docker-image) below. |
+
 ### Step 1 — Backend definition
 
 Create `service-cloud-api/src/templates/definitions/<id>.ts`:
@@ -36,10 +46,13 @@ export const myService: Template = {
   description: 'One sentence.',        // Shows in card + config sheet
   category: 'WEB_SERVER',              // See TemplateCategory below
   tags: ['web', 'http'],               // Searchable, first 4 shown on card
-  icon: '🌐',                          // Emoji (frontend overrides with react-icons)
+  icon: '🌐',                          // Emoji OR https URL to an image
   repoUrl: 'https://github.com/...',   // Link shown in config sheet
   dockerImage: 'nginx:alpine',         // Docker Hub or GHCR image
   serviceType: 'VM',                   // Maps to Service.type in DB
+
+  // Set to true to show in the Featured carousel on the Add Service page
+  featured: false,
 
   envVars: [
     {
@@ -81,7 +94,7 @@ export { myService } from './my-service.js'
 
 ### Step 3 — Add to registry
 
-In `registry.ts`, import and add to the array:
+In `registry.ts`, import and add to the array. **Order matters** — templates appear in this order in the UI. Featured templates go first.
 
 ```typescript
 import { myService } from './definitions/index.js'
@@ -105,7 +118,54 @@ case 'my-service':
   return <SiNginx className={`${sizeClass} text-green-600`} />;
 ```
 
-If no matching Simple Icon exists, `FaBox` (gray) is used as fallback.
+If the template's `icon` field is a URL (starts with `http`), it's rendered as an `<img>` tag automatically — no switch case needed.
+
+If no matching icon case exists and icon is not a URL, `FaBox` (gray) is used as fallback.
+
+## Building a Docker image
+
+When adding a template for a project that doesn't have a published Docker image yet:
+
+### 1. Check the project for a Dockerfile
+
+Most projects have a Dockerfile in the repo root or a `deploy/` directory. Common locations:
+- `Dockerfile`
+- `deploy/Dockerfile`
+- `docker/Dockerfile`
+- `.docker/Dockerfile`
+
+**Important:** Dockerfiles can be stale — always verify the `COPY` statements match the actual project structure before building. Common issues:
+- References to directories that have been renamed or removed (e.g. `ui/` → `apps/app/`)
+- References to files that don't exist (e.g. `patches/`, `.npmrc`, `bun.lock`)
+- Lockfile mismatches (project uses `pnpm-lock.yaml` but Dockerfile expects `bun.lock`)
+
+### 2. Build the image
+
+```bash
+cd /path/to/project
+docker build -f deploy/Dockerfile -t ghcr.io/<org>/<repo>:latest .
+```
+
+### 3. Push to GHCR
+
+```bash
+# Login (needs a PAT with write:packages scope)
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u <username> --password-stdin
+
+# Push
+docker push ghcr.io/<org>/<repo>:latest
+```
+
+**Permission requirements:**
+- The GitHub PAT must have `write:packages` scope
+- You must have write access to the org/repo on GitHub
+- For org packages, the org may need to grant you package write permissions separately
+
+### 4. Make the package public (if needed)
+
+By default GHCR packages are private. Go to:
+`https://github.com/orgs/<org>/packages/container/<repo>/settings`
+and set visibility to Public, or configure your Akash deployment to use image pull credentials.
 
 ## Reference
 
@@ -138,6 +198,13 @@ Must match the `ServiceType` enum used in the Prisma schema:
 | `startCommand`     | SDL generator — command override  |
 | `pricingUakt`      | SDL generator — pricing section   |
 | `serviceType`      | Prisma Service record             |
+| `featured`         | Frontend — shows in carousel      |
+
+### icon field
+
+The `icon` field supports two formats:
+- **Emoji**: e.g. `'🐘'` — frontend overrides with react-icons via the switch case in `template-icons.tsx`
+- **URL**: e.g. `'https://raw.githubusercontent.com/org/repo/main/icon.png'` — rendered as `<img>` tag automatically, no frontend code changes needed
 
 ### Files touched when adding a template
 
@@ -148,7 +215,7 @@ Backend (service-cloud-api/src/templates/):
   3. registry.ts                ← add to array
 
 Frontend (web-app/components/templates/):
-  4. template-icons.tsx          ← add icon case (optional)
+  4. template-icons.tsx          ← add icon case (optional, not needed for URL icons)
 ```
 
 No GraphQL schema changes needed — the `Template` type already covers all fields.
@@ -156,9 +223,22 @@ No frontend type changes needed — `services/templates/types.ts` already mirror
 
 ### Existing templates
 
-| ID                    | Category     | Image                          |
-|-----------------------|-------------|--------------------------------|
-| `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest |
-| `bun-ws-gameserver`   | GAME_SERVER | ghcr.io/mavisakalyan/bun-ws-gameserver:latest  |
-| `postgres`            | DATABASE    | postgres:16-alpine             |
-| `redis`               | DATABASE    | redis:7-alpine                 |
+| ID                    | Category     | Image                          | Featured |
+|-----------------------|-------------|--------------------------------|----------|
+| `milaidy-gateway`     | AI_ML       | ghcr.io/milady-ai/milaidy:latest | Yes |
+| `openclaw-gateway`    | AI_ML       | alpine/openclaw:main           | Yes |
+| `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest | Yes |
+| `bun-ws-gameserver`   | GAME_SERVER | ghcr.io/mavisakalyan/bun-ws-gameserver:latest | Yes |
+| `postgres`            | DATABASE    | postgres:16-alpine             | No |
+| `redis`               | DATABASE    | redis:7-alpine                 | No |
+
+### Checklist for adding a template
+
+- [ ] Docker image exists and is pullable
+- [ ] Definition file created in `definitions/<id>.ts`
+- [ ] Exported from `definitions/index.ts`
+- [ ] Added to `registry.ts` array (order = display order)
+- [ ] `featured: true` set if it should appear in the carousel
+- [ ] Icon case added in `template-icons.tsx` (or URL icon set in definition)
+- [ ] Tested: template appears in the "Add a service" page
+- [ ] Tested: clicking template opens config sheet with correct env vars

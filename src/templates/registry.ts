@@ -12,11 +12,15 @@ import {
   bunWsGameserver,
   postgres,
   redis,
+  milaidyGateway,
+  openclawGateway,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
 
 const templates: Template[] = [
+  milaidyGateway,
+  openclawGateway,
   nodeWsGameserver,
   bunWsGameserver,
   postgres,

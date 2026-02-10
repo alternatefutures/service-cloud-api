@@ -1206,6 +1206,7 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     description: String!
+    featured: Boolean
     category: TemplateCategory!
     tags: [String!]!
     icon: String
