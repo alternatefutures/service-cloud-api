@@ -1,5 +1,7 @@
 ---
-# Akash SDL - IPFS + Jaeger + OTel Collector (data services)
+# Akash SDL - IPFS + Jaeger (data services)
+# OTel Collector removed — Jaeger exposes OTLP ports (4317/4318) natively.
+# The API's redeploy script falls back to Jaeger's OTLP endpoint automatically.
 version: "2.0"
 
 services:
@@ -34,7 +36,7 @@ services:
           mount: /data/ipfs
           readOnly: false
 
-  # Jaeger - Tracing storage and UI
+  # Jaeger - Tracing storage, UI, and OTLP receiver
   jaeger:
     image: jaegertracing/all-in-one:latest
     env:
@@ -51,7 +53,7 @@ services:
           - global: true
         accept:
           - jaeger.alternatefutures.ai
-      # OTLP gRPC receiver (fallback if otel-collector is down)
+      # OTLP gRPC receiver (primary telemetry endpoint)
       - port: 4317
         as: 4317
         to:
@@ -66,30 +68,6 @@ services:
         data:
           mount: /badger
           readOnly: false
-
-  # OpenTelemetry Collector
-  otel-collector:
-    image: ghcr.io/alternatefutures/otel-collector:latest
-    expose:
-      # OTLP gRPC (services send telemetry here)
-      - port: 4317
-        as: 4317
-        to:
-          - global: true
-      # OTLP HTTP
-      - port: 4318
-        as: 4318
-        to:
-          - global: true
-      # Prometheus metrics
-      - port: 8888
-        as: 8888
-        to:
-          - global: true
-        accept:
-          - otel-metrics.alternatefutures.ai
-    depends_on:
-      - jaeger
 
 profiles:
   compute:
@@ -119,14 +97,6 @@ profiles:
             attributes:
               persistent: true
               class: beta3
-    otel-collector:
-      resources:
-        cpu:
-          units: 0.5
-        memory:
-          size: 512Mi
-        storage:
-          - size: 512Mi
 
   placement:
     dcloud:
@@ -140,9 +110,6 @@ profiles:
         jaeger:
           denom: uakt
           amount: 50
-        otel-collector:
-          denom: uakt
-          amount: 25
 
 deployment:
   ipfs:
@@ -152,8 +119,4 @@ deployment:
   jaeger:
     dcloud:
       profile: jaeger
-      count: 1
-  otel-collector:
-    dcloud:
-      profile: otel-collector
       count: 1
