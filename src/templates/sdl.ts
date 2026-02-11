@@ -44,8 +44,14 @@ export function generateSDLFromTemplate(
   const paramsBlock = hasPersistent ? buildParamsBlock(template) : ''
 
   // ── Start command override ──────────────────────────────────
+  // IMPORTANT: Use `args` (Kubernetes args), NOT `command` (Kubernetes command).
+  // In Kubernetes/Akash:
+  //   `command:` overrides the Docker ENTRYPOINT
+  //   `args:`    overrides the Docker CMD
+  // Using `command:` would bypass custom ENTRYPOINT scripts (e.g. the
+  // chown/privilege-drop wrappers used by milaidy-akash, openclaw-akash).
   const commandBlock = template.startCommand
-    ? `    command:
+    ? `    args:
       - sh
       - -c
       - "${template.startCommand}"\n`

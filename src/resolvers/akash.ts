@@ -294,6 +294,10 @@ export const akashMutations = {
 
 export const akashFieldResolvers = {
   AkashDeployment: {
+    image: (parent: any) => {
+      const match = parent.sdlContent?.match(/image:\s*["']?([^\s"']+)/)
+      return match ? match[1] : null
+    },
     service: async (parent: any, _: unknown, context: Context) => {
       return context.prisma.service.findUnique({
         where: { id: parent.serviceId },

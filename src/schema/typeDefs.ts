@@ -330,6 +330,7 @@ export const typeDefs = /* GraphQL */ `
     depositUakt: String
     pricePerBlock: String
     errorMessage: String
+    image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milaidy-akash:main)
     createdAt: Date!
     updatedAt: Date!
     deployedAt: Date

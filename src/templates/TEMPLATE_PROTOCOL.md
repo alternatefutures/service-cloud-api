@@ -195,7 +195,7 @@ Must match the `ServiceType` enum used in the Prisma schema:
 | `resources`        | SDL generator — compute profile   |
 | `ports`            | SDL generator — expose block      |
 | `persistentStorage`| SDL generator — volumes + params  |
-| `startCommand`     | SDL generator — command override  |
+| `startCommand`     | SDL generator — `args` override (preserves ENTRYPOINT) |
 | `pricingUakt`      | SDL generator — pricing section   |
 | `serviceType`      | Prisma Service record             |
 | `featured`         | Frontend — shows in carousel      |
@@ -221,12 +221,26 @@ Frontend (web-app/components/templates/):
 No GraphQL schema changes needed — the `Template` type already covers all fields.
 No frontend type changes needed — `services/templates/types.ts` already mirrors GraphQL.
 
+### startCommand vs wrapper ENTRYPOINT
+
+**Critical**: The `startCommand` field generates an Akash SDL `args:` block (not `command:`).
+
+In Kubernetes/Akash:
+- `command:` overrides the Docker **ENTRYPOINT**
+- `args:` overrides the Docker **CMD**
+
+Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have a custom ENTRYPOINT that must run at boot (chown + privilege drop). If we used `command:`, the wrapper entrypoint would be bypassed entirely.
+
+**Rules:**
+- If your image has a custom ENTRYPOINT (wrapper images), do **not** set `startCommand` — let the Dockerfile CMD handle it.
+- If your image has no custom ENTRYPOINT, `startCommand` is safe to use — it becomes `args:` in the SDL, which replaces CMD.
+
 ### Existing templates
 
 | ID                    | Category     | Image                          | Featured |
 |-----------------------|-------------|--------------------------------|----------|
-| `milaidy-gateway`     | AI_ML       | ghcr.io/milady-ai/milaidy:latest | Yes |
-| `openclaw-gateway`    | AI_ML       | alpine/openclaw:main           | Yes |
+| `milaidy-gateway`     | AI_ML       | ghcr.io/alternatefutures/milaidy-akash:main | Yes |
+| `openclaw-gateway`    | AI_ML       | ghcr.io/alternatefutures/openclaw-akash:main | Yes |
 | `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest | Yes |
 | `bun-ws-gameserver`   | GAME_SERVER | ghcr.io/mavisakalyan/bun-ws-gameserver:latest | Yes |
 | `postgres`            | DATABASE    | postgres:16-alpine             | No |
