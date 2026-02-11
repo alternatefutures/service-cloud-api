@@ -404,6 +404,7 @@ Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have 
 |-----------------------|-------------|--------------------------------|----------|
 | `milaidy-gateway`     | AI_ML       | ghcr.io/alternatefutures/milaidy-akash:v6 | Yes |
 | `openclaw-gateway`    | AI_ML       | ghcr.io/alternatefutures/openclaw-akash:main | Yes |
+| `nanobot-gateway`     | AI_ML       | ghcr.io/alternatefutures/nanobot-akash:v1 | Yes |
 | `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest | Yes |
 | `bun-ws-gameserver`   | GAME_SERVER | ghcr.io/mavisakalyan/bun-ws-gameserver:latest | Yes |
 | `postgres`            | DATABASE    | postgres:16-alpine             | No |

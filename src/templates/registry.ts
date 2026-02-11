@@ -14,6 +14,7 @@ import {
   redis,
   milaidyGateway,
   openclawGateway,
+  nanobotGateway,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
@@ -21,6 +22,7 @@ import {
 const templates: Template[] = [
   milaidyGateway,
   openclawGateway,
+  nanobotGateway,
   nodeWsGameserver,
   bunWsGameserver,
   postgres,
