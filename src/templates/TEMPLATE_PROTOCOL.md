@@ -167,6 +167,169 @@ By default GHCR packages are private. Go to:
 `https://github.com/orgs/<org>/packages/container/<repo>/settings`
 and set visibility to Public, or configure your Akash deployment to use image pull credentials.
 
+## When you need a wrapper image
+
+Sometimes a third-party app's published Docker image doesn't work on Akash out of the box. You need a **wrapper image** when any of the following apply:
+
+| Situation | Why a wrapper is needed |
+|-----------|------------------------|
+| Akash persistent volumes mount as root-owned | App runs as non-root user and can't write to the volume without `chown` at boot |
+| The app has a UI (dashboard) but the default CMD only starts an API server | Need a static file server + reverse proxy on a single port |
+| The base image bakes in auth tokens or config that blocks first-run access | Need to strip/override those files at build time |
+| The upstream Dockerfile CMD is stale or broken | Need to provide the correct startup command |
+
+### Decision flow: direct image vs wrapper
+
+```
+Can you deploy the upstream image directly on Akash?
+  │
+  ├─ YES: uses a single port, no persistent storage permission issues,
+  │       CMD works, no hardcoded secrets → use the image directly.
+  │       Set `startCommand` in the template if you need to override CMD.
+  │
+  └─ NO: → Build a wrapper image.
+```
+
+### Wrapper image pattern
+
+All wrapper images live in `service-cloud-api/docker/<name>-akash/` and follow the same structure. Reference implementation: `docker/milaidy-akash/`.
+
+```
+docker/<name>-akash/
+  ├── Dockerfile          # FROM base image, adds entrypoint + extras
+  ├── entrypoint.sh       # Boot script: chown, privilege drop, start processes
+  └── serve-with-ui.mjs   # (optional) Static file server + API reverse proxy
+```
+
+### Dockerfile rules
+
+```dockerfile
+FROM ghcr.io/<org>/<base-image>:latest
+
+# 1. Switch to root for setup
+USER root
+
+# 2. Install privilege-drop tool (Debian = gosu, Alpine = su-exec)
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gosu && \
+    rm -rf /var/lib/apt/lists/*
+# Alpine alternative: RUN apk add --no-cache su-exec
+
+# 3. Strip any baked-in secrets or config that blocks first-run access
+RUN sed -i '/^SOME_TOKEN=/d' /app/.env 2>/dev/null || true
+
+# 4. Copy entrypoint and any helper scripts
+COPY docker/<name>-akash/entrypoint.sh /usr/local/bin/<name>-akash-entrypoint
+RUN chmod +x /usr/local/bin/<name>-akash-entrypoint
+
+# 5. Set ENTRYPOINT (not CMD) so it always runs at boot
+ENTRYPOINT ["/usr/local/bin/<name>-akash-entrypoint"]
+
+# 6. CMD must be empty array (not omitted) when entrypoint manages everything
+CMD []
+```
+
+### Entrypoint rules (POSIX shell)
+
+These rules come from real production incidents. Violating any of them **will** cause the container to crash-loop on Akash.
+
+1. **Use `#!/usr/bin/env sh` and write POSIX-only shell.** Debian base images map `sh` to `dash`, not `bash`. The following are **bash-only and will break**: `wait -n`, `[[ ]]`, `<<<`, arrays, `source`, `function` keyword.
+
+2. **Re-exec the script itself after privilege drop** — not `$@`:
+   ```sh
+   # CORRECT: re-exec this script as the non-root user
+   exec gosu node "$0" "$@"
+
+   # WRONG: runs $@ which is empty when CMD is []
+   exec gosu node "$@"
+   ```
+
+3. **Guard the privilege-drop block** so the re-exec doesn't loop:
+   ```sh
+   if [ "$(id -u)" = "0" ]; then
+     chown -R 1000:1000 "$STATE_DIR" 2>/dev/null || true
+     exec gosu node "$0" "$@"
+   fi
+   # Everything below runs as non-root
+   ```
+
+4. **For multi-process entrypoints** (API + UI server), use background jobs + `trap` + POSIX `wait`:
+   ```sh
+   node /app/server.mjs start &
+   API_PID=$!
+
+   sleep 3  # let API initialize
+
+   node /usr/local/bin/serve-with-ui.mjs &
+   UI_PID=$!
+
+   cleanup() {
+     kill "$UI_PID" 2>/dev/null || true
+     kill "$API_PID" 2>/dev/null || true
+     wait 2>/dev/null || true
+     exit 0
+   }
+   trap cleanup TERM INT
+
+   # POSIX wait (no -n flag!) — blocks until ALL children exit
+   wait
+   ```
+
+5. **Always test locally before pushing**: `docker run --rm -p 8080:2138 <image>`. If it exits immediately, fix it before deploying to Akash.
+
+### Serving a UI alongside an API (single-port pattern)
+
+Many apps (Milaidy, OpenClaw) have a React/Vite dashboard that the API server doesn't serve in production mode. On Akash you typically expose **one port** per service. The solution:
+
+- The API listens on an **internal port** (e.g. `31337`) — not exposed.
+- A lightweight Node.js server (`serve-with-ui.mjs`) listens on the **public port** (e.g. `2138`):
+  - Serves the built UI static files (`/app/apps/app/dist/`) with SPA fallback
+  - Proxies `/api/*` requests to `127.0.0.1:INTERNAL_PORT`
+  - Proxies WebSocket upgrades on `/ws` to `127.0.0.1:INTERNAL_PORT`
+
+Reference: `docker/milaidy-akash/serve-with-ui.mjs`
+
+Key env vars for this pattern:
+```
+MILAIDY_INTERNAL_API_PORT=31337   # internal, not exposed
+MILAIDY_PORT=2138                 # public, exposed in SDL
+MILAIDY_API_BIND=0.0.0.0         # MUST be 0.0.0.0, not 127.0.0.1
+```
+
+### Image tagging for Akash
+
+**Never use mutable tags** (`:latest`, `:main`) in production on Akash. Providers cache images by tag and will not pull a new image even if you push an update.
+
+- Use **versioned tags**: `:v1`, `:v2`, `:v3`, etc.
+- Update `dockerImage` in the template definition whenever you push a new version.
+- If you must redeploy with the same tag, you need a **different provider** or a full close + redeploy.
+
+### Auditing the upstream image before wrapping
+
+Before building a wrapper, verify these things about the base image:
+
+- [ ] **CMD actually works**: `docker run --rm <base-image>` — does it start? Many repos have stale Dockerfiles where the CMD references removed commands or old paths.
+- [ ] **Bind address**: Does the app default to `127.0.0.1` (container-only) or `0.0.0.0` (externally reachable)? If `127.0.0.1`, you must override via env var or the service will be unreachable on Akash.
+- [ ] **Hardcoded secrets/tokens**: Check for `.env` files baked into the image that set auth tokens. These block dashboard access on first deploy. Strip them in the wrapper Dockerfile.
+- [ ] **Which port(s) the app actually listens on**: Don't trust `EXPOSE` in the Dockerfile — check the app's actual config/code. The port in your template `ports` array must match.
+- [ ] **Runs as root or non-root**: If non-root (e.g. `USER node`), Akash persistent volumes (mounted as root) will cause permission errors unless the wrapper `chown`s them.
+
+### Wrapper image checklist
+
+- [ ] Base image builds and runs locally (`docker run --rm`)
+- [ ] Wrapper Dockerfile: privilege drop tool installed (`gosu` or `su-exec`)
+- [ ] Wrapper Dockerfile: baked-in secrets stripped
+- [ ] Entrypoint: POSIX `sh` only (no bash-isms)
+- [ ] Entrypoint: re-execs `"$0"` after privilege drop (not `"$@"`)
+- [ ] Entrypoint: `wait` (no `-n`) for multi-process
+- [ ] If app has a UI: `serve-with-ui.mjs` pattern implemented
+- [ ] Tested locally: `docker run --rm -p 8080:<public-port> <wrapper-image>`
+- [ ] Pushed with a **versioned tag** (`:v1`, not `:latest`)
+- [ ] Template definition: `dockerImage` points to the versioned tag
+- [ ] Template definition: **no** `startCommand` (entrypoint handles everything)
+- [ ] Template definition: `MILAIDY_API_BIND=0.0.0.0` (or equivalent) in `envVars`
+- [ ] Template definition: port matches the public port from the entrypoint
+
 ## Reference
 
 ### TemplateCategory
@@ -239,7 +402,7 @@ Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have 
 
 | ID                    | Category     | Image                          | Featured |
 |-----------------------|-------------|--------------------------------|----------|
-| `milaidy-gateway`     | AI_ML       | ghcr.io/alternatefutures/milaidy-akash:main | Yes |
+| `milaidy-gateway`     | AI_ML       | ghcr.io/alternatefutures/milaidy-akash:v6 | Yes |
 | `openclaw-gateway`    | AI_ML       | ghcr.io/alternatefutures/openclaw-akash:main | Yes |
 | `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest | Yes |
 | `bun-ws-gameserver`   | GAME_SERVER | ghcr.io/mavisakalyan/bun-ws-gameserver:latest | Yes |
@@ -249,10 +412,15 @@ Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have 
 ### Checklist for adding a template
 
 - [ ] Docker image exists and is pullable
+- [ ] If wrapper needed: follow the [wrapper image checklist](#wrapper-image-checklist) above
 - [ ] Definition file created in `definitions/<id>.ts`
 - [ ] Exported from `definitions/index.ts`
 - [ ] Added to `registry.ts` array (order = display order)
 - [ ] `featured: true` set if it should appear in the carousel
 - [ ] Icon case added in `template-icons.tsx` (or URL icon set in definition)
+- [ ] No `startCommand` if the image has a custom ENTRYPOINT (wrapper images)
+- [ ] Bind address env var set to `0.0.0.0` (not `127.0.0.1`)
+- [ ] Image tag is versioned (`:v1`, not `:latest` or `:main`) for Akash
 - [ ] Tested: template appears in the "Add a service" page
 - [ ] Tested: clicking template opens config sheet with correct env vars
+- [ ] Tested: deployed service is reachable and UI loads (if applicable)
