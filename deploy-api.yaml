@@ -52,12 +52,19 @@ services:
       - SENTRY_DSN=your_sentry_dsn
 
     expose:
+      # HTTP ingress (may be redirected to HTTPS by some providers)
       - port: 4000
         as: 80
         to:
           - global: true
         accept:
           - api.alternatefutures.ai
+      # Direct TCP port — bypasses provider nginx, used by SSL proxy
+      - port: 4000
+        as: 4000
+        proto: TCP
+        to:
+          - global: true
 
 profiles:
   compute:
