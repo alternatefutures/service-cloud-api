@@ -22,13 +22,12 @@ services:
       # Email (Resend)
       - RESEND_API_KEY=your_resend_api_key
 
-      # Akash (for deployment orchestration)
+      # Akash (for deployment orchestration — uses akash CLI directly)
       - AKASH_MNEMONIC=__AKASH_MNEMONIC__
       - RPC_ENDPOINT=__RPC_ENDPOINT__
-      - GRPC_ENDPOINT=__GRPC_ENDPOINT__
-      - AKASH_MCP_PATH=__AKASH_MCP_PATH__
-      # Base64-encoded certificate JSON for MCP (avoids revoke+regenerate on every container restart)
-      - AKASH_CERT_JSON=__AKASH_CERT_JSON__
+
+      # Phala Cloud (for CVM deployment orchestration)
+      - PHALA_API_KEY=__PHALA_API_KEY__
 
       # Storage - IPFS
       - IPFS_API_URL=__IPFS_API_URL__

@@ -1,208 +1,317 @@
 /**
- * Pricing Configuration for Alternate Futures Platform
- * All prices in USD
+ * Pricing Configuration for Alternate Futures Platform (2026-02-14)
+ *
+ * Pricing model:
+ *   - IPFS pinning: flat $0.01/GB (loss-leader, rounded to nearest GB)
+ *   - All other storage/compute: pass-through provider cost + plan margin
+ *     - Monthly plan: 25% markup
+ *     - Yearly plan:  20% markup
+ *   - Akash compute: provider bid cost + plan margin
+ *   - Phala TEE: provider rate + plan margin
+ *
+ * All raw costs in USD. Margin is applied by the billing system at charge-time
+ * using the org's active plan usageMarkup rate.
  */
 
-export const PRICING = {
-  /**
-   * Storage Costs
-   */
-  storage: {
-    /** IPFS pinning - per GB/month */
-    ipfs: 0.06,
-    /** Filecoin storage deals - per GB/month */
-    filecoin: 0.03,
-    /** Arweave permanent storage - one-time per GB */
-    arweave: 6.0,
-  },
+// ============================================
+// DEFAULT PLAN MARGINS (fallbacks — actual per-org
+// margin comes from SubscriptionPlan.usageMarkup)
+// ============================================
 
-  /**
-   * Bandwidth Costs
-   */
-  bandwidth: {
-    /** Free tier included bandwidth (GB) */
-    free: {
-      included: 100,
-      overage: 0.1,
-    },
-    /** Pro tier bandwidth (GB) */
-    pro: {
-      included: 1024, // 1 TB
-      overage: 0.08,
-    },
-    /** Enterprise tier - custom pricing */
-    enterprise: {
-      included: null,
-      overage: null,
-    },
-  },
+export const DEFAULT_MONTHLY_MARGIN = 0.25
+export const DEFAULT_YEARLY_MARGIN = 0.20
 
-  /**
-   * Compute Costs
-   */
-  compute: {
-    /** Agent runtime - per hour */
-    agentRuntime: 0.05,
-    /** Function invocations - per million */
-    functionInvocations: 0.2,
-    /** GPU processing (ComfyUI) - per hour */
-    gpuProcessing: 0.5,
-  },
+// ============================================
+// STORAGE — RAW PROVIDER COSTS
+// ============================================
 
-  /**
-   * Container Registry Costs (Self-Hosted on Akash)
-   */
-  registry: {
-    /** IPFS storage for container images - per GB/month */
-    storage: 0.06,
-    /** PostgreSQL database for metadata - per GB/month */
-    database: 0.1,
-    /** Akash compute for registry service - per hour */
-    compute: 0.02,
+export const STORAGE_PRICING = {
+  /** IPFS pinning — flat rate, NOT pass-through (loss-leader) */
+  ipfs: {
+    model: 'flat' as const,
+    ratePerGb: 0.01, // $/GB/month — rounded to nearest GB
+  },
+  /** Filecoin storage deals — pass-through + margin */
+  filecoin: {
+    model: 'passthrough' as const,
+    ratePerGb: 0.03, // raw provider cost $/GB/month (margin added at billing)
+  },
+  /** Arweave permanent storage — pass-through + margin, one-time */
+  arweave: {
+    model: 'passthrough' as const,
+    ratePerGb: 5.0, // raw provider cost $/GB one-time (margin added at billing)
+  },
+  /** Storj decentralized storage — pass-through + margin */
+  storj: {
+    model: 'passthrough' as const,
+    ratePerGb: 0.004, // raw provider cost $/GB/month
+    egressPerGb: 0.007, // raw provider egress cost $/GB
   },
 } as const
 
+// ============================================
+// COMPUTE — RAW PROVIDER COSTS
+// ============================================
+
+export const COMPUTE_PRICING = {
+  /** Agent runtime — per hour */
+  agentRuntime: 0.05,
+  /** Function invocations — per million */
+  functionInvocations: 0.2,
+  /** GPU processing (ComfyUI/standard) — per hour */
+  gpuProcessing: 0.5,
+} as const
+
+// ============================================
+// PHALA TEE — RAW PROVIDER RATES ($/hr)
+// ============================================
+
+export const PHALA_RATES: Record<string, number> = {
+  'tdx.small': 0.07,
+  'tdx.medium': 0.10,
+  'tdx.large': 0.14,
+  'tdx.xlarge': 0.28,
+}
+
+// ============================================
+// AKASH — CONVERSION HELPERS
+// ============================================
+
+/** Approximate AKT/USD price — update via env or price feed */
+export const AKT_USD_PRICE = parseFloat(process.env.AKT_USD_PRICE || '3.50')
+
+/** Akash blocks per day (~6s/block) */
+export const AKASH_BLOCKS_PER_DAY = 14400
+
+// ============================================
+// BANDWIDTH
+// ============================================
+
+export const BANDWIDTH_PRICING = {
+  free: {
+    included: 100, // GB
+    overage: 0.1, // $/GB
+  },
+  pro: {
+    included: 1024, // 1 TB
+    overage: 0.08,
+  },
+  enterprise: {
+    included: null as null,
+    overage: null as null,
+  },
+} as const
+
+// ============================================
+// CONTAINER REGISTRY (Self-Hosted on Akash)
+// ============================================
+
+export const REGISTRY_PRICING = {
+  storage: 0.06, // $/GB/month
+  database: 0.1, // $/GB/month
+  compute: 0.02, // $/hr
+} as const
+
+// ============================================
+// BACKWARDS-COMPAT EXPORT
+// ============================================
+
+/** @deprecated Use STORAGE_PRICING, COMPUTE_PRICING, etc. directly */
+export const PRICING = {
+  storage: {
+    ipfs: STORAGE_PRICING.ipfs.ratePerGb,
+    filecoin: STORAGE_PRICING.filecoin.ratePerGb,
+    arweave: STORAGE_PRICING.arweave.ratePerGb,
+  },
+  bandwidth: BANDWIDTH_PRICING,
+  compute: COMPUTE_PRICING,
+  registry: REGISTRY_PRICING,
+} as const
+
+// ============================================
+// CALCULATION HELPERS
+// ============================================
+
 /**
- * Calculate storage cost for a given storage type and size
+ * Apply margin to a raw provider cost
+ * @param rawCostUsd - Raw provider cost in USD
+ * @param marginRate - Markup rate (e.g. 0.25 for 25%). Sourced from plan usageMarkup.
+ * @returns Charged amount in USD
+ */
+export function applyMargin(rawCostUsd: number, marginRate: number): number {
+  return rawCostUsd * (1 + marginRate)
+}
+
+/**
+ * Calculate storage cost
+ * For IPFS: flat rate (margin already baked in — loss-leader)
+ * For others: raw cost only — caller must apply plan margin via applyMargin()
+ *
  * @param storageType - The storage network type
  * @param sizeGB - Size in gigabytes
- * @param months - Number of months (default: 1)
- * @returns Cost in USD
+ * @param months - Number of months (default: 1, ignored for arweave)
+ * @returns Raw cost in USD (before margin, except IPFS which is flat)
  */
 export function calculateStorageCost(
-  storageType: 'ipfs' | 'filecoin' | 'arweave',
+  storageType: keyof typeof STORAGE_PRICING,
   sizeGB: number,
   months: number = 1
 ): number {
-  const pricePerGB = PRICING.storage[storageType]
+  const config = STORAGE_PRICING[storageType]
 
   // Arweave is one-time payment
   if (storageType === 'arweave') {
-    return sizeGB * pricePerGB
+    return sizeGB * config.ratePerGb
   }
 
-  // IPFS and Filecoin are monthly
-  return sizeGB * pricePerGB * months
+  // IPFS and others are monthly
+  return sizeGB * config.ratePerGb * months
+}
+
+/**
+ * Calculate storage cost with margin applied
+ * Convenience wrapper that applies the plan's margin for pass-through providers.
+ * IPFS is flat-rate (no additional margin).
+ */
+export function calculateStorageCostWithMargin(
+  storageType: keyof typeof STORAGE_PRICING,
+  sizeGB: number,
+  marginRate: number,
+  months: number = 1
+): { rawCost: number; chargedCost: number; marginRate: number } {
+  const rawCost = calculateStorageCost(storageType, sizeGB, months)
+  const config = STORAGE_PRICING[storageType]
+
+  // IPFS is flat-rate — no margin applied
+  if (config.model === 'flat') {
+    return { rawCost, chargedCost: rawCost, marginRate: 0 }
+  }
+
+  // Pass-through: apply plan margin
+  return { rawCost, chargedCost: applyMargin(rawCost, marginRate), marginRate }
+}
+
+/**
+ * Convert Akash pricePerBlock (uAKT) to USD per day
+ * @param pricePerBlock - Price in uAKT per block (from bid)
+ * @returns Daily cost in USD (raw, before margin)
+ */
+export function akashPricePerBlockToUsdPerDay(pricePerBlock: string | number): number {
+  const priceUakt = typeof pricePerBlock === 'string' ? parseFloat(pricePerBlock) : pricePerBlock
+  const dailyUakt = priceUakt * AKASH_BLOCKS_PER_DAY
+  const dailyAkt = dailyUakt / 1_000_000
+  return dailyAkt * AKT_USD_PRICE
+}
+
+/**
+ * Get Phala TEE hourly rate for a given CVM size
+ * @param cvmSize - CVM size tier (e.g. 'tdx.large')
+ * @returns Hourly rate in USD (raw, before margin)
+ */
+export function getPhalaHourlyRate(cvmSize: string): number {
+  return PHALA_RATES[cvmSize] ?? PHALA_RATES['tdx.large'] // default to large
 }
 
 /**
  * Calculate bandwidth overage cost
- * @param tier - User's billing tier
- * @param usageGB - Total bandwidth usage in GB
- * @returns Overage cost in USD
  */
 export function calculateBandwidthCost(
   tier: 'free' | 'pro' | 'enterprise',
   usageGB: number
 ): number {
-  const tierConfig = PRICING.bandwidth[tier]
+  const tierConfig = BANDWIDTH_PRICING[tier]
 
-  // Enterprise has custom pricing
   if (tier === 'enterprise' || !tierConfig.included || !tierConfig.overage) {
     return 0
   }
 
-  // Calculate overage
   const overage = Math.max(0, usageGB - tierConfig.included)
   return overage * tierConfig.overage
 }
 
 /**
  * Calculate compute cost
- * @param type - Type of compute resource
- * @param units - Number of units (hours for agents/GPU, millions for functions)
- * @returns Cost in USD
  */
 export function calculateComputeCost(
-  type: 'agentRuntime' | 'functionInvocations' | 'gpuProcessing',
+  type: keyof typeof COMPUTE_PRICING,
   units: number
 ): number {
-  return units * PRICING.compute[type]
+  return units * COMPUTE_PRICING[type]
 }
 
 /**
  * Calculate monthly registry hosting cost on Akash
- * @param storageGB - Storage used in GB
- * @param databaseGB - Database size in GB
- * @param computeHours - Compute hours per month (default: 730 for 24/7)
- * @returns Monthly cost in USD
  */
 export function calculateRegistryCost(
   storageGB: number,
   databaseGB: number,
-  computeHours: number = 730 // 24/7 for a month
+  computeHours: number = 730
 ): number {
-  const storageCost = storageGB * PRICING.registry.storage
-  const databaseCost = databaseGB * PRICING.registry.database
-  const computeCost = computeHours * PRICING.registry.compute
-
-  return storageCost + databaseCost + computeCost
+  return (
+    storageGB * REGISTRY_PRICING.storage +
+    databaseGB * REGISTRY_PRICING.database +
+    computeHours * REGISTRY_PRICING.compute
+  )
 }
 
 /**
- * Get pricing information as a JSON object
+ * Get pricing information as a JSON object (for API responses / frontend)
+ *
+ * NOTE: All prices shown are the final user-facing price.
+ * Internal cost structure (raw provider cost + margin) is never exposed.
  */
 export function getPricingInfo() {
   return {
     storage: [
-      { network: 'IPFS', type: 'Per GB/month', price: PRICING.storage.ipfs },
+      {
+        network: 'IPFS',
+        type: 'Per GB/month',
+        price: STORAGE_PRICING.ipfs.ratePerGb,
+      },
       {
         network: 'Filecoin',
         type: 'Per GB/month',
-        price: PRICING.storage.filecoin,
+        price: STORAGE_PRICING.filecoin.ratePerGb,
       },
       {
         network: 'Arweave',
         type: 'One-time per GB',
-        price: PRICING.storage.arweave,
+        price: STORAGE_PRICING.arweave.ratePerGb,
+      },
+      {
+        network: 'Storj',
+        type: 'Per GB/month',
+        price: STORAGE_PRICING.storj.ratePerGb,
+        egressPrice: STORAGE_PRICING.storj.egressPerGb,
       },
     ],
     bandwidth: [
       {
         tier: 'Free',
-        included: PRICING.bandwidth.free.included,
-        overage: PRICING.bandwidth.free.overage,
+        included: BANDWIDTH_PRICING.free.included,
+        overage: BANDWIDTH_PRICING.free.overage,
       },
       {
         tier: 'Pro',
-        included: PRICING.bandwidth.pro.included,
-        overage: PRICING.bandwidth.pro.overage,
+        included: BANDWIDTH_PRICING.pro.included,
+        overage: BANDWIDTH_PRICING.pro.overage,
       },
       { tier: 'Enterprise', included: 'Custom', overage: 'Custom' },
     ],
     compute: [
-      {
-        service: 'Agent Runtime',
-        price: PRICING.compute.agentRuntime,
-        unit: 'hour',
-      },
-      {
-        service: 'Function Invocations',
-        price: PRICING.compute.functionInvocations,
-        unit: 'million',
-      },
-      {
-        service: 'GPU Processing',
-        price: PRICING.compute.gpuProcessing,
-        unit: 'hour',
-      },
+      { service: 'Agent Runtime', price: COMPUTE_PRICING.agentRuntime, unit: 'hour' },
+      { service: 'Function Invocations', price: COMPUTE_PRICING.functionInvocations, unit: 'million' },
+      { service: 'GPU Processing', price: COMPUTE_PRICING.gpuProcessing, unit: 'hour' },
     ],
+    phalaTee: Object.entries(PHALA_RATES).map(([size, rate]) => ({
+      size,
+      price: rate,
+      unit: 'hour',
+    })),
     registry: [
-      {
-        resource: 'IPFS Storage',
-        price: PRICING.registry.storage,
-        unit: 'GB/month',
-      },
-      {
-        resource: 'PostgreSQL Database',
-        price: PRICING.registry.database,
-        unit: 'GB/month',
-      },
-      {
-        resource: 'Akash Compute',
-        price: PRICING.registry.compute,
-        unit: 'hour',
-      },
+      { resource: 'IPFS Storage', price: REGISTRY_PRICING.storage, unit: 'GB/month' },
+      { resource: 'PostgreSQL Database', price: REGISTRY_PRICING.database, unit: 'GB/month' },
+      { resource: 'Akash Compute', price: REGISTRY_PRICING.compute, unit: 'hour' },
     ],
   }
 }

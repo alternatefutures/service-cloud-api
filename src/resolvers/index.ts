@@ -23,6 +23,7 @@ import {
   templateQueries,
   templateMutations,
 } from './templates.js'
+import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
@@ -833,6 +834,7 @@ export const resolvers = {
         status: string
         kind: string
         serviceName: string
+        serviceSlug: string | null
         serviceType: string
         projectId: string | null
         projectName: string | null
@@ -850,7 +852,7 @@ export const resolvers = {
           site: { projectId: { in: projectIds } },
         },
         include: {
-          site: { select: { name: true, projectId: true, serviceId: true } },
+          site: { select: { name: true, slug: true, projectId: true, serviceId: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: limit,
@@ -870,6 +872,7 @@ export const resolvers = {
           status: statusMap[dep.status] || dep.status,
           kind: 'SITE',
           serviceName: dep.site?.name || 'Site',
+          serviceSlug: dep.site?.slug || null,
           serviceType: 'SITE',
           projectId: dep.site?.projectId || null,
           projectName: dep.site?.projectId ? (projectMap.get(dep.site.projectId) || null) : null,
@@ -888,7 +891,7 @@ export const resolvers = {
           afFunction: { projectId: { in: projectIds } },
         },
         include: {
-          afFunction: { select: { name: true, projectId: true, status: true } },
+          afFunction: { select: { name: true, slug: true, projectId: true, status: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: limit,
@@ -901,6 +904,7 @@ export const resolvers = {
           status: dep.afFunction?.status === 'ACTIVE' ? 'ACTIVE' : 'READY',
           kind: 'FUNCTION',
           serviceName: dep.afFunction?.name || 'Function',
+          serviceSlug: dep.afFunction?.slug || null,
           serviceType: 'FUNCTION',
           projectId: dep.afFunction?.projectId || null,
           projectName: dep.afFunction?.projectId ? (projectMap.get(dep.afFunction.projectId) || null) : null,
@@ -919,7 +923,7 @@ export const resolvers = {
           service: { projectId: { in: projectIds } },
         },
         include: {
-          service: { select: { name: true, type: true, projectId: true } },
+          service: { select: { name: true, slug: true, type: true, projectId: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: limit,
@@ -948,12 +952,54 @@ export const resolvers = {
           status: akashStatusMap[dep.status] || dep.status,
           kind: 'AKASH',
           serviceName: dep.service?.name || 'Service',
+          serviceSlug: dep.service?.slug || null,
           serviceType: dep.service?.type || 'FUNCTION',
           projectId: dep.service?.projectId || null,
           projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
           source: 'docker',
           image,
           statusMessage: dep.errorMessage || (dep.status === 'ACTIVE' ? 'Running on Akash' : null),
+          createdAt: dep.createdAt,
+          updatedAt: dep.updatedAt,
+          author: authorInfo,
+        })
+      }
+
+      // 4. Phala Deployments (TEE containers)
+      const phalaDeployments = await context.prisma.phalaDeployment.findMany({
+        where: {
+          service: { projectId: { in: projectIds } },
+        },
+        include: {
+          service: { select: { name: true, slug: true, type: true, projectId: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+
+      for (const dep of phalaDeployments) {
+        const phalaStatusMap: Record<string, string> = {
+          CREATING: 'INITIALIZING',
+          STARTING: 'DEPLOYING',
+          ACTIVE: 'ACTIVE',
+          FAILED: 'FAILED',
+          STOPPED: 'STOPPED',
+          DELETED: 'REMOVED',
+        }
+
+        unified.push({
+          id: dep.id,
+          shortId: dep.id.slice(-8),
+          status: phalaStatusMap[dep.status] || dep.status,
+          kind: 'PHALA',
+          serviceName: dep.service?.name || dep.name,
+          serviceSlug: dep.service?.slug || null,
+          serviceType: dep.service?.type || 'VM',
+          projectId: dep.service?.projectId || null,
+          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
+          source: 'docker',
+          image: null,
+          statusMessage: dep.errorMessage || (dep.status === 'ACTIVE' ? 'Running on Phala TEE' : dep.status === 'STOPPED' ? 'Stopped' : null),
           createdAt: dep.createdAt,
           updatedAt: dep.updatedAt,
           author: authorInfo,
@@ -985,6 +1031,7 @@ export const resolvers = {
 
     // Akash deployment queries
     ...akashQueries,
+    ...phalaQueries,
 
     // Storage tracking queries (billing is now in service-auth)
     pinnedContent: async (
@@ -1485,6 +1532,58 @@ export const resolvers = {
       })
     },
 
+    deleteService: async (
+      _: unknown,
+      { id }: { id: string },
+      context: Context
+    ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const service = await context.prisma.service.findUnique({
+        where: { id },
+        include: {
+          akashDeployments: {
+            where: { status: { notIn: ['CLOSED', 'FAILED'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          phalaDeployments: {
+            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+        },
+      })
+
+      if (!service) {
+        throw new GraphQLError('Service not found')
+      }
+
+      if (context.projectId && service.projectId !== context.projectId) {
+        throw new GraphQLError('Not authorized to delete this service')
+      }
+
+      // Guard: block deletion if any provider has an active/in-progress deployment
+      const activeAkash = service.akashDeployments[0]
+      if (activeAkash) {
+        throw new GraphQLError(
+          `Cannot delete "${service.name}" — it has an active Akash deployment (${activeAkash.status}). Close the deployment first.`
+        )
+      }
+
+      const activePhala = service.phalaDeployments[0]
+      if (activePhala) {
+        throw new GraphQLError(
+          `Cannot delete "${service.name}" — it has an active Phala deployment (${activePhala.status}). Stop or delete the deployment first.`
+        )
+      }
+
+      await context.prisma.service.delete({ where: { id } })
+      return service
+    },
+
     // Domains (from domain resolvers)
     ...domainMutations,
 
@@ -1505,6 +1604,9 @@ export const resolvers = {
 
     // Akash deployment mutations
     ...akashMutations,
+
+    // Phala deployment mutations
+    ...phalaMutations,
 
     // Storage tracking mutation (billing is now in service-auth)
     triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {
@@ -1573,6 +1675,8 @@ export const resolvers = {
     },
     // Merge Akash-related Service field resolvers (akashDeployments, activeAkashDeployment)
     ...(akashFieldResolvers.Service ?? {}),
+    // Merge Phala-related Service field resolvers (phalaDeployments, activePhalaDeployment)
+    ...(phalaFieldResolvers.Service ?? {}),
   },
 
   Site: {
@@ -1726,6 +1830,9 @@ export const resolvers = {
 
   // Akash deployment field resolvers
   AkashDeployment: akashFieldResolvers.AkashDeployment,
+
+  // Phala deployment field resolvers
+  PhalaDeployment: phalaFieldResolvers.PhalaDeployment,
 
   // Subscriptions for real-time updates
   Subscription: {

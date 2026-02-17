@@ -11,6 +11,8 @@ import {
   getAllTemplates,
   getTemplateById,
   generateSDLFromTemplate,
+  generateComposeFromTemplate,
+  getEnvKeysFromTemplate,
 } from '../templates/index.js'
 import type { TemplateCategory } from '../templates/index.js'
 import type { Context } from './types.js'
@@ -77,6 +79,7 @@ export const templateMutations = {
         slug,
         type: template.serviceType,
         projectId: input.projectId,
+        templateId: input.templateId,
       },
     })
 
@@ -135,6 +138,102 @@ export const templateMutations = {
       // The AkashDeployment record is created with FAILED status by the orchestrator
       throw new GraphQLError(
         `Template deployment failed: ${error.message || 'Unknown error'}`,
+      )
+    }
+  },
+
+  deployFromTemplateToPhala: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        templateId: string
+        projectId: string
+        serviceName?: string
+        envOverrides?: Array<{ key: string; value: string }>
+        resourceOverrides?: { cpu?: number; memory?: string; storage?: string }
+      }
+    },
+    context: Context,
+  ) => {
+    if (!context.userId) throw new GraphQLError('Not authenticated')
+
+    const template = getTemplateById(input.templateId)
+    if (!template) {
+      throw new GraphQLError(`Template not found: ${input.templateId}`)
+    }
+
+    const project = await context.prisma.project.findUnique({
+      where: { id: input.projectId },
+    })
+    if (!project) throw new GraphQLError('Project not found')
+
+    const serviceName = input.serviceName || `${template.id}-${Date.now().toString(36)}`
+    const slug = generateSlug(serviceName)
+
+    const service = await context.prisma.service.create({
+      data: {
+        name: serviceName,
+        slug,
+        type: template.serviceType,
+        projectId: input.projectId,
+        templateId: input.templateId,
+      },
+    })
+
+    const envOverrides: Record<string, string> = {}
+    if (input.envOverrides) {
+      for (const { key, value } of input.envOverrides) {
+        envOverrides[key] = value
+      }
+    }
+
+    const composeContent = generateComposeFromTemplate(template, {
+      serviceName: slug,
+      envOverrides,
+      resourceOverrides: input.resourceOverrides
+        ? {
+            cpu: input.resourceOverrides.cpu ?? undefined,
+            memory: input.resourceOverrides.memory ?? undefined,
+            storage: input.resourceOverrides.storage ?? undefined,
+          }
+        : undefined,
+    })
+
+    const envKeys = getEnvKeysFromTemplate(template, envOverrides)
+
+    const mergedEnv: Record<string, string> = {}
+    for (const v of template.envVars) {
+      if (v.default !== null) mergedEnv[v.key] = v.default
+    }
+    Object.assign(mergedEnv, envOverrides)
+
+    const { getPhalaOrchestrator } = await import(
+      '../services/phala/orchestrator.js'
+    )
+    const orchestrator = getPhalaOrchestrator(context.prisma)
+
+    try {
+      const deploymentId = await orchestrator.deployServicePhala(service.id, {
+        composeContent,
+        env: mergedEnv,
+        envKeys,
+        name: `af-${slug}-${Date.now().toString(36)}`,
+      })
+
+      const deployment = await context.prisma.phalaDeployment.findUnique({
+        where: { id: deploymentId },
+      })
+
+      if (!deployment) {
+        throw new GraphQLError('Phala deployment record not found after creation')
+      }
+
+      return deployment
+    } catch (error: any) {
+      throw new GraphQLError(
+        `Phala deployment failed: ${error.message || 'Unknown error'}`,
       )
     }
   },

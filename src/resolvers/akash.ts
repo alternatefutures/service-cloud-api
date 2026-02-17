@@ -7,6 +7,7 @@
 
 import { GraphQLError } from 'graphql'
 import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
+import { getEscrowService } from '../services/billing/escrowService.js'
 import type { Context } from './types.js'
 
 // Helper to format AkashDeployment for GraphQL (BigInt → String conversion)
@@ -276,6 +277,17 @@ export const akashMutations = {
         closedAt: new Date(),
       },
     })
+
+    // Refund remaining escrow to wallet
+    try {
+      const escrowService = getEscrowService(context.prisma)
+      const refundCents = await escrowService.refundEscrow(id)
+      if (refundCents > 0) {
+        console.log(`[closeAkashDeployment] Refunded $${(refundCents / 100).toFixed(2)} escrow for deployment ${id}`)
+      }
+    } catch (error) {
+      console.warn(`[closeAkashDeployment] Escrow refund failed for ${id}:`, error)
+    }
 
     // Update the specific resource status based on service type
     if (deployment.service.type === 'FUNCTION' && deployment.afFunctionId) {

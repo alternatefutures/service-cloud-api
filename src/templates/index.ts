@@ -20,3 +20,7 @@ export {
 } from './registry.js'
 
 export { generateSDLFromTemplate } from './sdl.js'
+export {
+  generateComposeFromTemplate,
+  getEnvKeysFromTemplate,
+} from './compose.js'

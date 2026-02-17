@@ -107,6 +107,7 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     slug: String!
     projectId: ID!
+    templateId: ID
     createdByUserId: ID
     createdAt: Date!
     updatedAt: Date!
@@ -119,6 +120,9 @@ export const typeDefs = /* GraphQL */ `
     akashDeployments: [AkashDeployment!]!
     # Get the currently active Akash deployment (if any)
     activeAkashDeployment: AkashDeployment
+    # Phala deployments for this service
+    phalaDeployments: [PhalaDeployment!]!
+    activePhalaDeployment: PhalaDeployment
   }
 
   # ============================================
@@ -347,6 +351,42 @@ export const typeDefs = /* GraphQL */ `
     ACTIVE
     FAILED
     CLOSED
+  }
+
+  # ============================================
+  # PHALA DEPLOYMENTS
+  # ============================================
+
+  type PhalaDeployment {
+    id: ID!
+    appId: String!
+    name: String!
+    status: PhalaDeploymentStatus!
+    errorMessage: String
+    composeContent: String!
+    envKeys: [String!]
+    appUrl: String
+    teepod: String
+
+    serviceId: ID!
+    service: Service!
+
+    siteId: ID
+    site: Site
+    afFunctionId: ID
+    afFunction: AFFunction
+
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  enum PhalaDeploymentStatus {
+    CREATING
+    STARTING
+    ACTIVE
+    FAILED
+    STOPPED
+    DELETED
   }
 
   """
@@ -778,8 +818,9 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     shortId: String!
     status: String!
-    kind: String!                 # SITE, FUNCTION, AKASH
+    kind: String!                 # SITE, FUNCTION, AKASH, PHALA
     serviceName: String!
+    serviceSlug: String           # slug used for subdomain URL (slug.apps.alternatefutures.ai)
     serviceType: String!          # SITE, FUNCTION, VM, DATABASE, CRON, BUCKET
     projectId: String
     projectName: String
@@ -1350,6 +1391,11 @@ export const typeDefs = /* GraphQL */ `
     # Legacy: Get the active Akash deployment for a function
     akashDeploymentByFunction(functionId: ID!): AkashDeployment
 
+    # Phala Deployments
+    phalaDeployment(id: ID!): PhalaDeployment
+    phalaDeployments(serviceId: ID, projectId: ID): [PhalaDeployment!]!
+    phalaDeploymentByService(serviceId: ID!): PhalaDeployment
+
     # Storage Tracking
     pinnedContent(limit: Int): [PinnedContent!]!
     storageSnapshots(
@@ -1429,6 +1475,7 @@ export const typeDefs = /* GraphQL */ `
       data: TriggerAFFunctionDeploymentDataInput
     ): AFFunctionDeployment!
     deleteAFFunction(where: DeleteAFFunctionWhereInput!): AFFunction!
+    deleteService(id: ID!): Service!
 
     # Domains
     createDomain(input: CreateDomainInput!): Domain!
@@ -1479,6 +1526,11 @@ export const typeDefs = /* GraphQL */ `
 
     # Templates
     deployFromTemplate(input: DeployFromTemplateInput!): AkashDeployment!
+    deployFromTemplateToPhala(input: DeployFromTemplateInput!): PhalaDeployment!
+
+    # Phala Deployments
+    stopPhalaDeployment(id: ID!): PhalaDeployment!
+    deletePhalaDeployment(id: ID!): PhalaDeployment!
   }
 
   # ============================================

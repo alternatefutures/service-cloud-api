@@ -1,4 +1,4 @@
-# Dockerfile for Alternate Futures Backend (Multi-stage, Akash-optimized)
+# Dockerfile for Alternate Futures Backend (Multi-stage, K3s-optimized)
 # Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies
@@ -18,29 +18,6 @@ COPY service-cloud-api/prisma ./prisma/
 
 # Install all dependencies (including dev dependencies for build)
 RUN npm ci
-
-# Stage 1b: Build akash-mcp (needed for Akash deployments)
-FROM node:22-slim AS akash-mcp-builder
-WORKDIR /app/akash-mcp
-
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    openssl \
-    ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy akash-mcp sources
-COPY akash-mcp/package*.json ./
-COPY akash-mcp/tsconfig.json ./
-COPY akash-mcp/src ./src
-COPY akash-mcp/scripts ./scripts
-COPY akash-mcp/awesome-akash ./awesome-akash
-
-# Install all dependencies (dev needed for tsc build), build, then prune to production only
-RUN npm ci
-RUN npm run build
-RUN npm prune --omit=dev
 
 # Stage 2: Builder
 FROM node:22-slim AS builder
@@ -69,21 +46,40 @@ RUN npx prisma generate
 # Build the application
 RUN npm run build
 
-# Stage 3: Production Runner
-FROM node:22-slim AS runner
+# Stage 3: Production Runner (Ubuntu 24.04 for GLIBC 2.39 - needed by provider-services)
+FROM ubuntu:24.04 AS runner
 WORKDIR /app/service-cloud-api
 
-# Install required system dependencies for production
+# Install Node.js 22 and system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openssl \
     ca-certificates \
-    dumb-init && \
+    curl \
+    dumb-init \
+    unzip && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
+# Install Akash CLI (used by AkashOrchestrator for user deployments)
+RUN curl -sSfL -o /tmp/akash.zip https://github.com/akash-network/node/releases/download/v1.1.1/akash_linux_amd64.zip && \
+    unzip /tmp/akash.zip -d /tmp/akash && \
+    mv /tmp/akash/akash /usr/local/bin/akash && \
+    chmod +x /usr/local/bin/akash && \
+    rm -rf /tmp/akash /tmp/akash.zip
+
+# Install provider-services CLI
+RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/provider/releases/download/v0.10.5/provider-services_linux_amd64.zip && \
+    unzip /tmp/provider-services.zip -d /tmp/ps && \
+    mv /tmp/ps/provider-services /usr/local/bin/provider-services && \
+    chmod +x /usr/local/bin/provider-services && \
+    rm -rf /tmp/ps /tmp/provider-services.zip && \
+    apt-get purge -y unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user with home directory (needed by akash CLI for ~/.akash)
 RUN groupadd -g 1001 nodejs && \
-    useradd -r -u 1001 -g nodejs nodejs
+    useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
 # Copy package files for production install
 COPY service-cloud-api/package*.json ./
@@ -99,11 +95,6 @@ COPY --from=builder /app/service-cloud-api/node_modules/@prisma/client ./node_mo
 
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/service-cloud-api/dist ./dist
-
-# Copy akash-mcp runtime + dependencies (used by Akash orchestrator)
-COPY --from=akash-mcp-builder --chown=nodejs:nodejs /app/akash-mcp/dist /app/akash-mcp/dist
-COPY --from=akash-mcp-builder --chown=nodejs:nodejs /app/akash-mcp/node_modules /app/akash-mcp/node_modules
-COPY --from=akash-mcp-builder --chown=nodejs:nodejs /app/akash-mcp/package.json /app/akash-mcp/package.json
 
 # Copy entrypoint script
 COPY --chown=nodejs:nodejs service-cloud-api/docker-entrypoint.sh ./

@@ -108,6 +108,7 @@ model Site {
   ipnsRecords IPNSRecord[]
   zones       Zone[]
   akashDeployments AkashDeployment[]
+  phalaDeployments PhalaDeployment[]
 
   primaryDomainId String?
   primaryDomain   Domain? @relation("PrimaryDomain", fields: [primaryDomainId], references: [id])
@@ -178,6 +179,7 @@ model AFFunction {
 
   deployments         AFFunctionDeployment[] @relation("FunctionDeployments")
   akashDeployments    AkashDeployment[]
+  phalaDeployments    PhalaDeployment[]
   agents              Agent[]
 
   createdAt           DateTime             @default(now())
@@ -248,6 +250,7 @@ model Service {
   name            String
   slug            String
   projectId       String
+  templateId      String?
   createdByUserId String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
@@ -261,6 +264,7 @@ model Service {
 
   // Akash deployments for this service (can have multiple over time)
   akashDeployments AkashDeployment[]
+  phalaDeployments PhalaDeployment[]
 
   @@unique([type, slug])
   @@index([projectId])
@@ -929,9 +933,13 @@ model AkashDeployment {
   siteId          String?
   site            Site?               @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
-  // Cost tracking
+  // Cost tracking (on-chain)
   depositUakt     BigInt?             // Deposit amount in uakt
   pricePerBlock   String?             // Price from accepted bid
+
+  // Billing (platform escrow — mirrors on-chain escrow in USD)
+  escrow          DeploymentEscrow?   // Platform-level escrow for this deployment
+  savedSdl        String?             @db.Text // SDL saved on SUSPEND for re-deploy on resume
 
   // Error info
   errorMessage    String?
@@ -959,5 +967,105 @@ enum AkashDeploymentStatus {
   DEPLOYING       // Provider deploying containers
   ACTIVE          // Deployment running
   FAILED          // Deployment failed
-  CLOSED          // Deployment closed
+  CLOSED          // Deployment closed (permanent)
+  SUSPENDED       // Paused due to low balance (will auto-resume on topup)
+}
+
+// ============================================
+// DEPLOYMENT ESCROW (Platform-level USD escrow for Akash)
+// ============================================
+
+enum EscrowStatus {
+  ACTIVE      // Funds locked, daily consumption active
+  DEPLETED    // Escrow consumed, needs top-up or auto-top-up from wallet
+  REFUNDED    // Deployment closed, remaining refunded to wallet
+  PAUSED      // Deployment paused due to low org balance
+}
+
+model DeploymentEscrow {
+  id                String        @id @default(cuid())
+  akashDeploymentId String        @unique @map("akash_deployment_id")
+  orgBillingId      String        @map("org_billing_id")    // OrganizationBilling.id from auth service
+  organizationId    String        @map("organization_id")
+
+  depositCents      Int           @map("deposit_cents")      // Initial escrow amount (USD cents)
+  consumedCents     Int           @default(0) @map("consumed_cents")  // Consumed so far
+  dailyRateCents    Int           @map("daily_rate_cents")    // Provider cost/day + margin (USD cents)
+  refundedCents     Int           @default(0) @map("refunded_cents")  // Refunded on close
+  marginRate        Float         @map("margin_rate")         // Plan markup (0.25 or 0.20)
+
+  status            EscrowStatus  @default(ACTIVE)
+  lastBilledAt      DateTime?     @map("last_billed_at")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  akashDeployment   AkashDeployment @relation(fields: [akashDeploymentId], references: [id], onDelete: Cascade)
+
+  @@index([orgBillingId])
+  @@index([organizationId])
+  @@index([status])
+  @@map("deployment_escrow")
+}
+
+// ============================================
+// PHALA DEPLOYMENTS
+// ============================================
+
+enum PhalaDeploymentStatus {
+  CREATING   // CVM being created
+  STARTING   // CVM starting up
+  ACTIVE     // CVM running
+  FAILED     // Deployment failed
+  STOPPED    // CVM stopped
+  DELETED    // CVM deleted
+}
+
+model PhalaDeployment {
+  id              String                  @id @default(cuid())
+
+  // Identity
+  appId           String                  // Phala CVM App ID (hex string from CLI)
+  name            String                  // Internal name (e.g. af-<slug>-<suffix>)
+
+  // Status
+  status          PhalaDeploymentStatus   @default(CREATING)
+  errorMessage    String?
+
+  // Config (what we deployed)
+  composeContent  String                  @db.Text
+  envKeys         Json?                   // Array of env var keys only (never values)
+  cvmSize         String?                 @map("cvm_size") // tdx.small, tdx.medium, tdx.large, tdx.xlarge
+
+  // Outputs
+  appUrl          String?
+  teepod          String?
+
+  // Billing (per-hour, no escrow — debited directly from wallet)
+  hourlyRateCents Int?                    @map("hourly_rate_cents")  // Provider rate + margin (USD cents)
+  marginRate      Float?                  @map("margin_rate")        // Plan markup applied
+  orgBillingId    String?                 @map("org_billing_id")     // OrganizationBilling.id
+  organizationId  String?                 @map("organization_id")
+  activeStartedAt DateTime?               @map("active_started_at") // When CVM became ACTIVE
+  lastBilledAt    DateTime?               @map("last_billed_at")    // Last time daily job billed this
+  totalBilledCents Int                    @default(0) @map("total_billed_cents")
+
+  // Relations
+  serviceId       String
+  service         Service                 @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  siteId          String?
+  site            Site?                   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  afFunctionId    String?
+  afFunction      AFFunction?             @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@index([serviceId])
+  @@index([siteId])
+  @@index([afFunctionId])
+  @@index([status])
+  @@index([appId])
+  @@index([orgBillingId])
 }

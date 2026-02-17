@@ -13,7 +13,9 @@ import {
   StorageSnapshotScheduler,
   InvoiceScheduler,
   UsageAggregator,
+  ComputeBillingScheduler,
 } from './services/billing/index.js'
+import { handleComputeResumeCheck } from './services/billing/resumeHandler.js'
 import {
   getTelemetryIngestionService,
   handleTelemetryWebhook,
@@ -24,6 +26,8 @@ import depthLimit from 'graphql-depth-limit'
 import { createComplexityLimitRule } from 'graphql-validation-complexity'
 import helmet from 'helmet'
 import { initInfisical } from './config/infisical.js'
+import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
+import { AkashOrchestrator } from './services/akash/orchestrator.js'
 
 // Initialize Infisical (or dotenv fallback) before anything else
 await initInfisical()
@@ -34,6 +38,7 @@ const prisma = new PrismaClient()
 const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma)
 const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
+const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
@@ -127,11 +132,20 @@ const helmetMiddleware = helmet({
   },
 })
 
+// Subdomain reverse proxy for *.apps.alternatefutures.ai / *.agents.alternatefutures.ai
+const subdomainProxy = new SubdomainProxy(prisma)
+
 // Custom request handler to intercept webhook requests
 async function requestHandler(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
-  
-  // Log all incoming requests
+
+  // ── Subdomain proxy (must run FIRST, before helmet/yoga) ──────────────
+  // Requests arriving on *.apps.alternatefutures.ai or *.agents.alternatefutures.ai
+  // are reverse-proxied directly to the Akash/Phala backend.
+  const proxied = await subdomainProxy.handleRequest(req, res)
+  if (proxied) return
+
+  // Log all incoming requests (API traffic only — proxied requests logged by proxy)
   console.log(`<-- ${req.method} ${url.pathname}`)
 
   // Apply security headers
@@ -158,6 +172,20 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
+  // Handle compute resume check (internal - called by auth service after topup)
+  if (url.pathname === '/internal/compute/check-resume' && req.method === 'POST') {
+    await handleComputeResumeCheck(req, res, prisma)
+    return
+  }
+
+  // Handle proxy cache flush (internal - for deployment updates)
+  if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
+    subdomainProxy.flushCache()
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
   // Pass all other requests to Yoga
   return yoga(req, res)
 }
@@ -168,8 +196,12 @@ const server = createServer(requestHandler)
 // Initialize Chat WebSocket Server
 const chatServer = new ChatServer(prisma, effectiveJwtSecret)
 
-// Handle WebSocket upgrade for /ws path
-server.on('upgrade', (request, socket, head) => {
+// Handle WebSocket upgrade for /ws path and proxied subdomains
+server.on('upgrade', async (request, socket, head) => {
+  // Check if this is a proxied subdomain WebSocket upgrade
+  const wsProxied = await subdomainProxy.handleUpgrade(request, socket, head)
+  if (wsProxied) return
+
   const { pathname } = new URL(
     request.url || '/',
     `http://${request.headers.host}`
@@ -192,14 +224,19 @@ server.listen(port, () => {
   storageSnapshotScheduler.start()
   invoiceScheduler.start()
   usageAggregator.start()
+  computeBillingScheduler.start()
   telemetryIngestionService.start()
-  console.log(`📊 Billing schedulers started`)
+  console.log(`📊 Billing schedulers started (invoices 2AM, compute 3AM)`)
   console.log(`⚡ Usage aggregator running (1-minute intervals)`)
   console.log(`📈 Telemetry ingestion service running`)
 
   // Start SSL renewal job
   startSslRenewalJob()
   console.log(`🔒 SSL renewal job started (runs daily at 2 AM)`)
+
+  // Resume any interrupted URI backfills from previous pod lifecycle
+  const orchestrator = new AkashOrchestrator(prisma)
+  orchestrator.resumePendingBackfills()
 })
 
 // Graceful shutdown

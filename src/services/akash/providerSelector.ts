@@ -76,12 +76,23 @@ const PROXY_PROVIDER_NAME = process.env.AKASH_SSL_PROXY_PROVIDER_NAME || 'americ
  * 
  * History:
  * - 2026-02-05: Added airitdecomp - wildcard DNS not configured for ingress
+ * - 2026-02-17: Added akash1chnhn... - consistently fails manifest submission
  */
 const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason: string }> = {
   akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040: {
     address: 'akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040',
     name: 'AiritDecomp',
     reason: 'Wildcard DNS not configured - ingress URLs do not resolve',
+  },
+  akash1chnhnu50f6hv98xl0m7xm95vel457ysp32uwpj: {
+    address: 'akash1chnhnu50f6hv98xl0m7xm95vel457ysp32uwpj',
+    name: 'Unknown (chnhnu...)',
+    reason: 'Consistently fails to accept manifest submissions (send-manifest error)',
+  },
+  akash1swxj75e8tz2nuepnqdas787h3eqfmhyh8lak8g: {
+    address: 'akash1swxj75e8tz2nuepnqdas787h3eqfmhyh8lak8g',
+    name: 'DataNode UK',
+    reason: 'Extremely slow ingress setup - URIs not available for 5+ minutes after deployment',
   },
 }
 
