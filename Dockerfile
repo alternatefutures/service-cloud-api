@@ -2,7 +2,7 @@
 # Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies
-FROM node:22-slim AS deps
+FROM node:25-slim AS deps
 WORKDIR /app/service-cloud-api
 
 # Install system dependencies
@@ -20,7 +20,7 @@ COPY service-cloud-api/prisma ./prisma/
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:22-slim AS builder
+FROM node:25-slim AS builder
 WORKDIR /app/service-cloud-api
 
 # Install system dependencies
