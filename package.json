@@ -59,7 +59,7 @@
     "pdfkit": "^0.17.2",
     "stripe": "^19.3.1",
     "svg-to-pdfkit": "^0.1.8",
-    "ws": "^8.18.3"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.1.0",
