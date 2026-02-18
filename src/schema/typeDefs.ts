@@ -108,6 +108,8 @@ export const typeDefs = /* GraphQL */ `
     slug: String!
     projectId: ID!
     templateId: ID
+    dockerImage: String
+    containerPort: Int
     createdByUserId: ID
     createdAt: Date!
     updatedAt: Date!

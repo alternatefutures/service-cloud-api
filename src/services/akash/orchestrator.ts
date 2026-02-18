@@ -732,6 +732,9 @@ export class AkashOrchestrator {
       type: ServiceType
       name: string
       slug: string
+      templateId?: string | null
+      containerPort?: number | null
+      dockerImage?: string | null
       site?: { id: string } | null
       afFunction?: { id: string; sourceCode: string | null } | null
     }
@@ -745,20 +748,41 @@ export class AkashOrchestrator {
 
     const { getTemplateById, generateSDLFromTemplate } = await import('../../templates/index.js')
 
+    // Priority 1: Use the service's own templateId (set when deployed from a template).
+    // This ensures redeployments use the same template config (ports, env, resources)
+    // that was used for the initial deployment.
+    if (service.templateId) {
+      const template = getTemplateById(service.templateId)
+      if (template) {
+        console.log(`[AkashOrchestrator] Generating SDL from template '${service.templateId}' for service '${service.slug}'`)
+        return generateSDLFromTemplate(template, { serviceName: service.slug })
+      }
+      console.warn(`[AkashOrchestrator] Service '${service.slug}' has templateId '${service.templateId}' but template not found. Falling back.`)
+    }
+
+    // Priority 2: Custom Docker image with explicit containerPort
+    if (service.dockerImage) {
+      const port = service.containerPort || 80
+      console.log(`[AkashOrchestrator] Generating SDL for custom Docker image '${service.dockerImage}' (port ${port}) for service '${service.slug}'`)
+      return this.generateCustomDockerSDL(service.slug, service.dockerImage, port)
+    }
+
+    // Priority 3: Default type-to-template mapping (for services created without a template)
     const typeToTemplate: Record<string, string> = {
       SITE: 'nginx-site',
       VM: 'node-ws-gameserver',
       DATABASE: 'postgres',
     }
 
-    const templateId = typeToTemplate[service.type]
-    if (templateId) {
-      const template = getTemplateById(templateId)
+    const fallbackTemplateId = typeToTemplate[service.type]
+    if (fallbackTemplateId) {
+      const template = getTemplateById(fallbackTemplateId)
       if (template) {
         return generateSDLFromTemplate(template, { serviceName: service.slug })
       }
     }
 
+    // Priority 4: Hardcoded fallback SDLs
     switch (service.type) {
       case 'SITE':
         return this.generateSiteSDL(service.slug)
@@ -769,6 +793,51 @@ export class AkashOrchestrator {
       default:
         throw new Error(`SDL generation not supported for service type: ${service.type}`)
     }
+  }
+
+  /**
+   * Generate SDL for a custom Docker image with a specific container port.
+   */
+  private generateCustomDockerSDL(name: string, image: string, containerPort: number): string {
+    return `---
+version: "2.0"
+
+services:
+  ${name}:
+    image: ${image}
+    expose:
+      - port: ${containerPort}
+        as: 80
+        to:
+          - global: true
+
+profiles:
+  compute:
+    ${name}:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          size: 1Gi
+
+  placement:
+    dcloud:
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      pricing:
+        ${name}:
+          denom: uakt
+          amount: 1000
+
+deployment:
+  ${name}:
+    dcloud:
+      profile: ${name}
+      count: 1
+`
   }
 
   /**

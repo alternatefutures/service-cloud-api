@@ -10,9 +10,7 @@ export const milaidyGateway: Template = {
   tags: ['ai', 'assistant', 'agent', 'elizaos', 'gateway', 'websocket'],
   icon: 'https://raw.githubusercontent.com/milady-ai/milaidy/develop/apps/landing/apple-touch-icon.png',
   repoUrl: 'https://github.com/milady-ai/milaidy',
-  // Wrapper image for Akash: fixes persistent-volume permissions at boot
-  // (chown /home/node/.milaidy then drop to node user).
-  dockerImage: 'ghcr.io/alternatefutures/milaidy-akash:v6',
+  dockerImage: 'ghcr.io/alternatefutures/milaidy-akash:v7',
   serviceType: 'VM',
   envVars: [
     {
@@ -43,15 +41,9 @@ export const milaidyGateway: Template = {
       required: true,
     },
     {
-      key: 'MILAIDY_API_BIND',
-      default: '0.0.0.0',
-      description: 'Address to bind the API server to (must be 0.0.0.0 for Akash)',
-      required: true,
-    },
-    {
       key: 'MILAIDY_PORT',
       default: '2138',
-      description: 'Port for the Milaidy API server',
+      description: 'Port for the Milaidy dashboard + API server',
       required: true,
     },
   ],
@@ -72,7 +64,9 @@ export const milaidyGateway: Template = {
     },
   ],
   pricingUakt: 2000,
-  // NOTE: no startCommand here — the wrapper Dockerfile CMD handles it.
-  // Using startCommand would generate an SDL `command:` block that overrides
-  // the Docker ENTRYPOINT, bypassing the chown/privilege-drop entrypoint.
+  akash: {
+    chownPaths: ['/home/node/.milaidy'],
+    runUser: 'node',
+    runUid: 1000,
+  },
 }

@@ -111,7 +111,15 @@ function buildEnvLines(
     }
   }
 
-  // Apply user overrides
+  // Inject akash-base entrypoint env vars from template.akash config
+  if (template.akash) {
+    const a = template.akash
+    if (a.chownPaths?.length) merged['AKASH_CHOWN_PATHS'] = a.chownPaths.join(':')
+    if (a.runUser) merged['AKASH_RUN_USER'] = a.runUser
+    if (a.runUid != null) merged['AKASH_RUN_UID'] = String(a.runUid)
+  }
+
+  // Apply user overrides (last, so they win)
   if (overrides) {
     for (const [key, value] of Object.entries(overrides)) {
       merged[key] = value

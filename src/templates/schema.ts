@@ -95,6 +95,17 @@ export interface Template {
   pricingUakt?: number
   /** Start command override (if different from Dockerfile CMD) */
   startCommand?: string
+  /** Akash-specific runtime config injected as env vars by the SDL generator */
+  akash?: TemplateAkashConfig
+}
+
+export interface TemplateAkashConfig {
+  /** Paths to chown at boot (so non-root user can write persistent volumes) */
+  chownPaths?: string[]
+  /** Username to drop privileges to after chown */
+  runUser?: string
+  /** UID of the run user (for chown) */
+  runUid?: number
 }
 
 /**

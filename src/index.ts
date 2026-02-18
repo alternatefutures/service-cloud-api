@@ -28,6 +28,11 @@ import helmet from 'helmet'
 import { initInfisical } from './config/infisical.js'
 import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
 import { AkashOrchestrator } from './services/akash/orchestrator.js'
+import {
+  registerProvider,
+  createAkashProvider,
+  createPhalaProvider,
+} from './services/providers/index.js'
 
 // Initialize Infisical (or dotenv fallback) before anything else
 await initInfisical()
@@ -233,6 +238,11 @@ server.listen(port, () => {
   // Start SSL renewal job
   startSslRenewalJob()
   console.log(`🔒 SSL renewal job started (runs daily at 2 AM)`)
+
+  // Register deployment providers
+  registerProvider(createAkashProvider(prisma))
+  registerProvider(createPhalaProvider(prisma))
+  console.log('🔌 Deployment providers registered')
 
   // Resume any interrupted URI backfills from previous pod lifecycle
   const orchestrator = new AkashOrchestrator(prisma)

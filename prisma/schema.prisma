@@ -251,6 +251,8 @@ model Service {
   slug            String
   projectId       String
   templateId      String?
+  dockerImage     String?     // Custom Docker image (e.g. ghcr.io/org/app:v1)
+  containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
   createdByUserId String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt

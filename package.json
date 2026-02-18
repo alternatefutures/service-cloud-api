@@ -31,8 +31,11 @@
     "prepare": "node -e \"try{require('husky')}catch{}\""
   },
   "dependencies": {
+    "@akashnetwork/chain-sdk": "1.0.0-alpha.0",
     "@ardrive/turbo-sdk": "^1.33.0",
     "@clickhouse/client": "^1.8.1",
+    "@cosmjs/proto-signing": "^0.38.1",
+    "@cosmjs/stargate": "^0.38.1",
     "@graphql-tools/schema": "^10.0.29",
     "@infisical/sdk": "^4.0.6",
     "@lighthouse-web3/sdk": "^0.4.3",
