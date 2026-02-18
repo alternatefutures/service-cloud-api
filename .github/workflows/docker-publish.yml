@@ -1,14 +1,10 @@
-name: Build and Push Docker Image to GHCR
+name: "[DEPRECATED] Build and Push Docker Image to GHCR"
+# DEPRECATED: Replaced by deploy-aws.yml which builds, pushes, AND deploys to K3s.
+# This workflow had broken path filters (referenced service-cloud-api/ prefix that
+# doesn't exist in the repo) and was missing --platform linux/amd64.
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'service-cloud-api/src/**'
-      - 'service-cloud-api/prisma/**'
-      - 'service-cloud-api/package.json'
-      - 'service-cloud-api/Dockerfile'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch: # Manual trigger only, auto-trigger disabled
 
 env:
   REGISTRY: ghcr.io
