@@ -103,7 +103,8 @@ export class AkashOrchestrator {
    * Get the Akash wallet address
    */
   async getAccountAddress(): Promise<string> {
-    const output = runAkash(['keys', 'show', 'default', '-a'], 15_000)
+    const keyName = process.env.AKASH_KEY_NAME || 'default'
+    const output = runAkash(['keys', 'show', keyName, '-a'], 15_000)
     return output.trim()
   }
 
