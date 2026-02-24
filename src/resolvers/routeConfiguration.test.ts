@@ -12,6 +12,9 @@ describe('Route Configuration Resolvers', () => {
     mockTxAFFunctionCreate = vi.fn()
 
     const mockTx = {
+      project: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'project-123', slug: 'test-project' }),
+      },
       service: {
         create: vi.fn().mockResolvedValue({ id: 'service-1' }),
       },

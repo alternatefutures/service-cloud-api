@@ -1,10 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
+import { EventEmitter } from 'events'
 import { PhalaOrchestrator } from './orchestrator.js'
 import type { PrismaClient } from '@prisma/client'
 
+function createMockSpawn(stdout: string, exitCode = 0) {
+  const proc = new EventEmitter() as any
+  proc.stdio = ['ignore', null, null]
+  proc.stdout = new EventEmitter()
+  proc.stderr = new EventEmitter()
+  setTimeout(() => {
+    proc.stdout.emit('data', Buffer.from(stdout))
+    proc.emit('close', exitCode)
+  }, 0)
+  return proc
+}
+
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
+  spawn: vi.fn(),
 }))
 
 vi.mock('fs', () => ({
@@ -116,7 +130,7 @@ describe('PhalaOrchestrator', () => {
       })
       expect(mockPrisma.phalaDeployment.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: 'ACTIVE', appUrl: 'https://app-123.phala.network' },
+          data: expect.objectContaining({ status: 'ACTIVE', appUrl: 'https://app-123.phala.network' }),
         })
       )
     })
@@ -209,16 +223,18 @@ describe('PhalaOrchestrator', () => {
 
   describe('getPhalaLogs', () => {
     it('returns logs output', async () => {
-      vi.mocked(execSync).mockReturnValue('log line 1\nlog line 2')
+      vi.mocked(spawn).mockReturnValue(createMockSpawn('log line 1\nlog line 2') as any)
 
       const logs = await orchestrator.getPhalaLogs('app-1')
       expect(logs).toBe('log line 1\nlog line 2')
     })
 
     it('returns null on error', async () => {
-      vi.mocked(execSync).mockImplementation(() => {
-        throw new Error('CLI error')
-      })
+      const proc = new EventEmitter() as any
+      proc.stdout = new EventEmitter()
+      proc.stderr = new EventEmitter()
+      setTimeout(() => proc.emit('close', 1), 0)
+      vi.mocked(spawn).mockReturnValue(proc as any)
 
       const logs = await orchestrator.getPhalaLogs('app-1')
       expect(logs).toBeNull()

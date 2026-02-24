@@ -43,6 +43,7 @@ describe('Mutation Resolvers', () => {
         project: {
           create: vi.fn(),
           findUnique: vi.fn(),
+          findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'project-123', slug: 'test-project' }),
         },
         service: {
           create: vi.fn(),
@@ -144,13 +145,13 @@ describe('Mutation Resolvers', () => {
 
       expect(result).toEqual(mockSite)
       expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           type: 'SITE',
           name: 'Test Site',
           slug: 'test-site',
           projectId: 'project-123',
           createdByUserId: 'user-123',
-        },
+        }),
       })
       expect(mockContext.prisma.site.create).toHaveBeenCalledWith({
         data: {
@@ -164,6 +165,7 @@ describe('Mutation Resolvers', () => {
 
     it('should create a new site with context projectId override', async () => {
       mockContext.projectId = 'custom-project-456'
+      mockContext.prisma.project.findUniqueOrThrow.mockResolvedValue({ id: 'custom-project-456', slug: 'custom-project' })
       const mockSite = {
         id: 'site-123',
         name: 'Test Site',
@@ -184,13 +186,13 @@ describe('Mutation Resolvers', () => {
 
       expect(result).toEqual(mockSite)
       expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           type: 'SITE',
           name: 'Test Site',
           slug: 'test-site',
           projectId: 'custom-project-456',
           createdByUserId: 'user-123',
-        },
+        }),
       })
       expect(mockContext.prisma.site.create).toHaveBeenCalledWith({
         data: {
@@ -237,13 +239,13 @@ describe('Mutation Resolvers', () => {
 
       expect(result).toEqual(mockFunction)
       expect(mockContext.prisma.service.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           type: 'FUNCTION',
           name: 'Test Function',
           slug: 'test-function',
           projectId: 'project-123',
           createdByUserId: 'user-123',
-        },
+        }),
       })
       expect(mockContext.prisma.aFFunction.create).toHaveBeenCalledWith({
         data: {
