@@ -567,12 +567,25 @@ jobs:
           npm install -g tsx prisma
           npm install
 
+      # ─── Apply Cloud API Migrations ─────────────────────────────────────────
+      # The production Docker image does not include the prisma CLI or migration
+      # files (kept lean). Migrations are applied here from the CI runner which
+      # has the full repo checkout, prisma CLI, and DATABASE_URL secret.
+      # `prisma migrate deploy` is safe: it only applies pending forward
+      # migrations and never modifies the schema file or generates new ones.
+      - name: Apply database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          echo "=== Applying Cloud API Migrations ==="
+          npx prisma migrate deploy --schema prisma/schema.prisma
+          echo "✓ Migrations applied successfully"
+
       # ─── Database Schema Safety ──────────────────────────────────────────────
-      # After a full redeploy, the cloud API container's entrypoint runs prisma
-      # migrate deploy. This step verifies that auth tables (from the separate
-      # service-auth schema) still exist in the shared database, and re-pushes
-      # + seeds them if they're missing. This prevents the auth service from
-      # breaking due to missing tables after cloud API redeployment.
+      # After migrations, verify that auth tables (from the separate
+      # service-auth schema) still exist in the shared database, and warn if
+      # they're missing. This prevents the auth service from breaking due to
+      # schema drift after cloud API migrations.
       # See: INCIDENTS.md (canonical runbook) for shared-DB safety rules and recovery steps.
       - name: Verify and restore auth schema if needed
         continue-on-error: true
