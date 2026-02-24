@@ -97,6 +97,12 @@ export interface Template {
   startCommand?: string
   /** Akash-specific runtime config injected as env vars by the SDL generator */
   akash?: TemplateAkashConfig
+  /**
+   * Connection string templates for database-type services.
+   * Keys become env var names on services that link to this one.
+   * Values support {{host}}, {{port}}, {{env.KEY}} placeholders.
+   */
+  connectionStrings?: Record<string, string>
 }
 
 export interface TemplateAkashConfig {

@@ -5,7 +5,6 @@
 
 export { OpenProviderClient } from './openProviderClient.js'
 export { DNSManager } from './dnsManager.js'
-export { AkashDNSSync } from './akashDnsSync.js'
 export type {
   DNSRecord,
   OpenProviderConfig,

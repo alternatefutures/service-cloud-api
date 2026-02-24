@@ -37,4 +37,9 @@ export const redis: Template = {
   ],
   pricingUakt: 500,
   startCommand: 'redis-server',
+  connectionStrings: {
+    REDIS_URL: 'redis://{{host}}:{{port}}',
+    REDIS_HOST: '{{host}}',
+    REDIS_PORT: '{{port}}',
+  },
 }

@@ -7,6 +7,7 @@
 
 import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
+import { generateInternalHostname } from '../utils/internalHostname.js'
 import {
   getAllTemplates,
   getTemplateById,
@@ -80,8 +81,39 @@ export const templateMutations = {
         type: template.serviceType,
         projectId: input.projectId,
         templateId: input.templateId,
+        internalHostname: generateInternalHostname(slug, project.slug),
       },
     })
+
+    // ── Persist template default env vars and ports ──────────
+    if (template.envVars?.length) {
+      await context.prisma.$transaction(
+        template.envVars.map((ev: any) =>
+          context.prisma.serviceEnvVar.create({
+            data: {
+              serviceId: service.id,
+              key: ev.key,
+              value: (input.envOverrides ?? []).find((o: any) => o.key === ev.key)?.value ?? ev.default ?? '',
+              secret: ev.secret ?? false,
+            },
+          })
+        )
+      )
+    }
+    if (template.ports?.length) {
+      await context.prisma.$transaction(
+        template.ports.map((p: any) =>
+          context.prisma.servicePort.create({
+            data: {
+              serviceId: service.id,
+              containerPort: p.port,
+              publicPort: p.global ? p.as : null,
+              protocol: 'TCP',
+            },
+          })
+        )
+      )
+    }
 
     // ── Convert env overrides from array to Record ───────────
     const envOverrides: Record<string, string> = {}
@@ -179,8 +211,39 @@ export const templateMutations = {
         type: template.serviceType,
         projectId: input.projectId,
         templateId: input.templateId,
+        internalHostname: generateInternalHostname(slug, project.slug),
       },
     })
+
+    // Persist template default env vars and ports
+    if (template.envVars?.length) {
+      await context.prisma.$transaction(
+        template.envVars.map((ev: any) =>
+          context.prisma.serviceEnvVar.create({
+            data: {
+              serviceId: service.id,
+              key: ev.key,
+              value: (input.envOverrides ?? []).find((o: any) => o.key === ev.key)?.value ?? ev.default ?? '',
+              secret: ev.secret ?? false,
+            },
+          })
+        )
+      )
+    }
+    if (template.ports?.length) {
+      await context.prisma.$transaction(
+        template.ports.map((p: any) =>
+          context.prisma.servicePort.create({
+            data: {
+              serviceId: service.id,
+              containerPort: p.port,
+              publicPort: p.global ? p.as : null,
+              protocol: 'TCP',
+            },
+          })
+        )
+      )
+    }
 
     const envOverrides: Record<string, string> = {}
     if (input.envOverrides) {

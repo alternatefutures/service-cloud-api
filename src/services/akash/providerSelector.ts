@@ -94,6 +94,11 @@ const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason:
     name: 'DataNode UK',
     reason: 'Extremely slow ingress setup - URIs not available for 5+ minutes after deployment',
   },
+  akash1sjwuwre4qprcaa34f6324yz7m8nn0awvc75gp5: {
+    address: 'akash1sjwuwre4qprcaa34f6324yz7m8nn0awvc75gp5',
+    name: 'quanglong.org',
+    reason: 'Repeated kube: lease not found after manifest; 502 Bad Gateway on ingress',
+  },
 }
 
 /**

@@ -8,7 +8,7 @@
  * Never log the API key.
  */
 
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -37,6 +37,46 @@ function runPhala(args: string[], timeout = PHALA_CLI_TIMEOUT_MS): string {
     env,
     timeout,
     maxBuffer: 10 * 1024 * 1024,
+  })
+}
+
+/**
+ * Non-blocking alternative to runPhala using child_process.spawn.
+ * Used for log fetching so the event loop isn't blocked during concurrent requests.
+ */
+function runPhalaAsync(args: string[], timeout = PHALA_CLI_TIMEOUT_MS): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const env = getPhalaEnv()
+    const child = spawn('npx', ['phala', ...args], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      reject(new Error(`Phala CLI timed out after ${timeout}ms`))
+    }, timeout)
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) {
+        resolve(stdout)
+      } else {
+        reject(new Error(`Phala CLI exited with code ${code}: ${stderr.slice(0, 500)}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
   })
 }
 
@@ -148,7 +188,38 @@ export class PhalaOrchestrator {
 
       writeFileSync(composePath, options.composeContent)
 
-      const envVars = options.env || {}
+      // Merge passed env with persisted env vars (persisted wins)
+      const envVars = { ...(options.env || {}) }
+      try {
+        const { buildServiceMap, resolveEnvVars } = await import('../../utils/envInterpolation.js')
+        const persistedVars = await this.prisma.serviceEnvVar.findMany({
+          where: { serviceId },
+        })
+        if (persistedVars.length > 0) {
+          const siblings = await this.prisma.service.findMany({
+            where: { projectId: service.projectId },
+            include: { envVars: true, ports: true },
+          })
+          const serviceMap = buildServiceMap(
+            siblings.map((s: any) => ({
+              slug: s.slug,
+              internalHostname: s.internalHostname,
+              envVars: s.envVars.map((e: any) => ({ key: e.key, value: e.value })),
+              ports: s.ports.map((p: any) => ({ containerPort: p.containerPort, publicPort: p.publicPort })),
+            })),
+          )
+          const resolved = resolveEnvVars(
+            persistedVars.map((v: any) => ({ key: v.key, value: v.value })),
+            serviceMap,
+          )
+          for (const { key, value } of resolved) {
+            envVars[key] = value
+          }
+        }
+      } catch (err) {
+        console.warn('[PhalaOrchestrator] Failed to resolve persisted env vars, proceeding with template env:', err)
+      }
+
       const envLines = Object.entries(envVars)
         .map(([k, v]) => `${k}=${v}`)
         .join('\n')
@@ -254,7 +325,7 @@ export class PhalaOrchestrator {
     try {
       const args = ['cvms', 'logs', appId]
       if (tail) args.push('--tail', String(tail))
-      return runPhala(args, 15_000)
+      return await runPhalaAsync(args, 15_000)
     } catch {
       return null
     }

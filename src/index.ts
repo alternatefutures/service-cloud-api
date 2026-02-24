@@ -64,7 +64,7 @@ const schema = makeExecutableSchema({
 const MAX_DEPTH = 10
 // SDK-generated queries (notably Sites list) are fairly "wide" and can
 // exceed conservative complexity limits in development.
-const MAX_COMPLEXITY = 5000
+const MAX_COMPLEXITY = 15000
 
 // Custom plugin to add validation rules for depth and complexity limits
 const useValidationRules = (): Plugin => {

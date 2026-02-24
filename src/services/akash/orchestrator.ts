@@ -8,7 +8,7 @@
  * Cert: AKASH_CERT_JSON env var for mTLS with providers.
  */
 
-import { execSync } from 'child_process'
+import { execSync, spawn } from 'child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -70,6 +70,45 @@ function runProviderServices(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): st
     env,
     timeout,
     maxBuffer: 10 * 1024 * 1024,
+  })
+}
+
+/**
+ * Non-blocking provider-services call via child_process.spawn.
+ * Used for log retrieval so the event loop isn't blocked during concurrent requests.
+ */
+function runProviderServicesAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const env = getAkashEnv()
+    const child = spawn('provider-services', args, {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      reject(new Error(`provider-services timed out after ${timeout}ms`))
+    }, timeout)
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) {
+        resolve(stdout)
+      } else {
+        reject(new Error(`provider-services exited with code ${code}: ${stderr.slice(0, 500)}`))
+      }
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(err)
+    })
   })
 }
 
@@ -150,10 +189,22 @@ export class AkashOrchestrator {
 
     // Fallback: check raw_log or txhash and query
     if (!dseq && result.txhash) {
-      // Wait for tx to be included in a block
-      await new Promise(r => setTimeout(r, 6000))
-      const txOutput = runAkash(['query', 'tx', result.txhash as string, '-o', 'json'], 15_000)
-      const txResult = extractJson(txOutput) as Record<string, unknown>
+      // Retry with backoff — block time is ~6s but RPC indexer can lag
+      let txResult: Record<string, unknown> | null = null
+      const delays = [6000, 4000, 4000, 6000] // total ~20s max
+      for (const delay of delays) {
+        await new Promise(r => setTimeout(r, delay))
+        try {
+          const txOutput = runAkash(['query', 'tx', result.txhash as string, '-o', 'json'], 15_000)
+          txResult = extractJson(txOutput) as Record<string, unknown>
+          break
+        } catch (err) {
+          console.warn(`[AkashOrchestrator] tx query attempt failed, retrying...`, (err as Error).message?.slice(0, 120))
+        }
+      }
+      if (!txResult) {
+        throw new Error(`Transaction ${result.txhash} not found after retries — RPC may be lagging`)
+      }
 
       // Try logs first (older CLI versions)
       const txLogs = txResult.logs as Array<{ events?: Array<{ type: string; attributes?: Array<{ key: string; value: string }> }> }> | undefined
@@ -406,13 +457,16 @@ export class AkashOrchestrator {
   }
 
   /**
-   * Get deployment logs
+   * Get deployment logs via async CLI spawn (non-blocking).
+   * Falls back to mTLS REST if the CLI binary is unavailable.
    */
   async getLogs(
     dseq: number,
     provider: string,
     service?: string,
-    tail?: number
+    tail?: number,
+    _gseq = 1,
+    _oseq = 1,
   ): Promise<string> {
     const args = [
       'lease-logs',
@@ -423,9 +477,11 @@ export class AkashOrchestrator {
     if (tail) args.push('--tail', String(tail))
 
     try {
-      return runProviderServices(args, 15_000)
-    } catch {
-      return ''
+      return await runProviderServicesAsync(args, 45_000)
+    } catch (err) {
+      const msg = (err as Error).message?.slice(0, 300) ?? 'unknown error'
+      console.warn(`[AkashOrchestrator] getLogs failed for dseq=${dseq}:`, msg)
+      throw new Error(`Failed to fetch logs for dseq=${dseq}: ${msg}`)
     }
   }
 
@@ -490,8 +546,10 @@ export class AkashOrchestrator {
       }
     }
 
-    // Write SDL to temp file
-    const sdlContent = options.sdlContent || await this.generateSDLForService(service)
+    // Fetch persisted env vars and resolve interpolations
+    let sdlContent = options.sdlContent || await this.generateSDLForService(service)
+    sdlContent = await this.injectPersistedEnvVars(service.id, service.projectId, sdlContent)
+
     const workDir = mkdtempSync(join(tmpdir(), 'akash-deploy-'))
     const sdlPath = join(workDir, 'deploy.yaml')
     writeFileSync(sdlPath, sdlContent)
@@ -650,9 +708,9 @@ export class AkashOrchestrator {
         },
       })
 
-      // Build the public invoke URL via the subdomain proxy
       const baseDomain = process.env.PROXY_BASE_DOMAIN || 'alternatefutures.ai'
-      const invokeUrl = `https://${service.slug}-app.${baseDomain}`
+      const protocol = baseDomain.includes('localhost') ? 'http' : 'https'
+      const invokeUrl = `${protocol}://${service.slug}-app.${baseDomain}`
 
       if (service.type === 'FUNCTION' && service.afFunction) {
         await this.prisma.aFFunction.update({
@@ -797,6 +855,87 @@ export class AkashOrchestrator {
   }
 
   /**
+   * Fetch persisted env vars for a service, resolve `{{services.*}}`
+   * interpolations using sibling services, then inject them into the SDL.
+   * If the SDL already has env vars, the persisted ones are merged (persisted wins).
+   */
+  private async injectPersistedEnvVars(
+    serviceId: string,
+    projectId: string,
+    sdlContent: string,
+  ): Promise<string> {
+    const { buildServiceMap, resolveEnvVars } = await import('../../utils/envInterpolation.js')
+
+    const persistedVars = await this.prisma.serviceEnvVar.findMany({
+      where: { serviceId },
+    })
+    if (persistedVars.length === 0) return sdlContent
+
+    // Fetch sibling services for interpolation
+    const siblings = await this.prisma.service.findMany({
+      where: { projectId },
+      include: {
+        envVars: true,
+        ports: true,
+      },
+    })
+    const serviceMap = buildServiceMap(
+      siblings.map((s: any) => ({
+        slug: s.slug,
+        internalHostname: s.internalHostname,
+        envVars: s.envVars.map((e: any) => ({ key: e.key, value: e.value })),
+        ports: s.ports.map((p: any) => ({ containerPort: p.containerPort, publicPort: p.publicPort })),
+      })),
+    )
+
+    const resolved = resolveEnvVars(
+      persistedVars.map((v: any) => ({ key: v.key, value: v.value })),
+      serviceMap,
+    )
+
+    // Merge into SDL: find the `env:` block or inject one
+    const envLines = resolved.map(({ key, value }) => `      - ${key}=${value}`).join('\n')
+
+    // If the SDL already has an env block, append to it
+    const envBlockRegex = /(    env:\n)((?:      - .+\n)*)/
+    if (envBlockRegex.test(sdlContent)) {
+      return sdlContent.replace(envBlockRegex, (match, header, existingLines) => {
+        // Parse existing keys to avoid duplicates (persisted wins)
+        const existingKeys = new Set(
+          existingLines.split('\n')
+            .filter((l: string) => l.trim().startsWith('- '))
+            .map((l: string) => l.trim().replace(/^- /, '').split('=')[0]),
+        )
+        const newLines = resolved
+          .filter(({ key }) => !existingKeys.has(key))
+          .map(({ key, value }) => `      - ${key}=${value}\n`)
+          .join('')
+        // Override existing keys with persisted values
+        let updatedExisting = existingLines
+        for (const { key, value } of resolved) {
+          if (existingKeys.has(key)) {
+            const keyRegex = new RegExp(`(      - ${key})=.*\n`)
+            updatedExisting = updatedExisting.replace(keyRegex, `$1=${value}\n`)
+          }
+        }
+        return header + updatedExisting + newLines
+      })
+    }
+
+    // No env block — inject before `expose:`
+    const exposeIdx = sdlContent.indexOf('    expose:')
+    if (exposeIdx !== -1) {
+      return (
+        sdlContent.slice(0, exposeIdx) +
+        `    env:\n${envLines}\n` +
+        sdlContent.slice(exposeIdx)
+      )
+    }
+
+    return sdlContent
+  }
+
+  /**
    * Generate SDL for a custom Docker image with a specific container port.
    */
   private generateCustomDockerSDL(name: string, image: string, containerPort: number): string {
@@ -857,6 +996,19 @@ deployment:
       ? `bun add ${packages.join(' ')}`
       : 'echo "No dependencies to install"'
 
+    const script = [
+      'set -e',
+      "echo 'Deploying function...'",
+      'mkdir -p /app',
+      'cd /app',
+      'bun init -y',
+      `echo '${base64Code}' | base64 -d > /app/index.ts`,
+      `echo 'Installing dependencies: ${packages.join(', ') || 'none'}'`,
+      `${installCmd} || { echo 'ERROR: bun add failed'; exit 1; }`,
+      "echo 'Starting function on port 3000...'",
+      'exec bun run index.ts',
+    ].join(' && ')
+
     return `---
 version: "2.0"
 
@@ -865,19 +1017,10 @@ services:
     image: oven/bun:1.1-alpine
     env:
       - PORT=3000
-    command:
+    args:
       - sh
       - -c
-      - |
-        echo 'Deploying function...'
-        mkdir -p /app
-        cd /app
-        bun init -y
-        echo '${base64Code}' | base64 -d > /app/index.ts
-        echo 'Installing dependencies: ${packages.join(', ') || 'none'}'
-        ${installCmd}
-        echo 'Starting function...'
-        bun run index.ts
+      - "${script}"
     expose:
       - port: 3000
         as: 80

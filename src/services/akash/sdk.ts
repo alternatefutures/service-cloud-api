@@ -311,3 +311,72 @@ export async function queryLeaseStatusHTTPS(
     req.end()
   })
 }
+
+/**
+ * Fetch lease logs from an Akash provider via mTLS HTTPS GET.
+ * Replaces `provider-services lease-logs` CLI call — non-blocking, scalable.
+ *
+ * Endpoint: GET /lease/{dseq}/{gseq}/{oseq}/logs?follow=false&tail=N&service=name
+ * With follow=true the response is chunked/streaming (for future subscription support).
+ */
+export async function queryLeaseLogsHTTPS(
+  dseq: number,
+  gseq: number,
+  oseq: number,
+  provider: string,
+  certificate: CertificatePem,
+  chainSDK: ChainNodeSDK,
+  opts?: { service?: string; tail?: number; follow?: boolean },
+): Promise<string> {
+  const providerRes = await chainSDK.akash.provider.v1beta4.getProvider({ owner: provider })
+  if (!providerRes.provider) throw new Error(`Provider not found: ${provider}`)
+
+  const uri = new URL(providerRes.provider.hostUri)
+  const port = uri.port ? parseInt(uri.port, 10) : 8443
+
+  const params = new URLSearchParams()
+  params.set('follow', String(opts?.follow ?? false))
+  if (opts?.tail) params.set('tail', String(opts.tail))
+  if (opts?.service) params.set('service', opts.service)
+
+  const agent = new https.Agent({
+    cert: certificate.cert,
+    key: certificate.privateKey,
+    rejectUnauthorized: false,
+    servername: 'localhost',
+  })
+
+  return new Promise((resolve, reject) => {
+    const timeoutMs = opts?.follow ? 0 : 30_000
+    const req = https.request(
+      {
+        hostname: uri.hostname,
+        port,
+        path: `/lease/${dseq}/${gseq}/${oseq}/logs?${params}`,
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        agent,
+        timeout: timeoutMs || undefined,
+      },
+      (res) => {
+        let data = ''
+        res.on('data', (chunk) => { data += chunk })
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`Lease logs query failed: HTTP ${res.statusCode} — ${data.slice(0, 500)}`))
+          } else {
+            resolve(data)
+          }
+        })
+        res.on('error', reject)
+      },
+    )
+    req.on('error', reject)
+    if (timeoutMs) {
+      req.on('timeout', () => {
+        req.destroy(new Error(`Lease logs request timed out after ${timeoutMs}ms`))
+      })
+    }
+    req.end()
+  })
+}

@@ -168,6 +168,8 @@ export class AkashProvider implements DeploymentProvider {
       deployment.provider,
       opts?.service,
       opts?.tail,
+      deployment.gseq,
+      deployment.oseq,
     )
   }
 

@@ -253,6 +253,7 @@ model Service {
   templateId      String?
   dockerImage     String?     // Custom Docker image (e.g. ghcr.io/org/app:v1)
   containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
+  internalHostname String?    // Deterministic hostname: {slug}.{project-slug}.internal
   createdByUserId String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
@@ -268,9 +269,77 @@ model Service {
   akashDeployments AkashDeployment[]
   phalaDeployments PhalaDeployment[]
 
+  // Inter-service communication
+  envVars          ServiceEnvVar[]
+  ports            ServicePort[]
+  linksFrom        ServiceLink[]  @relation("ServiceLinksFrom")
+  linksTo          ServiceLink[]  @relation("ServiceLinksTo")
+
   @@unique([type, slug])
   @@index([projectId])
   @@index([createdByUserId])
+}
+
+// ============================================
+// SERVICE ENVIRONMENT VARIABLES
+// ============================================
+
+model ServiceEnvVar {
+  id        String   @id @default(cuid())
+  serviceId String
+  key       String
+  value     String   @db.Text
+  secret    Boolean  @default(false)
+  source    String?  // null = user-set, "link:<serviceId>" = auto-generated from a service link
+
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serviceId, key])
+  @@index([serviceId])
+}
+
+// ============================================
+// SERVICE PORT CONFIGURATION
+// ============================================
+
+model ServicePort {
+  id            String  @id @default(cuid())
+  serviceId     String
+  containerPort Int
+  publicPort    Int?    // null = internal only
+  protocol      String  @default("TCP") // TCP | UDP | HTTP
+
+  service       Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([serviceId, containerPort])
+  @@index([serviceId])
+}
+
+// ============================================
+// SERVICE LINKS (inter-service connections)
+// ============================================
+
+model ServiceLink {
+  id              String   @id @default(cuid())
+  sourceServiceId String   // The service that receives injected env vars
+  targetServiceId String   // The service being connected to (e.g. postgres)
+  alias           String?  // Optional alias for variable interpolation
+
+  sourceService   Service  @relation("ServiceLinksFrom", fields: [sourceServiceId], references: [id], onDelete: Cascade)
+  targetService   Service  @relation("ServiceLinksTo", fields: [targetServiceId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([sourceServiceId, targetServiceId])
+  @@index([sourceServiceId])
+  @@index([targetServiceId])
 }
 
 // ============================================

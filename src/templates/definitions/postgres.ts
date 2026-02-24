@@ -55,4 +55,12 @@ export const postgres: Template = {
     },
   ],
   pricingUakt: 1500,
+  connectionStrings: {
+    DATABASE_URL: 'postgresql://{{env.POSTGRES_USER}}:{{env.POSTGRES_PASSWORD}}@{{host}}:{{port}}/{{env.POSTGRES_DB}}',
+    PGHOST: '{{host}}',
+    PGPORT: '{{port}}',
+    PGUSER: '{{env.POSTGRES_USER}}',
+    PGPASSWORD: '{{env.POSTGRES_PASSWORD}}',
+    PGDATABASE: '{{env.POSTGRES_DB}}',
+  },
 }

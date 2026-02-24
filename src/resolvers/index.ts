@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
+import { generateInternalHostname } from '../utils/internalHostname.js'
 import { generateInvokeUrl } from '../utils/invokeUrl.js'
 import { validateRoutes } from '../utils/routeValidation.js'
 import { DeploymentService } from '../services/deployment/index.js'
@@ -24,6 +25,12 @@ import {
   templateMutations,
 } from './templates.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
+import {
+  serviceConnectivityQueries,
+  serviceConnectivityMutations,
+  serviceConnectivityFieldResolvers,
+} from './serviceConnectivity.js'
+import { logsQueries } from './logs.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
@@ -1033,6 +1040,12 @@ export const resolvers = {
     ...akashQueries,
     ...phalaQueries,
 
+    // Service container logs
+    ...logsQueries,
+
+    // Service connectivity (env vars, ports, links)
+    ...serviceConnectivityQueries,
+
     // Storage tracking queries (billing is now in service-auth)
     pinnedContent: async (
       _: unknown,
@@ -1228,6 +1241,7 @@ export const resolvers = {
       const slug = generateSlug(data.name)
 
       return context.prisma.$transaction(async tx => {
+        const project = await tx.project.findUniqueOrThrow({ where: { id: targetProjectId } })
         const service = await tx.service.create({
           data: {
             type: 'SITE',
@@ -1235,6 +1249,7 @@ export const resolvers = {
             slug,
             projectId: targetProjectId,
             createdByUserId: context.userId ?? null,
+            internalHostname: generateInternalHostname(slug, project.slug),
           },
         })
 
@@ -1388,6 +1403,7 @@ export const resolvers = {
       const invokeUrl = generateInvokeUrl(slug)
 
       return context.prisma.$transaction(async tx => {
+        const project = await tx.project.findUniqueOrThrow({ where: { id: context.projectId! } })
         const service = await tx.service.create({
           data: {
             type: 'FUNCTION',
@@ -1395,6 +1411,7 @@ export const resolvers = {
             slug,
             projectId: context.projectId!,
             createdByUserId: context.userId ?? null,
+            internalHostname: generateInternalHostname(slug, project.slug),
           },
         })
 
@@ -1608,6 +1625,9 @@ export const resolvers = {
     // Phala deployment mutations
     ...phalaMutations,
 
+    // Service connectivity mutations (env vars, ports, links)
+    ...serviceConnectivityMutations,
+
     // Storage tracking mutation (billing is now in service-auth)
     triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {
       if (!context.userId) {
@@ -1677,6 +1697,12 @@ export const resolvers = {
     ...(akashFieldResolvers.Service ?? {}),
     // Merge Phala-related Service field resolvers (phalaDeployments, activePhalaDeployment)
     ...(phalaFieldResolvers.Service ?? {}),
+    // Merge inter-service communication field resolvers (envVars, ports, linksFrom, linksTo)
+    ...(serviceConnectivityFieldResolvers.Service ?? {}),
+  },
+
+  ServiceLink: {
+    ...(serviceConnectivityFieldResolvers.ServiceLink ?? {}),
   },
 
   Site: {

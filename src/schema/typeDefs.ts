@@ -110,6 +110,7 @@ export const typeDefs = /* GraphQL */ `
     templateId: ID
     dockerImage: String
     containerPort: Int
+    internalHostname: String
     createdByUserId: ID
     createdAt: Date!
     updatedAt: Date!
@@ -125,6 +126,68 @@ export const typeDefs = /* GraphQL */ `
     # Phala deployments for this service
     phalaDeployments: [PhalaDeployment!]!
     activePhalaDeployment: PhalaDeployment
+
+    # Inter-service communication
+    envVars: [ServiceEnvVar!]!
+    ports: [ServicePort!]!
+    linksFrom: [ServiceLink!]!
+    linksTo: [ServiceLink!]!
+  }
+
+  # ============================================
+  # SERVICE ENVIRONMENT VARIABLES
+  # ============================================
+
+  type ServiceEnvVar {
+    id: ID!
+    serviceId: ID!
+    key: String!
+    value: String!
+    secret: Boolean!
+    source: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  # ============================================
+  # SERVICE PORT CONFIGURATION
+  # ============================================
+
+  type ServicePort {
+    id: ID!
+    serviceId: ID!
+    containerPort: Int!
+    publicPort: Int
+    protocol: String!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  # ============================================
+  # SERVICE LINKS (inter-service connections)
+  # ============================================
+
+  type ServiceLink {
+    id: ID!
+    sourceServiceId: ID!
+    targetServiceId: ID!
+    sourceService: Service!
+    targetService: Service!
+    alias: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  input EnvVarInput {
+    key: String!
+    value: String!
+    secret: Boolean
+  }
+
+  input ServicePortInput {
+    containerPort: Int!
+    publicPort: Int
+    protocol: String
   }
 
   # ============================================
@@ -861,6 +924,13 @@ export const typeDefs = /* GraphQL */ `
     timestamp: Date!
   }
 
+  type ServiceLogResult {
+    logs: String!
+    provider: String!
+    deploymentId: String!
+    timestamp: Date!
+  }
+
   # ============================================
   # SUBSCRIPTION HEALTH MONITORING
   # ============================================
@@ -1419,6 +1489,12 @@ export const typeDefs = /* GraphQL */ `
       startDate: Date!
       endDate: Date!
     ): TelemetryUsageSummary!
+
+    # Service container logs (Akash / Phala)
+    serviceLogs(serviceId: ID!, tail: Int, service: String): ServiceLogResult!
+
+    # Service links (connections between services)
+    serviceLinks(projectId: ID!): [ServiceLink!]!
   }
 
   # ============================================
@@ -1533,6 +1609,19 @@ export const typeDefs = /* GraphQL */ `
     # Phala Deployments
     stopPhalaDeployment(id: ID!): PhalaDeployment!
     deletePhalaDeployment(id: ID!): PhalaDeployment!
+
+    # Service Environment Variables
+    setServiceEnvVar(serviceId: ID!, key: String!, value: String!, secret: Boolean): ServiceEnvVar!
+    deleteServiceEnvVar(serviceId: ID!, key: String!): Boolean!
+    bulkSetServiceEnvVars(serviceId: ID!, vars: [EnvVarInput!]!): [ServiceEnvVar!]!
+
+    # Service Port Configuration
+    setServicePort(serviceId: ID!, containerPort: Int!, publicPort: Int, protocol: String): ServicePort!
+    deleteServicePort(serviceId: ID!, containerPort: Int!): Boolean!
+
+    # Service Linking
+    linkServices(sourceServiceId: ID!, targetServiceId: ID!, alias: String): ServiceLink!
+    unlinkServices(sourceServiceId: ID!, targetServiceId: ID!): Boolean!
   }
 
   # ============================================
