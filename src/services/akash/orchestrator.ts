@@ -169,8 +169,16 @@ export class AkashOrchestrator {
     ])
 
     const result = extractJson(output) as Record<string, unknown>
+    console.log(`[AkashOrchestrator] createDeployment broadcast result: code=${result.code}, txhash=${result.txhash}, has_logs=${!!(result.logs as unknown[])?.length}`)
 
-    // Parse dseq from transaction response
+    // Tx was broadcast but rejected by the mempool (e.g. account sequence mismatch from rapid re-deploys)
+    const txCode = typeof result.code === 'number' ? result.code : typeof result.code === 'string' ? parseInt(result.code, 10) : undefined
+    if (txCode !== undefined && txCode !== 0) {
+      const rawLog = (result.raw_log || result.rawLog || '') as string
+      throw new Error(`Akash tx rejected (code ${txCode}): ${rawLog.slice(0, 300)}`)
+    }
+
+    // Parse dseq from transaction response (populated in block broadcast mode)
     const logs = result.logs as Array<{ events?: Array<{ type: string; attributes?: Array<{ key: string; value: string }> }> }> | undefined
     let dseq: number | undefined
 
@@ -187,11 +195,10 @@ export class AkashOrchestrator {
       }
     }
 
-    // Fallback: check raw_log or txhash and query
+    // Fallback: query the confirmed tx by hash (sync mode doesn't include logs)
     if (!dseq && result.txhash) {
-      // Retry with backoff — block time is ~6s but RPC indexer can lag
       let txResult: Record<string, unknown> | null = null
-      const delays = [6000, 4000, 4000, 6000] // total ~20s max
+      const delays = [8000, 6000, 6000, 8000, 8000] // ~36s total; block time ~6s + indexer lag
       for (const delay of delays) {
         await new Promise(r => setTimeout(r, delay))
         try {
@@ -233,7 +240,8 @@ export class AkashOrchestrator {
     }
 
     if (!dseq || isNaN(dseq) || dseq <= 0) {
-      throw new Error(`Failed to create deployment: could not extract dseq from response`)
+      const safeResult = JSON.stringify(result, (_k, v) => typeof v === 'bigint' ? v.toString() : v).slice(0, 500)
+      throw new Error(`Failed to create deployment: could not extract dseq from response. Broadcast result: ${safeResult}`)
     }
 
     const owner = await this.getAccountAddress()
