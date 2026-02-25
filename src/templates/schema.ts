@@ -26,6 +26,15 @@ export interface TemplateEnvVar {
   secret?: boolean
 }
 
+export interface TemplateGpu {
+  /** Number of GPU units (e.g. 1) */
+  units: number
+  /** GPU vendor */
+  vendor: 'nvidia'
+  /** Specific model (e.g. "a100", "h100"). Omit for any available. */
+  model?: string
+}
+
 export interface TemplateResources {
   /** CPU units (e.g. 0.5 = half a core) */
   cpu: number
@@ -33,6 +42,8 @@ export interface TemplateResources {
   memory: string
   /** Ephemeral storage with unit (e.g. "1Gi") */
   storage: string
+  /** Optional GPU allocation */
+  gpu?: TemplateGpu
 }
 
 export interface TemplatePort {
@@ -122,8 +133,13 @@ export interface TemplateDeployConfig {
   serviceName?: string
   /** Override environment variable values */
   envOverrides?: Record<string, string>
-  /** Override resource allocation */
-  resourceOverrides?: Partial<TemplateResources>
+  /** Override resource allocation (gpu: null to explicitly disable) */
+  resourceOverrides?: {
+    cpu?: number
+    memory?: string
+    storage?: string
+    gpu?: TemplateGpu | null
+  }
   /** Akash deposit in uakt */
   depositUakt?: number
 }

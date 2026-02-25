@@ -15,11 +15,15 @@ import {
   milaidyGateway,
   openclawGateway,
   nanobotGateway,
+  ollamaGpu,
+  jupyterMlWorkspace,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
 
 const templates: Template[] = [
+  ollamaGpu,
+  jupyterMlWorkspace,
   milaidyGateway,
   openclawGateway,
   nanobotGateway,

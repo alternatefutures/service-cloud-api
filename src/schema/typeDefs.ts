@@ -1293,10 +1293,17 @@ export const typeDefs = /* GraphQL */ `
     secret: Boolean
   }
 
+  type TemplateGpu {
+    units: Int!
+    vendor: String!
+    model: String
+  }
+
   type TemplateResources {
     cpu: Float!
     memory: String!
     storage: String!
+    gpu: TemplateGpu
   }
 
   type TemplatePort {
@@ -1340,10 +1347,17 @@ export const typeDefs = /* GraphQL */ `
     value: String!
   }
 
+  input GpuOverrideInput {
+    units: Int!
+    vendor: String!
+    model: String
+  }
+
   input ResourceOverrideInput {
     cpu: Float
     memory: String
     storage: String
+    gpu: GpuOverrideInput
   }
 
   input DeployFromTemplateInput {

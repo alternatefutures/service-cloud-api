@@ -46,7 +46,7 @@ export const templateMutations = {
         projectId: string
         serviceName?: string
         envOverrides?: Array<{ key: string; value: string }>
-        resourceOverrides?: { cpu?: number; memory?: string; storage?: string }
+        resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }
       }
     },
     context: Context,
@@ -123,17 +123,25 @@ export const templateMutations = {
       }
     }
 
+    // ── Build resource overrides ─────────────────────────────
+    const resourceOverrides = input.resourceOverrides
+      ? {
+          cpu: input.resourceOverrides.cpu ?? undefined,
+          memory: input.resourceOverrides.memory ?? undefined,
+          storage: input.resourceOverrides.storage ?? undefined,
+          gpu: input.resourceOverrides.gpu === null
+            ? null
+            : input.resourceOverrides.gpu
+              ? { units: input.resourceOverrides.gpu.units, vendor: input.resourceOverrides.gpu.vendor as 'nvidia', model: input.resourceOverrides.gpu.model ?? undefined }
+              : undefined,
+        }
+      : undefined
+
     // ── Generate SDL from template ───────────────────────────
     const sdlContent = generateSDLFromTemplate(template, {
       serviceName: slug,
       envOverrides,
-      resourceOverrides: input.resourceOverrides
-        ? {
-            cpu: input.resourceOverrides.cpu ?? undefined,
-            memory: input.resourceOverrides.memory ?? undefined,
-            storage: input.resourceOverrides.storage ?? undefined,
-          }
-        : undefined,
+      resourceOverrides,
     })
 
     // ── Deploy to Akash via orchestrator ─────────────────────
@@ -184,7 +192,7 @@ export const templateMutations = {
         projectId: string
         serviceName?: string
         envOverrides?: Array<{ key: string; value: string }>
-        resourceOverrides?: { cpu?: number; memory?: string; storage?: string }
+        resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }
       }
     },
     context: Context,

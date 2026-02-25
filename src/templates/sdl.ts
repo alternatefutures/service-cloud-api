@@ -8,7 +8,7 @@
  *   - signedBy auditor filter
  */
 
-import type { Template, TemplateDeployConfig } from './schema.js'
+import type { Template, TemplateDeployConfig, TemplateGpu } from './schema.js'
 
 /**
  * Generate an Akash SDL from a template + user configuration overrides.
@@ -27,6 +27,12 @@ export function generateSDLFromTemplate(
   const cpu = config?.resourceOverrides?.cpu ?? template.resources.cpu
   const memory = config?.resourceOverrides?.memory ?? template.resources.memory
   const storage = config?.resourceOverrides?.storage ?? template.resources.storage
+
+  // GPU: null override = explicitly disabled; undefined = use template default
+  const gpu: TemplateGpu | undefined =
+    config?.resourceOverrides?.gpu === null
+      ? undefined
+      : config?.resourceOverrides?.gpu ?? template.resources.gpu
 
   // ── Ports / expose ──────────────────────────────────────────
   const exposeBlock = template.ports
@@ -57,6 +63,27 @@ export function generateSDLFromTemplate(
       - "${template.startCommand}"\n`
     : ''
 
+  // ── GPU resource block ────────────────────────────────────────
+  const gpuBlock = gpu ? buildGpuProfileBlock(gpu) : ''
+
+  // GPU providers may not be in the auditor list — skip signedBy for GPU deploys
+  const placementBlock = gpu
+    ? `  placement:
+    dcloud:
+      pricing:
+        ${serviceName}:
+          denom: uakt
+          amount: ${pricingUakt}`
+    : `  placement:
+    dcloud:
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      pricing:
+        ${serviceName}:
+          denom: uakt
+          amount: ${pricingUakt}`
+
   // ── Build the SDL ───────────────────────────────────────────
   return `---
 version: "2.0"
@@ -75,18 +102,10 @@ profiles:
           units: ${cpu}
         memory:
           size: ${memory}
-        storage:
+${gpuBlock}        storage:
 ${storageProfileBlock}
 
-  placement:
-    dcloud:
-      signedBy:
-        anyOf:
-          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
-      pricing:
-        ${serviceName}:
-          denom: uakt
-          amount: ${pricingUakt}
+${placementBlock}
 
 deployment:
   ${serviceName}:
@@ -131,6 +150,18 @@ function buildEnvLines(
 
   const lines = entries.map(([k, v]) => `      - ${k}=${v}`).join('\n')
   return `    env:\n${lines}\n`
+}
+
+function buildGpuProfileBlock(gpu: TemplateGpu): string {
+  const modelLine = gpu.model
+    ? `\n                - model: ${gpu.model}`
+    : ''
+  return `        gpu:
+          units: ${gpu.units}
+          attributes:
+            vendor:
+              ${gpu.vendor}:${modelLine}
+`
 }
 
 function buildStorageProfileBlock(
