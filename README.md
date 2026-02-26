@@ -4,8 +4,9 @@
 
 <div align="center">
 
-[![CI Status](https://github.com/alternatefutures/alternatefutures-backend/workflows/CI/badge.svg)](https://github.com/alternatefutures/alternatefutures-backend/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/alternatefutures/alternatefutures-backend/workflows/CodeQL/badge.svg)](https://github.com/alternatefutures/alternatefutures-backend/actions/workflows/codeql.yml)
+[![CI Status](https://github.com/alternatefutures/service-cloud-api/workflows/CI/badge.svg)](https://github.com/alternatefutures/service-cloud-api/actions/workflows/ci.yml)
+[![Tests](https://github.com/alternatefutures/service-cloud-api/actions/workflows/test.yml/badge.svg)](https://github.com/alternatefutures/service-cloud-api/actions/workflows/test.yml)
+[![CodeQL](https://github.com/alternatefutures/service-cloud-api/actions/workflows/codeql.yml/badge.svg)](https://github.com/alternatefutures/service-cloud-api/actions/workflows/codeql.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Code of Conduct](https://img.shields.io/badge/Code%20of%20Conduct-Contributor%20Covenant-informational.svg)](CODE_OF_CONDUCT.md)
