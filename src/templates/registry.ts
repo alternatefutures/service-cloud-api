@@ -17,20 +17,44 @@ import {
   nanobotGateway,
   ollamaGpu,
   jupyterMlWorkspace,
+  nextjsServer,
+  reactVite,
+  astroServer,
+  nuxtServer,
+  hugoServer,
+  giteaServer,
+  n8nServer,
+  minecraftServer,
+  comfyuiServer,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
 
 const templates: Template[] = [
+  // AI / ML
   ollamaGpu,
   jupyterMlWorkspace,
+  comfyuiServer,
+  // Web Servers
+  nextjsServer,
+  reactVite,
+  astroServer,
+  nuxtServer,
+  hugoServer,
+  // Custom Gateways (AF platform)
   milaidyGateway,
   openclawGateway,
   nanobotGateway,
+  // Game Servers
   nodeWsGameserver,
   bunWsGameserver,
+  minecraftServer,
+  // Databases
   postgres,
   redis,
+  // DevTools
+  giteaServer,
+  n8nServer,
 ]
 
 const templateMap = new Map<string, Template>(
