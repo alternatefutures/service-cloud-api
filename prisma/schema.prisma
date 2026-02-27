@@ -1140,3 +1140,46 @@ model PhalaDeployment {
   @@index([appId])
   @@index([orgBillingId])
 }
+
+
+// ============================================
+// TEMPLATES
+// ============================================
+
+enum TemplateCategory {
+  GAME_SERVER
+  WEB_SERVER
+  DATABASE
+  AI_ML
+  DEVTOOLS
+  CUSTOM
+}
+
+/// Deployable service template definition stored in the database.
+/// The static TypeScript registry (src/templates/) is the source of truth
+/// for built-in templates; this model enables user-created and marketplace
+/// templates in the future.
+model Template {
+  id                String           @id @default(cuid())
+  name              String
+  description       String           @db.Text
+  featured          Boolean          @default(false)
+  category          TemplateCategory
+  tags              String[]
+  icon              String?
+  repoUrl           String
+  dockerImage       String
+  serviceType       String
+  envVars           Json             @default("[]")
+  resources         Json
+  ports             Json             @default("[]")
+  healthCheck       Json?
+  persistentStorage Json?
+  pricingUakt       BigInt?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([category])
+  @@index([featured])
+  @@map("templates")
+}
