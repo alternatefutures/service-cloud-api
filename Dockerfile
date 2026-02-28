@@ -80,6 +80,9 @@ RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/pr
 RUN groupadd -g 1001 nodejs && \
     useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
+# Install prisma CLI globally (needed for kubectl exec prisma migrate deploy)
+RUN npm install -g prisma
+
 # Copy prod node_modules (already pruned with prisma client generated) from builder
 COPY --from=builder /app/service-cloud-api/package.json ./
 COPY --from=builder /app/service-cloud-api/node_modules ./node_modules

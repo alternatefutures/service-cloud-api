@@ -68,7 +68,7 @@ jobs:
 
       - name: Run Prisma migrations
         run: |
-          kubectl exec deployment/service-cloud-api -n af-production -- npx prisma migrate deploy
+          kubectl exec deployment/service-cloud-api -n af-production -- prisma migrate deploy
 
       - name: Verify deployment
         run: |
