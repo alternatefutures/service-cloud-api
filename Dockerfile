@@ -85,9 +85,8 @@ COPY service-cloud-api/prisma ./prisma/
 RUN pnpm install --frozen-lockfile --prod && \
     pnpm store prune
 
-# Copy generated Prisma client from builder (instead of regenerating)
-COPY --from=builder /app/service-cloud-api/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/service-cloud-api/node_modules/@prisma/client ./node_modules/@prisma/client
+ENV PRISMA_CLIENT_ENGINE_TYPE=binary
+RUN pnpm exec prisma generate
 
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/service-cloud-api/dist ./dist
