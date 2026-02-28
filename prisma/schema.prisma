@@ -65,6 +65,7 @@ model Project {
   id             String   @id @default(cuid())
   name           String
   slug           String   @unique
+  description    String?
   organizationId String?  @map("organization_id")
 
   userId    String
