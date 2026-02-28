@@ -86,7 +86,7 @@ RUN pnpm install --frozen-lockfile --prod && \
     pnpm store prune
 
 ENV PRISMA_CLIENT_ENGINE_TYPE=binary
-RUN pnpm exec prisma generate
+RUN npx prisma generate
 
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/service-cloud-api/dist ./dist
