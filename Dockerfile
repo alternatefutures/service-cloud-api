@@ -2,7 +2,7 @@
 # Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies
-FROM node:22-slim AS deps
+FROM node:25-slim AS deps
 WORKDIR /app/service-cloud-api
 
 RUN apt-get update && \
@@ -19,7 +19,7 @@ COPY service-cloud-api/prisma ./prisma/
 RUN pnpm install --frozen-lockfile
 
 # Stage 2: Builder
-FROM node:22-slim AS builder
+FROM node:25-slim AS builder
 WORKDIR /app/service-cloud-api
 
 RUN apt-get update && \
