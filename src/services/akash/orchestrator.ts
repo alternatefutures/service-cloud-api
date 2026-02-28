@@ -167,7 +167,7 @@ export class AkashOrchestrator {
       '-o', 'json',
       '-y',
     ])
-
+ 
     const result = extractJson(output) as Record<string, unknown>
     console.log(`[AkashOrchestrator] createDeployment broadcast result: code=${result.code}, txhash=${result.txhash}, has_logs=${!!(result.logs as unknown[])?.length}`)
 
