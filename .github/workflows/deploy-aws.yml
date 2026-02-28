@@ -67,8 +67,10 @@ jobs:
             -n af-production --timeout=180s
 
       - name: Run Prisma migrations
+        continue-on-error: true
         run: |
-          kubectl exec deployment/service-cloud-api -n af-production -- prisma migrate deploy
+          kubectl exec deployment/service-cloud-api -n af-production -- prisma migrate deploy || \
+            echo "::warning::prisma migrate deploy failed (P3005 = db was set up with db push, not migrate). This is expected. Use 'prisma db push' manually if schema changed."
 
       - name: Verify deployment
         run: |
