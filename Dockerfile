@@ -81,7 +81,8 @@ RUN groupadd -g 1001 nodejs && \
     useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
 # Install prisma CLI globally (needed for kubectl exec prisma migrate deploy)
-RUN npm install -g prisma
+# Version MUST match the prisma version in package.json
+RUN npm install -g prisma@6
 
 # Copy prod node_modules (already pruned with prisma client generated) from builder
 COPY --from=builder /app/service-cloud-api/package.json ./
