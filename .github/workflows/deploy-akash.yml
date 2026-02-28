@@ -564,8 +564,9 @@ jobs:
 
       - name: Install dependencies for DNS sync and DB tools
         run: |
+          corepack enable
           npm install -g tsx prisma
-          npm install
+          pnpm install --frozen-lockfile
 
       # ─── Apply Cloud API Migrations ─────────────────────────────────────────
       # The production Docker image does not include the prisma CLI or migration

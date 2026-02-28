@@ -5,46 +5,42 @@
 FROM node:22-slim AS deps
 WORKDIR /app/service-cloud-api
 
-# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openssl \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy package files
-COPY service-cloud-api/package*.json ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY service-cloud-api/package.json service-cloud-api/pnpm-lock.yaml ./
 COPY service-cloud-api/prisma ./prisma/
 
-# Install all dependencies (including dev dependencies for build)
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 # Stage 2: Builder
 FROM node:22-slim AS builder
 WORKDIR /app/service-cloud-api
 
-# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openssl \
     ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy dependencies from deps stage
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 COPY --from=deps /app/service-cloud-api/node_modules ./node_modules
 COPY --from=deps /app/service-cloud-api/prisma ./prisma
 
-# Copy source code
-COPY service-cloud-api/package*.json ./
+COPY service-cloud-api/package.json service-cloud-api/pnpm-lock.yaml ./
 COPY service-cloud-api/tsconfig.json ./
 COPY service-cloud-api/src ./src
 
-# Generate Prisma client with binary engine (instead of WASM)
 ENV PRISMA_CLIENT_ENGINE_TYPE=binary
-RUN npx prisma generate
+RUN pnpm exec prisma generate
 
-# Build the application
-RUN npm run build
+RUN pnpm run build
 
 # Stage 3: Production Runner (Ubuntu 24.04 for GLIBC 2.39 - needed by provider-services)
 FROM ubuntu:24.04 AS runner
@@ -81,13 +77,13 @@ RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/pr
 RUN groupadd -g 1001 nodejs && \
     useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
-# Copy package files for production install
-COPY service-cloud-api/package*.json ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY service-cloud-api/package.json service-cloud-api/pnpm-lock.yaml ./
 COPY service-cloud-api/prisma ./prisma/
 
-# Install production dependencies only
-RUN npm ci --omit=dev && \
-    npm cache clean --force
+RUN pnpm install --frozen-lockfile --prod && \
+    pnpm store prune
 
 # Copy generated Prisma client from builder (instead of regenerating)
 COPY --from=builder /app/service-cloud-api/node_modules/.prisma ./node_modules/.prisma

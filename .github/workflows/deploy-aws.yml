@@ -7,7 +7,7 @@ on:
       - "src/**"
       - "prisma/**"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
       - "Dockerfile"
       - "docker-entrypoint.sh"
   workflow_dispatch:
