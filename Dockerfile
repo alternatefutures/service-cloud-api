@@ -42,6 +42,9 @@ RUN pnpm exec prisma generate
 
 RUN pnpm run build
 
+# Prune dev dependencies but keep generated Prisma client
+RUN pnpm prune --prod
+
 # Stage 3: Production Runner (Ubuntu 24.04 for GLIBC 2.39 - needed by provider-services)
 FROM ubuntu:24.04 AS runner
 WORKDIR /app/service-cloud-api
@@ -77,16 +80,8 @@ RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/pr
 RUN groupadd -g 1001 nodejs && \
     useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-COPY service-cloud-api/package.json service-cloud-api/pnpm-lock.yaml ./
-COPY service-cloud-api/prisma ./prisma/
-
-RUN pnpm install --frozen-lockfile --prod && \
-    pnpm store prune
-
-ENV PRISMA_CLIENT_ENGINE_TYPE=binary
-RUN npx prisma generate
+# Copy prod node_modules (already pruned with prisma client generated) from builder
+COPY --from=builder /app/service-cloud-api/node_modules ./node_modules
 
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/service-cloud-api/dist ./dist
