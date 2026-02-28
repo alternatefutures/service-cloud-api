@@ -81,7 +81,9 @@ RUN groupadd -g 1001 nodejs && \
     useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
 # Copy prod node_modules (already pruned with prisma client generated) from builder
+COPY --from=builder /app/service-cloud-api/package.json ./
 COPY --from=builder /app/service-cloud-api/node_modules ./node_modules
+COPY --from=builder /app/service-cloud-api/prisma ./prisma
 
 # Copy built application from builder
 COPY --from=builder --chown=nodejs:nodejs /app/service-cloud-api/dist ./dist
