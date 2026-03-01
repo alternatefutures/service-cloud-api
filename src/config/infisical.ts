@@ -1,5 +1,10 @@
 import { InfisicalSDK, type Secret } from '@infisical/sdk'
 import { setInterval } from 'node:timers'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const serviceRoot = path.resolve(path.dirname(__filename), '..', '..')
 
 let client: InfisicalSDK | null = null
 const secretsCache: Record<string, string> = {}
@@ -38,10 +43,9 @@ export async function initInfisical() {
     console.log(
       '⚠️  No INFISICAL_CLIENT_ID/SECRET found, using local .env.local/.env files'
     )
-    // Fall back to local env files for development (.env.local takes precedence)
     const dotenv = await import('dotenv')
-    dotenv.config({ path: '.env.local' })
-    dotenv.config()
+    dotenv.config({ path: path.join(serviceRoot, '.env') })
+    dotenv.config({ path: path.join(serviceRoot, '.env.local'), override: true })
   }
 }
 
