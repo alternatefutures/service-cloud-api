@@ -36,10 +36,11 @@ export async function initInfisical() {
     console.log(`✅ Loaded ${result.secrets.length} secrets from Infisical`)
   } else {
     console.log(
-      '⚠️  No INFISICAL_CLIENT_ID/SECRET found, using local .env file'
+      '⚠️  No INFISICAL_CLIENT_ID/SECRET found, using local .env.local/.env files'
     )
-    // Fall back to .env for local development
+    // Fall back to local env files for development (.env.local takes precedence)
     const dotenv = await import('dotenv')
+    dotenv.config({ path: '.env.local' })
     dotenv.config()
   }
 }
