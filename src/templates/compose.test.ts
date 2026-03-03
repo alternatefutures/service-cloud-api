@@ -17,7 +17,7 @@ describe('generateComposeFromTemplate', () => {
 
   it('uses template docker image', () => {
     expect(generateComposeFromTemplate(postgres)).toContain(
-      'image: postgres:16-alpine'
+      'image: postgres:17-alpine'
     )
     expect(generateComposeFromTemplate(nanobotGateway)).toContain(
       'image: ghcr.io/alternatefutures/nanobot-akash:v2'

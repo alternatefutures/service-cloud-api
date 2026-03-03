@@ -27,6 +27,22 @@ vi.mock('fs', () => ({
   rmSync: vi.fn(),
 }))
 
+vi.mock('../queue/qstashClient.js', () => ({
+  isQStashEnabled: vi.fn(() => false),
+  publishJob: vi.fn(),
+}))
+
+vi.mock('../queue/webhookHandler.js', () => ({
+  handlePhalaStep: vi.fn(() => Promise.resolve()),
+}))
+
+vi.mock('../billing/billingApiClient.js', () => ({
+  getBillingApiClient: vi.fn(() => ({
+    getOrgBilling: vi.fn(),
+    getOrgMarkup: vi.fn(),
+  })),
+}))
+
 describe('PhalaOrchestrator', () => {
   let mockPrisma: any
   let orchestrator: PhalaOrchestrator
@@ -59,7 +75,7 @@ describe('PhalaOrchestrator', () => {
       ).rejects.toThrow('Service not found')
     })
 
-    it('throws when PHALA_API_KEY is not set', async () => {
+    it('creates record even when PHALA_API_KEY is not set (step handler checks later)', async () => {
       const orig = process.env.PHALA_API_KEY
       delete process.env.PHALA_API_KEY
       delete process.env.PHALA_CLOUD_API_KEY
@@ -70,6 +86,7 @@ describe('PhalaOrchestrator', () => {
         type: 'VM',
         site: null,
         afFunction: null,
+        project: { organizationId: null },
       })
       mockPrisma.phalaDeployment.create.mockResolvedValue({
         id: 'dep-1',
@@ -77,48 +94,9 @@ describe('PhalaOrchestrator', () => {
         name: 'af-test-xyz',
       })
 
-      await expect(
-        orchestrator.deployServicePhala('svc-1', {
-          composeContent: 'services:\n  app:\n    image: nginx',
-        })
-      ).rejects.toThrow('PHALA_API_KEY')
-
-      process.env.PHALA_API_KEY = orig
-    })
-
-    it('creates DB record and updates on deploy success', async () => {
-      vi.useFakeTimers()
-
-      mockPrisma.service.findUnique.mockResolvedValue({
-        id: 'svc-1',
-        slug: 'test',
-        type: 'VM',
-        site: null,
-        afFunction: null,
-      })
-      mockPrisma.phalaDeployment.create.mockResolvedValue({
-        id: 'dep-1',
-        appId: 'pending',
-        name: 'af-test-xyz',
-      })
-      mockPrisma.phalaDeployment.update.mockResolvedValue({})
-
-      vi.mocked(execSync)
-        .mockReturnValueOnce(JSON.stringify({ success: true, app_id: 'app-123' }))
-        .mockReturnValueOnce(
-          JSON.stringify({
-            status: 'running',
-            public_urls: [{ app: 'https://app-123.phala.network' }],
-          })
-        )
-
-      const deployPromise = orchestrator.deployServicePhala('svc-1', {
+      const id = await orchestrator.deployServicePhala('svc-1', {
         composeContent: 'services:\n  app:\n    image: nginx',
       })
-      await vi.advanceTimersByTimeAsync(6000)
-      const id = await deployPromise
-
-      vi.useRealTimers()
 
       expect(id).toBe('dep-1')
       expect(mockPrisma.phalaDeployment.create).toHaveBeenCalledWith({
@@ -128,46 +106,59 @@ describe('PhalaOrchestrator', () => {
           serviceId: 'svc-1',
         }),
       })
-      expect(mockPrisma.phalaDeployment.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ status: 'ACTIVE', appUrl: 'https://app-123.phala.network' }),
-        })
-      )
+
+      process.env.PHALA_API_KEY = orig
     })
 
-    it('sets FAILED and persists error on deploy failure', async () => {
+    it('creates DB record and returns deployment ID immediately (QStash handles steps)', async () => {
       mockPrisma.service.findUnique.mockResolvedValue({
         id: 'svc-1',
         slug: 'test',
         type: 'VM',
         site: null,
         afFunction: null,
+        project: { organizationId: null },
       })
       mockPrisma.phalaDeployment.create.mockResolvedValue({
         id: 'dep-1',
         appId: 'pending',
         name: 'af-test-xyz',
       })
-      mockPrisma.phalaDeployment.update.mockResolvedValue({})
 
-      vi.mocked(execSync).mockReturnValueOnce(
-        JSON.stringify({ success: false, error: 'Quota exceeded' })
-      )
+      const id = await orchestrator.deployServicePhala('svc-1', {
+        composeContent: 'services:\n  app:\n    image: nginx',
+      })
 
-      await expect(
-        orchestrator.deployServicePhala('svc-1', {
-          composeContent: 'services:\n  app:\n    image: nginx',
-        })
-      ).rejects.toThrow()
+      expect(id).toBe('dep-1')
+      expect(mockPrisma.phalaDeployment.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          appId: 'pending',
+          status: 'CREATING',
+          serviceId: 'svc-1',
+        }),
+      })
+    })
 
-      expect(mockPrisma.phalaDeployment.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            status: 'FAILED',
-            errorMessage: expect.any(String),
-          }),
-        })
-      )
+    it('returns deployment ID even if step will later fail (async pipeline)', async () => {
+      mockPrisma.service.findUnique.mockResolvedValue({
+        id: 'svc-1',
+        slug: 'test',
+        type: 'VM',
+        site: null,
+        afFunction: null,
+        project: { organizationId: null },
+      })
+      mockPrisma.phalaDeployment.create.mockResolvedValue({
+        id: 'dep-1',
+        appId: 'pending',
+        name: 'af-test-xyz',
+      })
+
+      const id = await orchestrator.deployServicePhala('svc-1', {
+        composeContent: 'services:\n  app:\n    image: nginx',
+      })
+
+      expect(id).toBe('dep-1')
     })
   })
 

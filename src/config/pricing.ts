@@ -77,8 +77,9 @@ export const PHALA_RATES: Record<string, number> = {
 // AKASH — CONVERSION HELPERS
 // ============================================
 
-/** Approximate AKT/USD price — update via env or price feed */
-export const AKT_USD_PRICE = parseFloat(process.env.AKT_USD_PRICE || '3.50')
+/** Approximate AKT/USD price — override with AKT_USD_PRICE env var.
+ * TODO: replace with a live price feed (CoinGecko API) so this stays accurate */
+export const AKT_USD_PRICE = parseFloat(process.env.AKT_USD_PRICE || '0.32')
 
 /** Akash blocks per day (~6s/block) */
 export const AKASH_BLOCKS_PER_DAY = 14400

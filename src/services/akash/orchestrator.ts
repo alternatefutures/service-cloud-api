@@ -565,12 +565,15 @@ export class AkashOrchestrator {
     let sdlContent = options.sdlContent || await this.generateSDLForService(service)
     sdlContent = await this.injectPersistedEnvVars(service.id, service.projectId, sdlContent)
 
-    // Create DB record with CREATING status
+    // Create DB record with CREATING status.
+    // Use negative timestamp as temporary dseq — the real dseq is assigned in SUBMIT_TX.
+    // This avoids the @@unique([owner, dseq]) constraint since real dseqs are always positive.
     const owner = await this.getAccountAddress()
+    const tempDseq = BigInt(-Date.now())
     const deployment = await this.prisma.akashDeployment.create({
       data: {
         owner,
-        dseq: BigInt(0),
+        dseq: tempDseq,
         sdlContent,
         serviceId: service.id,
         afFunctionId: service.type === 'FUNCTION' ? service.afFunction?.id : null,

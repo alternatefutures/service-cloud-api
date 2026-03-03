@@ -532,11 +532,12 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
       }
     }
 
-    // Create a new deployment record for the retry, copying the SDL and config
+    // Create a new deployment record for the retry, copying the SDL and config.
+    // Negative timestamp as temp dseq to avoid unique constraint — replaced in SUBMIT_TX.
     const newDeployment = await prisma.akashDeployment.create({
       data: {
         owner: deployment.owner,
-        dseq: BigInt(0),
+        dseq: BigInt(-Date.now()),
         sdlContent: deployment.sdlContent,
         serviceId: deployment.serviceId,
         afFunctionId: deployment.afFunctionId,
