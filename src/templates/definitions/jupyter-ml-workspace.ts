@@ -38,5 +38,5 @@ export const jupyterMlWorkspace: Template = {
     },
   ],
   pricingUakt: 100000,
-  startCommand: 'start-notebook.py --NotebookApp.token=$JUPYTER_TOKEN --NotebookApp.allow_origin=* --NotebookApp.base_url=/',
+  startCommand: 'start-notebook.py --ServerApp.token=$JUPYTER_TOKEN --ServerApp.allow_origin=* --ServerApp.base_url=/',
 }

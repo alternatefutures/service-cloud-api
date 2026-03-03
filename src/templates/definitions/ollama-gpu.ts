@@ -10,7 +10,9 @@ export const ollamaGpu: Template = {
   tags: ['ai', 'llm', 'inference', 'gpu', 'ollama', 'openai'],
   icon: '🦙',
   repoUrl: 'https://github.com/ollama/ollama',
-  dockerImage: 'ollama/ollama:0.6.2',
+  // Ollama uses :latest — Akash caches image layers so restarts reuse the pulled version.
+  // To force a newer Ollama, redeploy (which re-pulls).
+  dockerImage: 'ollama/ollama:latest',
   serviceType: 'VM',
   envVars: [
     {

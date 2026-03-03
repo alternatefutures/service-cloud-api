@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import type { DeploymentProgressEvent } from '../queue/types.js'
 
 export interface DeploymentLogEvent {
   deploymentId: string
@@ -24,6 +25,11 @@ class DeploymentEventEmitter extends EventEmitter {
     this.emit(`status:${event.deploymentId}`, event)
   }
 
+  emitProgress(event: DeploymentProgressEvent) {
+    this.emit('progress', event)
+    this.emit(`progress:${event.deploymentId}`, event)
+  }
+
   onLog(deploymentId: string, handler: (event: DeploymentLogEvent) => void) {
     this.on(`log:${deploymentId}`, handler)
   }
@@ -33,6 +39,13 @@ class DeploymentEventEmitter extends EventEmitter {
     handler: (event: DeploymentStatusEvent) => void
   ) {
     this.on(`status:${deploymentId}`, handler)
+  }
+
+  onProgress(
+    deploymentId: string,
+    handler: (event: DeploymentProgressEvent) => void,
+  ) {
+    this.on(`progress:${deploymentId}`, handler)
   }
 
   removeLogListener(
@@ -47,6 +60,13 @@ class DeploymentEventEmitter extends EventEmitter {
     handler: (event: DeploymentStatusEvent) => void
   ) {
     this.off(`status:${deploymentId}`, handler)
+  }
+
+  removeProgressListener(
+    deploymentId: string,
+    handler: (event: DeploymentProgressEvent) => void,
+  ) {
+    this.off(`progress:${deploymentId}`, handler)
   }
 }
 

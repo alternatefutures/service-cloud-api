@@ -10,7 +10,7 @@ export const n8nServer: Template = {
   tags: ['automation', 'workflow', 'devtools', 'n8n', 'no-code', 'integration'],
   icon: '🔗',
   repoUrl: 'https://github.com/n8n-io/n8n',
-  dockerImage: 'n8nio/n8n:1.93.0',
+  dockerImage: 'n8nio/n8n:2.6.3',
   serviceType: 'VM',
   envVars: [
     {

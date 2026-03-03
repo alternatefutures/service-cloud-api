@@ -4,12 +4,12 @@ export const postgres: Template = {
   id: 'postgres',
   name: 'PostgreSQL',
   description:
-    'PostgreSQL 16 Alpine — lightweight, production-ready relational database with persistent storage.',
+    'PostgreSQL 17 Alpine — lightweight, production-ready relational database with persistent storage.',
   category: 'DATABASE',
   tags: ['database', 'sql', 'postgres', 'relational'],
   icon: '🐘',
   repoUrl: 'https://hub.docker.com/_/postgres',
-  dockerImage: 'postgres:16-alpine',
+  dockerImage: 'postgres:17-alpine',
   serviceType: 'DATABASE',
   envVars: [
     {

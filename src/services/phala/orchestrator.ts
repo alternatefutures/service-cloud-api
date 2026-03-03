@@ -111,16 +111,20 @@ export class PhalaOrchestrator {
 
   /**
    * Deploy a service to Phala from compose + env.
-   * Creates DB record first, then runs phala deploy.
+   *
+   * When QStash is available, creates the DB record and enqueues
+   * DEPLOY_CVM as a background step with automatic retry on failure.
+   * When QStash is not available (local dev), runs the step pipeline
+   * in-process.
    */
   async deployServicePhala(
     serviceId: string,
     options: {
       composeContent: string
       env?: Record<string, string>
-      envKeys?: string[] // keys only, for storage
+      envKeys?: string[]
       name?: string
-      cvmSize?: string // tdx.small, tdx.medium, tdx.large, tdx.xlarge
+      cvmSize?: string
     }
   ): Promise<string> {
     const service = await this.prisma.service.findUnique({
@@ -171,130 +175,28 @@ export class PhalaOrchestrator {
         serviceId,
         siteId: service.type === 'SITE' ? service.site?.id : null,
         afFunctionId: service.type === 'FUNCTION' ? service.afFunction?.id : null,
-        // Billing fields
         hourlyRateCents,
         marginRate,
         orgBillingId,
         organizationId,
+        retryCount: 0,
       },
     })
 
-    let workDir: string | null = null
+    console.log(`[PhalaOrchestrator] Created deployment record ${deployment.id}, enqueuing DEPLOY_CVM step...`)
 
-    try {
-      workDir = mkdtempSync(join(tmpdir(), 'phala-deploy-'))
-      const composePath = join(workDir, 'docker-compose.yml')
-      const envPath = join(workDir, '.env')
+    const { isQStashEnabled, publishJob } = await import('../queue/qstashClient.js')
+    const { handlePhalaStep } = await import('../queue/webhookHandler.js')
 
-      writeFileSync(composePath, options.composeContent)
-
-      // Merge passed env with persisted env vars (persisted wins)
-      const envVars = { ...(options.env || {}) }
-      try {
-        const { buildServiceMap, resolveEnvVars } = await import('../../utils/envInterpolation.js')
-        const persistedVars = await this.prisma.serviceEnvVar.findMany({
-          where: { serviceId },
-        })
-        if (persistedVars.length > 0) {
-          const siblings = await this.prisma.service.findMany({
-            where: { projectId: service.projectId },
-            include: { envVars: true, ports: true },
-          })
-          const serviceMap = buildServiceMap(
-            siblings.map((s: any) => ({
-              slug: s.slug,
-              internalHostname: s.internalHostname,
-              envVars: s.envVars.map((e: any) => ({ key: e.key, value: e.value })),
-              ports: s.ports.map((p: any) => ({ containerPort: p.containerPort, publicPort: p.publicPort })),
-            })),
-          )
-          const resolved = resolveEnvVars(
-            persistedVars.map((v: any) => ({ key: v.key, value: v.value })),
-            serviceMap,
-          )
-          for (const { key, value } of resolved) {
-            envVars[key] = value
-          }
-        }
-      } catch (err) {
-        console.warn('[PhalaOrchestrator] Failed to resolve persisted env vars, proceeding with template env:', err)
-      }
-
-      const envLines = Object.entries(envVars)
-        .map(([k, v]) => `${k}=${v}`)
-        .join('\n')
-      writeFileSync(envPath, envLines)
-
-      const deployArgs = ['deploy', '-n', name, '-c', composePath]
-      if (Object.keys(envVars).length > 0) {
-        deployArgs.push('-e', envPath)
-      }
-      deployArgs.push('--json')
-
-      const output = runPhala(deployArgs)
-      const result = extractJson(output) as Record<string, unknown>
-
-      if (!result?.success) {
-        throw new Error(String(result?.error || result?.message || 'Deploy failed'))
-      }
-
-      const appIdRaw = result.app_id || result.appId || result.vm_uuid
-      if (!appIdRaw) {
-        throw new Error('Deploy succeeded but no app_id returned')
-      }
-      const appId = String(appIdRaw)
-
-      await this.prisma.phalaDeployment.update({
-        where: { id: deployment.id },
-        data: { appId, status: 'STARTING' },
+    if (isQStashEnabled()) {
+      await publishJob('/queue/phala/step', { step: 'DEPLOY_CVM', deploymentId: deployment.id })
+    } else {
+      handlePhalaStep({ step: 'DEPLOY_CVM', deploymentId: deployment.id }).catch(err => {
+        console.error('[PhalaOrchestrator] In-process step pipeline failed:', err)
       })
-
-      // Poll until running
-      let appUrl: string | null = null
-      for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
-        const status = await this.getCvmStatus(appId)
-        if (status?.status === 'running') {
-          const urls = (status.public_urls || status.publicUrls || []) as Array<{ app?: string } | string>
-          const first = urls[0]
-          appUrl = typeof first === 'string' ? first : first?.app ?? null
-          break
-        }
-        if (status?.status === 'failed' || status?.status === 'error') {
-          const errMsg = typeof status.error === 'string' ? status.error : String(status.message || 'CVM failed')
-          throw new Error(errMsg)
-        }
-      }
-
-      await this.prisma.phalaDeployment.update({
-        where: { id: deployment.id },
-        data: {
-          status: 'ACTIVE' as PhalaDeploymentStatus,
-          appUrl,
-          activeStartedAt: new Date(),
-          lastBilledAt: new Date(), // billing clock starts now
-        },
-      })
-
-      return deployment.id
-    } catch (error) {
-      await this.prisma.phalaDeployment.update({
-        where: { id: deployment.id },
-        data: {
-          status: 'FAILED',
-          errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        },
-      })
-      throw error
-    } finally {
-      if (workDir) {
-        try {
-          rmSync(workDir, { recursive: true })
-        } catch {
-          // ignore cleanup errors
-        }
-      }
     }
+
+    return deployment.id
   }
 
   /**

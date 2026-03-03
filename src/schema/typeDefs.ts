@@ -400,6 +400,13 @@ export const typeDefs = /* GraphQL */ `
     pricePerBlock: String
     errorMessage: String
     image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milaidy-akash:main)
+    retryCount: Int!
+    parentDeploymentId: String
+    costPerHour: Float
+    costPerDay: Float
+    costPerMonth: Float
+    dailyRateCentsRaw: Int
+    dailyRateCentsCharged: Int
     createdAt: Date!
     updatedAt: Date!
     deployedAt: Date
@@ -415,6 +422,7 @@ export const typeDefs = /* GraphQL */ `
     DEPLOYING
     ACTIVE
     FAILED
+    PERMANENTLY_FAILED
     CLOSED
   }
 
@@ -441,6 +449,12 @@ export const typeDefs = /* GraphQL */ `
     afFunctionId: ID
     afFunction: AFFunction
 
+    retryCount: Int!
+    parentDeploymentId: String
+    costPerHour: Float
+    costPerDay: Float
+    costPerMonth: Float
+
     createdAt: Date!
     updatedAt: Date!
   }
@@ -452,6 +466,19 @@ export const typeDefs = /* GraphQL */ `
     FAILED
     STOPPED
     DELETED
+  }
+
+  type DeploymentProgress {
+    deploymentId: String!
+    provider: String!
+    status: String!
+    step: String!
+    stepNumber: Int!
+    totalSteps: Int!
+    retryCount: Int!
+    message: String
+    errorMessage: String
+    timestamp: String!
   }
 
   """

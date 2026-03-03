@@ -10,7 +10,7 @@ export const comfyuiServer: Template = {
   tags: ['ai', 'stable-diffusion', 'image-generation', 'gpu', 'comfyui', 'generative'],
   icon: '🎨',
   repoUrl: 'https://github.com/comfyanonymous/ComfyUI',
-  dockerImage: 'yanwk/comfyui-boot:cu124-slim',
+  dockerImage: 'yanwk/comfyui-boot:cu128-slim',
   serviceType: 'VM',
   envVars: [
     {

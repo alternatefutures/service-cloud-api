@@ -1016,6 +1016,15 @@ model AkashDeployment {
   // Error info
   errorMessage    String?
 
+  // QStash background job retry tracking
+  retryCount      Int                 @default(0)
+  parentDeploymentId String?          // Links retries to the original deployment
+  qstashMessageId String?             // For cancellation of pending QStash messages
+
+  // Cost display (computed at lease creation, includes margin)
+  dailyRateCentsRaw     Int?          // Raw provider cost per day in cents
+  dailyRateCentsCharged Int?          // Cost after margin per day in cents
+
   // Timestamps
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
@@ -1031,16 +1040,17 @@ model AkashDeployment {
 }
 
 enum AkashDeploymentStatus {
-  CREATING        // Creating deployment on chain
-  WAITING_BIDS    // Waiting for provider bids
-  SELECTING_BID   // Selecting provider
-  CREATING_LEASE  // Creating lease with provider
-  SENDING_MANIFEST // Sending manifest to provider
-  DEPLOYING       // Provider deploying containers
-  ACTIVE          // Deployment running
-  FAILED          // Deployment failed
-  CLOSED          // Deployment closed (permanent)
-  SUSPENDED       // Paused due to low balance (will auto-resume on topup)
+  CREATING           // Creating deployment on chain
+  WAITING_BIDS       // Waiting for provider bids
+  SELECTING_BID      // Selecting provider
+  CREATING_LEASE     // Creating lease with provider
+  SENDING_MANIFEST   // Sending manifest to provider
+  DEPLOYING          // Provider deploying containers
+  ACTIVE             // Deployment running
+  FAILED             // Deployment failed
+  CLOSED             // Deployment closed (permanent)
+  SUSPENDED          // Paused due to low balance (will auto-resume on topup)
+  PERMANENTLY_FAILED // Failed after all retries exhausted
 }
 
 // ============================================
@@ -1084,12 +1094,13 @@ model DeploymentEscrow {
 // ============================================
 
 enum PhalaDeploymentStatus {
-  CREATING   // CVM being created
-  STARTING   // CVM starting up
-  ACTIVE     // CVM running
-  FAILED     // Deployment failed
-  STOPPED    // CVM stopped
-  DELETED    // CVM deleted
+  CREATING           // CVM being created
+  STARTING           // CVM starting up
+  ACTIVE             // CVM running
+  FAILED             // Deployment failed
+  STOPPED            // CVM stopped
+  DELETED            // CVM deleted
+  PERMANENTLY_FAILED // Failed after all retries exhausted
 }
 
 model PhalaDeployment {
@@ -1120,6 +1131,11 @@ model PhalaDeployment {
   activeStartedAt DateTime?               @map("active_started_at") // When CVM became ACTIVE
   lastBilledAt    DateTime?               @map("last_billed_at")    // Last time daily job billed this
   totalBilledCents Int                    @default(0) @map("total_billed_cents")
+
+  // QStash background job retry tracking
+  retryCount      Int                     @default(0)
+  parentDeploymentId String?              // Links retries to original deployment
+  qstashMessageId String?                 // For cancellation of pending QStash messages
 
   // Relations
   serviceId       String

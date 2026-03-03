@@ -85,6 +85,18 @@ export const phalaQueries = {
 
 export const phalaFieldResolvers = {
   PhalaDeployment: {
+    costPerHour: (parent: any) => {
+      if (parent.hourlyRateCents == null) return null
+      return parent.hourlyRateCents / 100
+    },
+    costPerDay: (parent: any) => {
+      if (parent.hourlyRateCents == null) return null
+      return (parent.hourlyRateCents / 100) * 24
+    },
+    costPerMonth: (parent: any) => {
+      if (parent.hourlyRateCents == null) return null
+      return (parent.hourlyRateCents / 100) * 24 * 30
+    },
     service: async (parent: any, _: unknown, context: Context) => {
       return context.prisma.service.findUnique({
         where: { id: parent.serviceId },

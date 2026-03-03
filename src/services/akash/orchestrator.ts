@@ -498,8 +498,15 @@ export class AkashOrchestrator {
   // ========================================
 
   /**
-   * Deploy any service to Akash (full flow)
-   * This is the primary method that handles all service types via the Service Registry.
+   * Deploy any service to Akash (full flow).
+   *
+   * When QStash is available (production), this method creates the DB record
+   * and enqueues the first step, returning immediately. The deployment then
+   * proceeds through the step pipeline in the background with automatic
+   * retry (up to 3 times) on failure.
+   *
+   * When QStash is not available (local dev), the steps execute in-process
+   * sequentially via the same step handlers, preserving the same code path.
    */
   async deployService(
     serviceId: string,
@@ -554,220 +561,42 @@ export class AkashOrchestrator {
       }
     }
 
-    // Fetch persisted env vars and resolve interpolations
+    // Prepare SDL content
     let sdlContent = options.sdlContent || await this.generateSDLForService(service)
     sdlContent = await this.injectPersistedEnvVars(service.id, service.projectId, sdlContent)
 
-    const workDir = mkdtempSync(join(tmpdir(), 'akash-deploy-'))
-    const sdlPath = join(workDir, 'deploy.yaml')
-    writeFileSync(sdlPath, sdlContent)
-
+    // Create DB record with CREATING status
     const owner = await this.getAccountAddress()
-    let deployment: Awaited<ReturnType<typeof this.prisma.akashDeployment.create>> | null = null
+    const deployment = await this.prisma.akashDeployment.create({
+      data: {
+        owner,
+        dseq: BigInt(0),
+        sdlContent,
+        serviceId: service.id,
+        afFunctionId: service.type === 'FUNCTION' ? service.afFunction?.id : null,
+        siteId: service.type === 'SITE' ? service.site?.id : null,
+        depositUakt: BigInt(deposit),
+        status: 'CREATING',
+        retryCount: 0,
+      },
+    })
 
-    try {
-      // Create deployment on chain
-      console.log(`[AkashOrchestrator] Creating deployment for ${service.type}:${service.name}...`)
-      const { dseq } = await this.createDeployment(sdlPath, deposit)
-      console.log(`[AkashOrchestrator] Deployment created with dseq: ${dseq}`)
+    console.log(`[AkashOrchestrator] Created deployment record ${deployment.id}, enqueuing SUBMIT_TX step...`)
 
-      deployment = await this.prisma.akashDeployment.create({
-        data: {
-          owner,
-          dseq: BigInt(dseq),
-          sdlContent,
-          serviceId: service.id,
-          afFunctionId: service.type === 'FUNCTION' ? service.afFunction?.id : null,
-          siteId: service.type === 'SITE' ? service.site?.id : null,
-          depositUakt: BigInt(deposit),
-          status: 'WAITING_BIDS',
-        },
+    // Enqueue the first step — QStash or in-process depending on environment
+    const { isQStashEnabled, publishJob } = await import('../queue/qstashClient.js')
+    const { handleAkashStep } = await import('../queue/webhookHandler.js')
+
+    if (isQStashEnabled()) {
+      await publishJob('/queue/akash/step', { step: 'SUBMIT_TX', deploymentId: deployment.id })
+    } else {
+      // Local dev: run step pipeline in-process (non-blocking — fire and forget)
+      handleAkashStep({ step: 'SUBMIT_TX', deploymentId: deployment.id }).catch(err => {
+        console.error('[AkashOrchestrator] In-process step pipeline failed:', err)
       })
-
-      // Wait for bids (poll with backoff)
-      console.log('[AkashOrchestrator] Waiting for bids...')
-      let bids: Awaited<ReturnType<typeof this.getBids>> = []
-      for (let i = 0; i < BID_POLL_MAX_ATTEMPTS; i++) {
-        await new Promise(r => setTimeout(r, BID_POLL_INTERVAL_MS * (i + 1)))
-        bids = await this.getBids(owner, dseq)
-        if (bids.length > 0) break
-      }
-
-      if (bids.length === 0) {
-        throw new Error('No bids received within timeout')
-      }
-
-      console.log(`[AkashOrchestrator] Received ${bids.length} bids`)
-
-      await this.prisma.akashDeployment.update({
-        where: { id: deployment.id },
-        data: { status: 'SELECTING_BID' },
-      })
-
-      // Filter bids and select cheapest safe provider
-      const filteredBids = providerSelector.filterBids(bids as any, 'standalone')
-      const safeBids = filteredBids.filter(b => b.isSafe)
-
-      if (safeBids.length === 0) {
-        const blockedProviders = filteredBids.filter(b => !b.isSafe)
-        console.log('[AkashOrchestrator] All bids were from blocked providers:',
-          blockedProviders.map(b => `${b.bidId.provider}: ${b.unsafeReason}`).join(', '))
-        throw new Error('No safe bids available - all providers are blocked')
-      }
-
-      console.log(`[AkashOrchestrator] ${safeBids.length}/${bids.length} bids from safe providers`)
-
-      const selectedBid = safeBids.sort((a, b) => {
-        const priceA = parseFloat(a.price.amount) || 0
-        const priceB = parseFloat(b.price.amount) || 0
-        return priceA - priceB
-      })[0]
-
-      const provider = selectedBid.bidId.provider
-      const gseq = selectedBid.bidId.gseq
-      const oseq = selectedBid.bidId.oseq
-
-      // Create lease
-      console.log('[AkashOrchestrator] Creating lease with provider:', provider)
-      await this.prisma.akashDeployment.update({
-        where: { id: deployment.id },
-        data: {
-          provider,
-          gseq,
-          oseq,
-          pricePerBlock: selectedBid.price.amount,
-          status: 'CREATING_LEASE',
-        },
-      })
-
-      await this.createLease(owner, dseq, gseq, oseq, provider)
-
-      // Send manifest
-      console.log('[AkashOrchestrator] Sending manifest...')
-      await this.prisma.akashDeployment.update({
-        where: { id: deployment.id },
-        data: { status: 'SENDING_MANIFEST' },
-      })
-
-      await this.sendManifest(sdlPath, dseq, provider)
-
-      // Wait for services to be ready
-      console.log('[AkashOrchestrator] Waiting for services...')
-      await this.prisma.akashDeployment.update({
-        where: { id: deployment.id },
-        data: { status: 'DEPLOYING' },
-      })
-
-      let akashServices: Record<string, { uris: string[] }> = {}
-      let hasUris = false
-      for (let i = 0; i < SERVICE_POLL_MAX_ATTEMPTS; i++) {
-        await new Promise(r => setTimeout(r, SERVICE_POLL_INTERVAL_MS))
-        try {
-          akashServices = await this.getServices(dseq, provider)
-          hasUris = Object.values(akashServices).some(s => s.uris?.length > 0)
-          if (hasUris) break
-        } catch (err) {
-          console.warn(`[AkashOrchestrator] getServices poll attempt ${i + 1}/${SERVICE_POLL_MAX_ATTEMPTS} failed:`, err instanceof Error ? err.message : err)
-        }
-      }
-
-      // Create platform-level escrow
-      try {
-        const escrowService = getEscrowService(this.prisma)
-        const billingApi = getBillingApiClient()
-
-        const project = service.site?.projectId || service.afFunction?.projectId || service.projectId
-        let organizationId: string | undefined
-        if (project) {
-          const proj = await this.prisma.project.findUnique({
-            where: { id: typeof project === 'string' ? project : service.projectId },
-            select: { organizationId: true },
-          })
-          organizationId = proj?.organizationId ?? undefined
-        }
-
-        if (organizationId && selectedBid.price.amount) {
-          const orgMarkup = await billingApi.getOrgMarkup(
-            (await billingApi.getOrgBilling(organizationId)).orgBillingId
-          )
-
-          await escrowService.createEscrow({
-            akashDeploymentId: deployment.id,
-            organizationId,
-            pricePerBlock: selectedBid.price.amount,
-            marginRate: orgMarkup.marginRate,
-            userId: service.createdByUserId || 'system',
-          })
-        }
-      } catch (escrowError) {
-        console.warn(
-          `[AkashOrchestrator] Escrow creation failed for deployment ${deployment.id}:`,
-          escrowError instanceof Error ? escrowError.message : escrowError
-        )
-      }
-
-      // Update deployment as active
-      await this.prisma.akashDeployment.update({
-        where: { id: deployment.id },
-        data: {
-          status: 'ACTIVE',
-          serviceUrls: akashServices,
-          deployedAt: new Date(),
-        },
-      })
-
-      const baseDomain = process.env.PROXY_BASE_DOMAIN || 'alternatefutures.ai'
-      const protocol = baseDomain.includes('localhost') ? 'http' : 'https'
-      const invokeUrl = `${protocol}://${service.slug}-app.${baseDomain}`
-
-      if (service.type === 'FUNCTION' && service.afFunction) {
-        await this.prisma.aFFunction.update({
-          where: { id: service.afFunction.id },
-          data: {
-            status: 'ACTIVE',
-            invokeUrl,
-          },
-        })
-      }
-
-      // If URIs weren't available during initial polling, start a background
-      // backfill that keeps trying for up to 3 more minutes. This handles slow
-      // providers that need extra time to set up ingress.
-      if (!hasUris) {
-        console.warn(`[AkashOrchestrator] URIs not yet available for dseq=${dseq}. Starting background backfill...`)
-        this.backfillServiceUrls(deployment.id, dseq, provider).catch(err =>
-          console.error('[AkashOrchestrator] URI backfill failed:', err instanceof Error ? err.message : err)
-        )
-      }
-
-      console.log('[AkashOrchestrator] Deployment complete:', invokeUrl)
-      return deployment.id
-    } catch (error) {
-      if (deployment) {
-        await this.prisma.akashDeployment.update({
-          where: { id: deployment.id },
-          data: {
-            status: 'FAILED',
-            errorMessage: error instanceof Error ? error.message : 'Unknown error',
-          },
-        })
-      }
-
-      if (service.type === 'FUNCTION' && service.afFunction) {
-        await this.prisma.aFFunction.update({
-          where: { id: service.afFunction.id },
-          data: { status: 'FAILED' },
-        })
-      }
-
-      throw error
-    } finally {
-      try {
-        rmSync(workDir, { recursive: true })
-      } catch {
-        // ignore cleanup errors
-      }
     }
+
+    return deployment.id
   }
 
   /**

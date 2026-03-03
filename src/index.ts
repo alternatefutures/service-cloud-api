@@ -33,6 +33,11 @@ import {
   createAkashProvider,
   createPhalaProvider,
 } from './services/providers/index.js'
+import {
+  initQueueHandler,
+  handleAkashWebhook,
+  handlePhalaWebhook,
+} from './services/queue/index.js'
 
 // Initialize Infisical (or dotenv fallback) before anything else
 await initInfisical()
@@ -191,6 +196,16 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
+  // QStash webhook endpoints for background deployment processing
+  if (url.pathname === '/queue/akash/step' && req.method === 'POST') {
+    await handleAkashWebhook(req, res)
+    return
+  }
+  if (url.pathname === '/queue/phala/step' && req.method === 'POST') {
+    await handlePhalaWebhook(req, res)
+    return
+  }
+
   // Pass all other requests to Yoga
   return yoga(req, res)
 }
@@ -243,6 +258,10 @@ server.listen(port, () => {
   registerProvider(createAkashProvider(prisma))
   registerProvider(createPhalaProvider(prisma))
   console.log('🔌 Deployment providers registered')
+
+  // Initialize QStash queue handler
+  initQueueHandler(prisma)
+  console.log('📬 QStash queue handler initialized')
 
   // Resume any interrupted URI backfills from previous pod lifecycle
   const orchestrator = new AkashOrchestrator(prisma)

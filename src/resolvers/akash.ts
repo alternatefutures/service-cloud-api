@@ -310,6 +310,18 @@ export const akashFieldResolvers = {
       const match = parent.sdlContent?.match(/image:\s*["']?([^\s"']+)/)
       return match ? match[1] : null
     },
+    costPerDay: (parent: any) => {
+      if (parent.dailyRateCentsCharged == null) return null
+      return parent.dailyRateCentsCharged / 100
+    },
+    costPerHour: (parent: any) => {
+      if (parent.dailyRateCentsCharged == null) return null
+      return parent.dailyRateCentsCharged / 100 / 24
+    },
+    costPerMonth: (parent: any) => {
+      if (parent.dailyRateCentsCharged == null) return null
+      return (parent.dailyRateCentsCharged / 100) * 30
+    },
     service: async (parent: any, _: unknown, context: Context) => {
       return context.prisma.service.findUnique({
         where: { id: parent.serviceId },

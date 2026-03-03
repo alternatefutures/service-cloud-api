@@ -10,7 +10,7 @@ export const giteaServer: Template = {
   tags: ['git', 'devtools', 'vcs', 'self-hosted', 'go', 'gitea'],
   icon: '🍵',
   repoUrl: 'https://github.com/go-gitea/gitea',
-  dockerImage: 'gitea/gitea:1.21-rootless',
+  dockerImage: 'gitea/gitea:1.25-rootless',
   serviceType: 'VM',
   envVars: [
     {
