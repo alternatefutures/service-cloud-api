@@ -310,38 +310,34 @@ export const akashFieldResolvers = {
       const match = parent.sdlContent?.match(/image:\s*["']?([^\s"']+)/)
       return match ? match[1] : null
     },
-    costPerDay: async (parent: any, _: unknown, context: Context) => {
-      if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100
-      // Fallback: compute from escrow or pricePerBlock for older deployments
-      const escrow = await context.prisma.deploymentEscrow.findUnique({ where: { akashDeploymentId: parent.id } })
-      if (escrow?.dailyRateCents) return escrow.dailyRateCents / 100
+    costPerDay: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock)
+        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const aktPrice = await getAktUsdPrice()
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN)
       }
+      if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100
       return null
     },
-    costPerHour: async (parent: any, _: unknown, context: Context) => {
-      if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100 / 24
-      const escrow = await context.prisma.deploymentEscrow.findUnique({ where: { akashDeploymentId: parent.id } })
-      if (escrow?.dailyRateCents) return escrow.dailyRateCents / 100 / 24
+    costPerHour: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock)
+        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const aktPrice = await getAktUsdPrice()
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN) / 24
       }
+      if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100 / 24
       return null
     },
-    costPerMonth: async (parent: any, _: unknown, context: Context) => {
-      if (parent.dailyRateCentsCharged != null) return (parent.dailyRateCentsCharged / 100) * 30
-      const escrow = await context.prisma.deploymentEscrow.findUnique({ where: { akashDeploymentId: parent.id } })
-      if (escrow?.dailyRateCents) return (escrow.dailyRateCents / 100) * 30
+    costPerMonth: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock)
+        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const aktPrice = await getAktUsdPrice()
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN) * 30
       }
+      if (parent.dailyRateCentsCharged != null) return (parent.dailyRateCentsCharged / 100) * 30
       return null
     },
     service: async (parent: any, _: unknown, context: Context) => {

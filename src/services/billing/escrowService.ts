@@ -12,7 +12,7 @@
 
 import type { PrismaClient, DeploymentEscrow, EscrowStatus } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
-import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
+import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
 
 /** Default escrow covers 30 days of estimated deployment cost */
 const DEFAULT_ESCROW_DAYS = 30
@@ -43,8 +43,9 @@ export class EscrowService {
   }): Promise<DeploymentEscrow> {
     const escrowDays = args.escrowDays || DEFAULT_ESCROW_DAYS
 
-    // Calculate daily cost in USD with margin
-    const rawDailyUsd = akashPricePerBlockToUsdPerDay(args.pricePerBlock)
+    // Calculate daily cost in USD with margin (live AKT price)
+    const aktPrice = await getAktUsdPrice()
+    const rawDailyUsd = akashPricePerBlockToUsdPerDay(args.pricePerBlock, aktPrice)
     const chargedDailyUsd = applyMargin(rawDailyUsd, args.marginRate)
     const dailyRateCents = Math.ceil(chargedDailyUsd * 100)
     const depositCents = dailyRateCents * escrowDays

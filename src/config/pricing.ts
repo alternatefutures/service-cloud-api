@@ -77,12 +77,47 @@ export const PHALA_RATES: Record<string, number> = {
 // AKASH — CONVERSION HELPERS
 // ============================================
 
-/** Approximate AKT/USD price — override with AKT_USD_PRICE env var.
- * TODO: replace with a live price feed (CoinGecko API) so this stays accurate */
-export const AKT_USD_PRICE = parseFloat(process.env.AKT_USD_PRICE || '0.32')
+/** Fallback AKT/USD price used when the live CoinGecko feed is unavailable. */
+export const AKT_USD_PRICE_FALLBACK = parseFloat(process.env.AKT_USD_PRICE || '0.33')
+
+/** @deprecated Use getAktUsdPrice() for live price. Kept for non-async call sites. */
+export const AKT_USD_PRICE = AKT_USD_PRICE_FALLBACK
 
 /** Akash blocks per day (~6s/block) */
 export const AKASH_BLOCKS_PER_DAY = 14400
+
+// ---- Live AKT price via CoinGecko (10-min cache) ----
+
+let _aktCache: { price: number; ts: number } | null = null
+const AKT_CACHE_TTL_MS = 10 * 60_000
+
+/**
+ * Fetch the current AKT/USD price from CoinGecko with a 10-minute in-memory cache.
+ * Falls back to AKT_USD_PRICE env var if the API is unreachable.
+ */
+export async function getAktUsdPrice(): Promise<number> {
+  if (_aktCache && Date.now() - _aktCache.ts < AKT_CACHE_TTL_MS) {
+    return _aktCache.price
+  }
+
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=akash-network&vs_currencies=usd',
+      { signal: AbortSignal.timeout(5_000) },
+    )
+    if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`)
+    const data = (await res.json()) as { 'akash-network'?: { usd?: number } }
+    const price = data['akash-network']?.usd
+    if (price && price > 0) {
+      _aktCache = { price, ts: Date.now() }
+      return price
+    }
+  } catch (err) {
+    console.warn('[pricing] CoinGecko AKT price fetch failed, using fallback:', (err as Error).message)
+  }
+
+  return _aktCache?.price ?? AKT_USD_PRICE_FALLBACK
+}
 
 // ============================================
 // BANDWIDTH
@@ -193,15 +228,20 @@ export function calculateStorageCostWithMargin(
 }
 
 /**
- * Convert Akash pricePerBlock (uAKT) to USD per day
+ * Convert Akash pricePerBlock (uAKT) to USD per day.
  * @param pricePerBlock - Price in uAKT per block (from bid)
+ * @param aktUsdPrice   - Current AKT/USD rate. Pass the result of getAktUsdPrice()
+ *                        for live pricing; omit only in sync contexts where the fallback is acceptable.
  * @returns Daily cost in USD (raw, before margin)
  */
-export function akashPricePerBlockToUsdPerDay(pricePerBlock: string | number): number {
+export function akashPricePerBlockToUsdPerDay(
+  pricePerBlock: string | number,
+  aktUsdPrice: number = AKT_USD_PRICE_FALLBACK,
+): number {
   const priceUakt = typeof pricePerBlock === 'string' ? parseFloat(pricePerBlock) : pricePerBlock
   const dailyUakt = priceUakt * AKASH_BLOCKS_PER_DAY
   const dailyAkt = dailyUakt / 1_000_000
-  return dailyAkt * AKT_USD_PRICE
+  return dailyAkt * aktUsdPrice
 }
 
 /**
