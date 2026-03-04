@@ -308,6 +308,54 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
   }
 }
 
+// ── Helper: resolve provider GPU model from on-chain attributes ───────
+
+async function resolveProviderGpuModel(
+  providerAddr: string,
+  dseq: bigint,
+  prisma: PrismaClient,
+  deploymentId: string,
+): Promise<string | null> {
+  try {
+    // First check if the SDL already specifies a concrete model
+    const deployment = await prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { sdlContent: true },
+    })
+    if (deployment?.sdlContent) {
+      // Quick regex check for gpu model in SDL (e.g. "model: rtx4090")
+      const modelMatch = deployment.sdlContent.match(/gpu:[\s\S]*?model:\s*(\S+)/m)
+      if (modelMatch?.[1] && modelMatch[1] !== 'nvidia') {
+        return modelMatch[1]
+      }
+    }
+
+    // SDL has no specific model (or "any") — query the provider's attributes
+    const output = await runAkashAsync(
+      ['query', 'provider', 'get', providerAddr, '-o', 'json'],
+      15_000,
+    )
+    const result = extractJson(output) as {
+      provider?: { attributes?: Array<{ key: string; value: string }> }
+    }
+    const attrs = result.provider?.attributes || []
+
+    // Provider attributes use keys like:
+    //   "capabilities/gpu/vendor/nvidia/model/rtx4000ada"
+    //   "capabilities/gpu/vendor/nvidia/model/a100"
+    for (const attr of attrs) {
+      const gpuMatch = attr.key.match(/capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/)
+      if (gpuMatch?.[2]) return `${gpuMatch[1]}-${gpuMatch[2]}`
+    }
+  } catch (err) {
+    console.warn(
+      `[AkashSteps] Could not resolve GPU model for provider ${providerAddr}:`,
+      err instanceof Error ? err.message : err,
+    )
+  }
+  return null
+}
+
 // ── Step 3: CREATE_LEASE ──────────────────────────────────────────────
 
 export async function handleCreateLease(prisma: PrismaClient, payload: AkashCreateLeasePayload): Promise<void> {
@@ -331,9 +379,12 @@ export async function handleCreateLease(prisma: PrismaClient, payload: AkashCrea
     // Wait for lease confirmation
     await new Promise(r => setTimeout(r, 6000))
 
+    // Resolve the actual GPU model from the provider's attributes
+    const gpuModel = await resolveProviderGpuModel(provider, deployment.dseq, prisma, deploymentId)
+
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'SENDING_MANIFEST' },
+      data: { status: 'SENDING_MANIFEST', ...(gpuModel ? { gpuModel } : {}) },
     })
 
     emitProgress(deploymentId, 'CREATE_LEASE', AKASH_STEP_NUMBERS.CREATE_LEASE, deployment.retryCount, 'Lease created. Sending manifest...')
@@ -543,6 +594,7 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
         afFunctionId: deployment.afFunctionId,
         siteId: deployment.siteId,
         depositUakt: deployment.depositUakt,
+        gpuModel: deployment.gpuModel,
         status: 'CREATING',
         retryCount: retryCount + 1,
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,

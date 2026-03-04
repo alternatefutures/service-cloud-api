@@ -400,6 +400,7 @@ export const typeDefs = /* GraphQL */ `
     pricePerBlock: String
     errorMessage: String
     image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milaidy-akash:main)
+    gpuModel: String              # GPU model resolved from provider after lease (e.g. "rtx4090", "a100")
     retryCount: Int!
     parentDeploymentId: String
     costPerHour: Float

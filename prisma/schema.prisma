@@ -1013,6 +1013,9 @@ model AkashDeployment {
   escrow          DeploymentEscrow?   // Platform-level escrow for this deployment
   savedSdl        String?             @db.Text // SDL saved on SUSPEND for re-deploy on resume
 
+  // GPU model resolved from provider after lease creation (e.g. "rtx4090", "a100")
+  gpuModel        String?
+
   // Error info
   errorMessage    String?
 
