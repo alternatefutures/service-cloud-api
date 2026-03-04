@@ -73,8 +73,8 @@ export async function publishJob(
     headers['Upstash-Delay'] = `${options.delaySec}s`
   }
 
-  // Disable QStash's built-in retries — we handle retry logic ourselves
-  headers['Upstash-Retries'] = '0'
+  // QStash retries on non-2xx responses (webhook handler returns 500 on failure)
+  headers['Upstash-Retries'] = '3'
 
   const result = await qstash.publishJSON({
     url,

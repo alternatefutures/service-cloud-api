@@ -808,10 +808,17 @@ export const resolvers = {
         throw new GraphQLError('Not authenticated')
       }
 
-      // Build project filter: specific project, or all user's projects
+      // Build project filter: specific project, org-scoped, or user-owned
       const projectWhere = projectId
         ? { id: projectId }
-        : { userId: context.userId }
+        : context.organizationId
+          ? {
+              OR: [
+                { organizationId: context.organizationId },
+                { userId: context.userId, organizationId: null },
+              ],
+            }
+          : { userId: context.userId }
 
       const projects = await context.prisma.project.findMany({
         where: projectWhere,

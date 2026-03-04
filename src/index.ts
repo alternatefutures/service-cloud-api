@@ -38,6 +38,7 @@ import {
   handleAkashWebhook,
   handlePhalaWebhook,
 } from './services/queue/index.js'
+import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
 
 // Initialize Infisical (or dotenv fallback) before anything else
 await initInfisical()
@@ -266,11 +267,15 @@ server.listen(port, () => {
   // Resume any interrupted URI backfills from previous pod lifecycle
   const orchestrator = new AkashOrchestrator(prisma)
   orchestrator.resumePendingBackfills()
+
+  // Sweep stale deployments stuck in intermediate states (startup + every 5 min)
+  startStaleDeploymentSweeper(prisma)
 })
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing HTTP server')
+  stopStaleDeploymentSweeper()
   server.close(async () => {
     await chatServer.shutdown()
     await usageAggregator.shutdown()

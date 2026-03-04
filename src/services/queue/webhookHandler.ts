@@ -4,6 +4,10 @@
  * Mounted at /queue/akash/step and /queue/phala/step in the main server.
  * Each call is signature-verified (in production) and dispatched to the
  * appropriate step handler.
+ *
+ * IMPORTANT: Steps are processed BEFORE the 200 response so QStash retries
+ * on failure (transient DB errors, OOM, crashes). This is critical for
+ * delivery guarantees — a fire-and-forget 200 + Retries:0 loses jobs.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -73,6 +77,8 @@ export async function handlePhalaStep(payload: PhalaJobPayload): Promise<void> {
 
 /**
  * HTTP request handler for /queue/akash/step
+ *
+ * Processes the step BEFORE responding so QStash retries on failure.
  */
 export async function handleAkashWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'POST') {
@@ -103,17 +109,19 @@ export async function handleAkashWebhook(req: IncomingMessage, res: ServerRespon
     return
   }
 
-  // Respond 200 immediately — QStash considers non-2xx as failure
-  sendJson(res, 200, { ok: true, step: payload.step })
-
-  // Process asynchronously
-  handleAkashStep(payload).catch(err => {
+  try {
+    await handleAkashStep(payload)
+    sendJson(res, 200, { ok: true, step: payload.step })
+  } catch (err) {
     console.error(`[QueueHandler] Akash step ${payload.step} failed:`, err)
-  })
+    sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
+  }
 }
 
 /**
  * HTTP request handler for /queue/phala/step
+ *
+ * Processes the step BEFORE responding so QStash retries on failure.
  */
 export async function handlePhalaWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'POST') {
@@ -144,9 +152,11 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
     return
   }
 
-  sendJson(res, 200, { ok: true, step: payload.step })
-
-  handlePhalaStep(payload).catch(err => {
+  try {
+    await handlePhalaStep(payload)
+    sendJson(res, 200, { ok: true, step: payload.step })
+  } catch (err) {
     console.error(`[QueueHandler] Phala step ${payload.step} failed:`, err)
-  })
+    sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
+  }
 }
