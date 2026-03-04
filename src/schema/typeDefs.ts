@@ -441,6 +441,7 @@ export const typeDefs = /* GraphQL */ `
     envKeys: [String!]
     appUrl: String
     teepod: String
+    gpuModel: String
 
     serviceId: ID!
     service: Service!

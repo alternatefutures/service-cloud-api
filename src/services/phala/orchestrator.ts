@@ -125,6 +125,7 @@ export class PhalaOrchestrator {
       envKeys?: string[]
       name?: string
       cvmSize?: string
+      gpuModel?: string
     }
   ): Promise<string> {
     const service = await this.prisma.service.findUnique({
@@ -172,6 +173,7 @@ export class PhalaOrchestrator {
         composeContent: options.composeContent,
         envKeys: envKeys.length > 0 ? (envKeys as string[]) : undefined,
         cvmSize,
+        gpuModel: options.gpuModel ?? null,
         serviceId,
         siteId: service.type === 'SITE' ? service.site?.id : null,
         afFunctionId: service.type === 'FUNCTION' ? service.afFunction?.id : null,

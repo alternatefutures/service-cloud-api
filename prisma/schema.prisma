@@ -1121,6 +1121,7 @@ model PhalaDeployment {
   composeContent  String                  @db.Text
   envKeys         Json?                   // Array of env var keys only (never values)
   cvmSize         String?                 @map("cvm_size") // tdx.small, tdx.medium, tdx.large, tdx.xlarge
+  gpuModel        String?                 // GPU model selected at deploy time (e.g. "h200", "h100", "b200")
 
   // Outputs
   appUrl          String?

@@ -285,12 +285,15 @@ export const templateMutations = {
     )
     const orchestrator = getPhalaOrchestrator(context.prisma)
 
+    const gpuModel = input.resourceOverrides?.gpu?.model ?? template.resources.gpu?.model ?? undefined
+
     try {
       const deploymentId = await orchestrator.deployServicePhala(service.id, {
         composeContent,
         env: mergedEnv,
         envKeys,
         name: `af-${slug}-${Date.now().toString(36)}`,
+        gpuModel,
       })
 
       const deployment = await context.prisma.phalaDeployment.findUnique({
