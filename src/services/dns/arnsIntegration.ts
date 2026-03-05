@@ -189,8 +189,7 @@ export async function getArnsRecord(
       return null
     }
 
-    // Get latest deployment CID as content ID
-    const contentId = domain.site.deployments[0]?.cid || ''
+    const contentId = domain.site?.deployments[0]?.cid || ''
 
     return {
       name: domain.arnsName,

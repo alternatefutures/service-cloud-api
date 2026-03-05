@@ -224,6 +224,34 @@ async function validateTokenViaAuthService(
   return promise
 }
 
+/**
+ * Ensure the Organization and OrganizationMember rows exist when we have
+ * both a userId and organizationId from the request context.
+ * Runs fire-and-forget so it never blocks the request.
+ */
+async function ensureOrgMembership(
+  prisma: PrismaClient,
+  userId: string,
+  organizationId: string
+): Promise<void> {
+  try {
+    await prisma.organization.upsert({
+      where: { id: organizationId },
+      update: {},
+      create: { id: organizationId },
+    })
+    await prisma.organizationMember.upsert({
+      where: {
+        organizationId_userId: { organizationId, userId },
+      },
+      update: {},
+      create: { organizationId, userId, role: 'OWNER' },
+    })
+  } catch {
+    // Non-critical — don't block auth
+  }
+}
+
 export async function getAuthContext(
   request: Request,
   prisma: PrismaClient
@@ -253,6 +281,10 @@ export async function getAuthContext(
       const projectId = request.headers.get('x-project-id') || undefined
       const organizationId = request.headers.get('x-organization-id') || undefined
 
+      if (organizationId) {
+        ensureOrgMembership(prisma, authAccessResult.userId, organizationId)
+      }
+
       return {
         userId: authAccessResult.userId,
         organizationId,
@@ -274,6 +306,10 @@ export async function getAuthContext(
 
         const projectId = request.headers.get('x-project-id') || undefined
         const organizationId = request.headers.get('x-organization-id') || undefined
+
+        if (organizationId) {
+          ensureOrgMembership(prisma, remote.userId, organizationId)
+        }
 
         return {
           userId: remote.userId,
@@ -341,6 +377,10 @@ export async function getAuthContext(
     // Organization ID comes from token, can be overridden by header
     const organizationIdHeader = request.headers.get('x-organization-id')
     const organizationId = organizationIdHeader || validationResult.organizationId
+
+    if (organizationId) {
+      ensureOrgMembership(prisma, validationResult.userId, organizationId)
+    }
 
     return {
       userId: validationResult.userId,

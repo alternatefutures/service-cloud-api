@@ -226,6 +226,7 @@ model Organization {
 
   members   OrganizationMember[]
   projects  Project[]
+  domains   Domain[]
 
   @@index([slug])
 }
@@ -353,8 +354,12 @@ model Domain {
   verified    Boolean      @default(false)
   domainType  DomainType   @default(WEB2)
 
-  siteId      String
-  site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  // Org-level ownership (domain can exist at org level without a site)
+  organizationId String?  @map("organization_id")
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  siteId      String?
+  site        Site?        @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   primarySite Site[]       @relation("PrimaryDomain")
 
@@ -389,6 +394,7 @@ model Domain {
   updatedAt   DateTime @updatedAt
 
   @@index([siteId])
+  @@index([organizationId])
   @@index([hostname])
   @@index([txtVerificationStatus])
   @@index([sslStatus])

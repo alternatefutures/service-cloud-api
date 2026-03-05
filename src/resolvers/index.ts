@@ -10,7 +10,12 @@ import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHe
 import { chatResolvers } from './chat.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
-import { dnsAdminQueries, dnsAdminMutations } from './dnsAdmin.js'
+import {
+  dnsAdminQueries,
+  dnsAdminMutations,
+  domainRegistrationQueries,
+  domainRegistrationMutations,
+} from './dnsAdmin.js'
 import {
   observabilityQueries,
   observabilityMutations,
@@ -478,6 +483,9 @@ export const resolvers = {
 
     // DNS Admin (from dnsAdmin resolvers)
     ...dnsAdminQueries,
+
+    // Domain Registration / Purchase
+    ...domainRegistrationQueries,
 
     // Storage Analytics
     storageAnalytics: async (
@@ -1614,6 +1622,9 @@ export const resolvers = {
     // DNS Admin (from dnsAdmin resolvers)
     ...dnsAdminMutations,
 
+    // Domain Registration / Purchase
+    ...domainRegistrationMutations,
+
     // Chat mutations (from chat resolvers)
     ...chatResolvers.Mutation,
 
@@ -1780,8 +1791,13 @@ export const resolvers = {
 
       return configs
     },
+    site: async (parent: any, _: unknown, context: Context) => {
+      if (!parent.siteId) return null
+      if (parent.site) return parent.site
+      return context.prisma.site.findUnique({ where: { id: parent.siteId } })
+    },
     zone: async (parent: any, _: unknown, context: Context) => {
-      // Our Domain model doesn't store a zoneId; infer via its site -> zones
+      if (!parent.siteId) return null
       const zones = await context.prisma.zone.findMany({
         where: { siteId: parent.siteId },
         orderBy: { createdAt: 'asc' },

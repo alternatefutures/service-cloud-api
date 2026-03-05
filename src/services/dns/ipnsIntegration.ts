@@ -67,19 +67,21 @@ export async function publishIpnsRecord(
     })
 
     // Update or create IPNS record in database
-    await prisma.iPNSRecord.upsert({
-      where: {
-        siteId: domain.siteId,
-      } as any, // Type assertion for unique constraint compatibility
-      create: {
-        name: ipnsKey,
-        hash: cid,
-        siteId: domain.siteId,
-      },
-      update: {
-        hash: cid,
-      },
-    })
+    if (domain.siteId) {
+      await prisma.iPNSRecord.upsert({
+        where: {
+          siteId: domain.siteId,
+        } as any,
+        create: {
+          name: ipnsKey,
+          hash: cid,
+          siteId: domain.siteId,
+        },
+        update: {
+          hash: cid,
+        },
+      })
+    }
 
     return {
       ipnsHash: ipnsKey,

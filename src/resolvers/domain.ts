@@ -62,6 +62,34 @@ async function trackDomainUsageAsync(
   }
 }
 
+/**
+ * Check if a user is authorized to access a domain.
+ * Supports both org-level domains (via organizationId) and site-level domains (via site.project.userId).
+ */
+async function isAuthorizedForDomain(
+  domain: any,
+  userId: string,
+  organizationId: string | undefined,
+  prisma: any
+): Promise<boolean> {
+  if (domain.organizationId) {
+    if (organizationId === domain.organizationId) return true
+    const membership = await prisma.organizationMember.findUnique({
+      where: {
+        organizationId_userId: {
+          organizationId: domain.organizationId,
+          userId,
+        },
+      },
+    })
+    return !!membership
+  }
+  if (domain.site?.project) {
+    return domain.site.project.userId === userId
+  }
+  return false
+}
+
 export const domainQueries = {
   /**
    * Get a single domain by ID
@@ -69,7 +97,7 @@ export const domainQueries = {
   domain: async (
     _: unknown,
     { id }: { id: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -82,8 +110,7 @@ export const domainQueries = {
       throw new GraphQLError('Domain not found')
     }
 
-    // Check ownership
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to access this domain')
     }
 
@@ -96,19 +123,22 @@ export const domainQueries = {
   domains: async (
     _: unknown,
     __: unknown,
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
-    // Return all domains for user
+    const where = organizationId
+      ? {
+          OR: [
+            { organizationId },
+            { site: { project: { organizationId } } },
+            { site: { project: { userId, organizationId: null } } },
+          ],
+        }
+      : { site: { project: { userId } } }
+
     const data = await prisma.domain.findMany({
-      where: {
-        site: {
-          project: {
-            userId,
-          },
-        },
-      },
+      where,
       orderBy: { createdAt: 'desc' },
     })
 
@@ -121,7 +151,7 @@ export const domainQueries = {
   domainByHostname: async (
     _: unknown,
     { hostname }: { hostname: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -134,12 +164,43 @@ export const domainQueries = {
       return null
     }
 
-    // Check ownership
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to access this domain')
     }
 
     return domain
+  },
+
+  /**
+   * List all domains belonging to an organization
+   */
+  orgDomains: async (
+    _: unknown,
+    { orgId }: { orgId: string },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
+
+    const membership = await prisma.organizationMember.findUnique({
+      where: {
+        organizationId_userId: { organizationId: orgId, userId },
+      },
+    })
+
+    if (!membership) {
+      throw new GraphQLError('Not a member of this organization')
+    }
+
+    return await prisma.domain.findMany({
+      where: {
+        OR: [
+          { organizationId: orgId },
+          { site: { project: { organizationId: orgId } } },
+        ],
+      },
+      include: { site: true },
+      orderBy: { createdAt: 'desc' },
+    })
   },
 
   /**
@@ -148,7 +209,7 @@ export const domainQueries = {
   domainVerificationInstructions: async (
     _: unknown,
     { domainId }: { domainId: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -161,8 +222,7 @@ export const domainQueries = {
       throw new GraphQLError('Domain not found')
     }
 
-    // Check ownership
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to access this domain')
     }
 
@@ -192,7 +252,7 @@ export const domainQueries = {
 
 export const domainMutations = {
   /**
-   * Create a new custom domain
+   * Create a new custom domain (site-level, legacy)
    */
   createDomain: async (
     _: unknown,
@@ -210,7 +270,6 @@ export const domainMutations = {
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
-    // Verify user owns the site
     const site = await prisma.site.findUnique({
       where: { id: input.siteId },
       include: { project: true },
@@ -224,7 +283,6 @@ export const domainMutations = {
       throw new GraphQLError('Not authorized to modify this site')
     }
 
-    // Create domain
     const domain = await createCustomDomain({
       hostname: input.hostname,
       siteId: input.siteId,
@@ -237,7 +295,6 @@ export const domainMutations = {
       verificationMethod: input.verificationMethod,
     })
 
-    // Track usage asynchronously (fire-and-forget) to avoid blocking domain creation
     trackDomainUsageAsync(
       prisma,
       userId,
@@ -250,9 +307,110 @@ export const domainMutations = {
           periodEnd: subscription.currentPeriodEnd,
         })
       }
-    ).catch(() => {}) // Fire and forget
+    ).catch(() => {})
 
     return domain
+  },
+
+  /**
+   * Create a domain at the organization level (no site required)
+   */
+  createOrgDomain: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        hostname: string
+        orgId: string
+        domainType?: string
+      }
+    },
+    { prisma, userId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
+
+    const membership = await prisma.organizationMember.findUnique({
+      where: {
+        organizationId_userId: {
+          organizationId: input.orgId,
+          userId,
+        },
+      },
+    })
+
+    if (!membership) {
+      throw new GraphQLError('Not a member of this organization')
+    }
+
+    const existing = await prisma.domain.findUnique({
+      where: { hostname: input.hostname },
+    })
+
+    if (existing) {
+      throw new GraphQLError('Domain hostname already registered')
+    }
+
+    const domain = await prisma.domain.create({
+      data: {
+        hostname: input.hostname,
+        organizationId: input.orgId,
+        domainType: (input.domainType as any) || 'WEB2',
+        verified: false,
+        txtVerificationStatus: 'PENDING',
+        sslStatus: 'NONE',
+      },
+    })
+
+    trackDomainUsageAsync(
+      prisma,
+      userId,
+      async (tracker, customer, subscription) => {
+        await tracker.trackDomainCreation({
+          customerId: customer.id,
+          domainId: domain.id,
+          hostname: input.hostname,
+          periodStart: subscription.currentPeriodStart,
+          periodEnd: subscription.currentPeriodEnd,
+        })
+      }
+    ).catch(() => {})
+
+    return domain
+  },
+
+  /**
+   * Assign an org-level domain to a site
+   */
+  assignDomainToSite: async (
+    _: unknown,
+    { domainId, siteId }: { domainId: string; siteId: string },
+    { prisma, userId, organizationId }: Context
+  ) => {
+    if (!userId) throw new GraphQLError('Authentication required')
+
+    const domain = await prisma.domain.findUnique({
+      where: { id: domainId },
+      include: { site: { include: { project: true } } },
+    })
+
+    if (!domain) throw new GraphQLError('Domain not found')
+
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
+      throw new GraphQLError('Not authorized to modify this domain')
+    }
+
+    const site = await prisma.site.findUnique({
+      where: { id: siteId },
+      include: { project: true },
+    })
+
+    if (!site) throw new GraphQLError('Site not found')
+
+    return await prisma.domain.update({
+      where: { id: domainId },
+      data: { siteId },
+    })
   },
 
   /**
@@ -261,7 +419,7 @@ export const domainMutations = {
   verifyDomain: async (
     _: unknown,
     { domainId }: { domainId: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -274,13 +432,12 @@ export const domainMutations = {
       throw new GraphQLError('Domain not found')
     }
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     const verificationResult = await verifyDomainOwnership(domainId)
 
-    // Track verification attempt asynchronously
     trackDomainUsageAsync(
       prisma,
       userId,
@@ -299,7 +456,7 @@ export const domainMutations = {
           periodEnd: subscription.currentPeriodEnd,
         })
       }
-    ).catch(() => {}) // Fire and forget
+    ).catch(() => {})
 
     return verificationResult
   },
@@ -310,7 +467,7 @@ export const domainMutations = {
   provisionSsl: async (
     _: unknown,
     { domainId, email }: { domainId: string; email: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -323,13 +480,12 @@ export const domainMutations = {
       throw new GraphQLError('Domain not found')
     }
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await provisionSslCertificate(domainId, email)
 
-    // Track SSL provisioning asynchronously
     trackDomainUsageAsync(
       prisma,
       userId,
@@ -343,9 +499,8 @@ export const domainMutations = {
           isRenewal: false,
         })
       }
-    ).catch(() => {}) // Fire and forget
+    ).catch(() => {})
 
-    // Return updated domain
     return await prisma.domain.findUnique({
       where: { id: domainId },
     })
@@ -384,7 +539,7 @@ export const domainMutations = {
   deleteDomain: async (
     _: unknown,
     { id }: { id: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -397,11 +552,15 @@ export const domainMutations = {
       throw new GraphQLError('Domain not found')
     }
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to delete this domain')
     }
 
-    await removeCustomDomain(id)
+    if (domain.siteId) {
+      await removeCustomDomain(id)
+    } else {
+      await prisma.domain.delete({ where: { id } })
+    }
     return true
   },
 
@@ -415,7 +574,7 @@ export const domainMutations = {
       arnsName,
       contentId,
     }: { domainId: string; arnsName: string; contentId: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -424,16 +583,13 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await registerArnsName(domainId, arnsName, contentId, {})
-
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
@@ -443,7 +599,7 @@ export const domainMutations = {
   updateArnsContent: async (
     _: unknown,
     { domainId, contentId }: { domainId: string; contentId: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -452,16 +608,13 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await updateArnsRecord(domainId, contentId, {})
-
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
@@ -475,7 +628,7 @@ export const domainMutations = {
       ensName,
       contentHash,
     }: { domainId: string; ensName: string; contentHash: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -484,16 +637,13 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await setEnsContentHash(domainId, ensName, contentHash, {})
-
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
@@ -503,7 +653,7 @@ export const domainMutations = {
   publishIpns: async (
     _: unknown,
     { domainId, cid }: { domainId: string; cid: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -512,16 +662,13 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await publishIpnsRecord(domainId, cid, {})
-
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
@@ -531,7 +678,7 @@ export const domainMutations = {
   updateIpns: async (
     _: unknown,
     { domainId, cid }: { domainId: string; cid: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -540,16 +687,13 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to modify this domain')
     }
 
     await updateIpnsRecord(domainId, cid, {})
-
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },
 
@@ -559,7 +703,7 @@ export const domainMutations = {
   renewSslCertificate: async (
     _: unknown,
     { domainId }: { domainId: string },
-    { prisma, userId }: Context
+    { prisma, userId, organizationId }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
@@ -568,17 +712,14 @@ export const domainMutations = {
       include: { site: { include: { project: true } } },
     })
 
-    if (!domain) {
-      throw new GraphQLError('Domain not found')
-    }
+    if (!domain) throw new GraphQLError('Domain not found')
 
-    if (domain.site.project.userId !== userId) {
+    if (!(await isAuthorizedForDomain(domain, userId, organizationId, prisma))) {
       throw new GraphQLError('Not authorized to renew SSL for this domain')
     }
 
     await renewSsl(domainId)
 
-    // Track SSL renewal asynchronously
     trackDomainUsageAsync(
       prisma,
       userId,
@@ -592,7 +733,7 @@ export const domainMutations = {
           isRenewal: true,
         })
       }
-    ).catch(() => {}) // Fire and forget
+    ).catch(() => {})
 
     return await prisma.domain.findUnique({ where: { id: domainId } })
   },

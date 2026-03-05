@@ -520,7 +520,8 @@ export const typeDefs = /* GraphQL */ `
     dnsConfigs: [DNSConfig!]!
     status: String
     domainType: DomainType!
-    site: Site!
+    organizationId: ID
+    site: Site
     txtVerificationToken: String
     txtVerificationStatus: VerificationStatus!
     dnsVerifiedAt: Date
@@ -645,11 +646,90 @@ export const typeDefs = /* GraphQL */ `
     recordId: String!
   }
 
+  # ============================================
+  # DOMAIN REGISTRATION / PURCHASE
+  # ============================================
+
+  type DomainAvailability {
+    domain: String!
+    available: Boolean!
+    status: String!
+    reason: String
+    isPremium: Boolean!
+    price: DomainPrice
+    premiumPrice: DomainPrice
+  }
+
+  type DomainPrice {
+    currency: String!
+    registrationPrice: Float!
+  }
+
+  type DomainPricing {
+    currency: String!
+    price: Float!
+    isPremium: Boolean!
+    isPromotion: Boolean!
+    period: Int!
+  }
+
+  type DomainRegistrationResult {
+    success: Boolean!
+    domainId: Int
+    status: String
+    error: String
+    domain: Domain
+  }
+
+  type RegisteredDomain {
+    id: Int!
+    fullName: String!
+    name: String!
+    extension: String!
+    status: String!
+    expirationDate: String!
+    renewalDate: String!
+    autorenew: String!
+    whoisPrivacy: Boolean!
+    createdAt: String
+  }
+
+  type RegisteredDomainList {
+    domains: [RegisteredDomain!]!
+    total: Int!
+  }
+
+  input CheckDomainAvailabilityInput {
+    domains: [DomainNameInput!]!
+    withPrice: Boolean
+  }
+
+  input DomainNameInput {
+    name: String!
+    extension: String!
+  }
+
+  input PurchaseDomainInput {
+    name: String!
+    extension: String!
+    orgId: ID!
+    period: Int
+    enableWhoisPrivacy: Boolean
+    autorenew: String
+    acceptPremiumFee: Float
+  }
+
   input CreateDomainInput {
     hostname: String!
     siteId: ID!
     domainType: DomainType
     verificationMethod: String
+  }
+
+  input CreateOrgDomainInput {
+    hostname: String!
+    orgId: ID!
+    domainType: DomainType
   }
 
   """
@@ -1454,6 +1534,7 @@ export const typeDefs = /* GraphQL */ `
       domainId: ID!
     ): DomainVerificationInstructions!
     sslCertificateStatus: [SslCertificateStatusInfo!]!
+    orgDomains(orgId: ID!): [Domain!]!
 
     # Zones (SDK compatibility)
     zones: ZoneList!
@@ -1471,6 +1552,11 @@ export const typeDefs = /* GraphQL */ `
 
     # Applications (SDK compatibility - minimal)
     applications: ApplicationList!
+
+    # Domain Registration / Purchase
+    checkDomainAvailability(input: CheckDomainAvailabilityInput!): [DomainAvailability!]!
+    domainPricing(name: String!, extension: String!, operation: String, period: Int): DomainPricing!
+    registeredDomains(limit: Int, offset: Int, status: String): RegisteredDomainList!
 
     # DNS Record Management (Admin)
     dnsRecords(domain: String!): [DNSRecord!]!
@@ -1600,6 +1686,8 @@ export const typeDefs = /* GraphQL */ `
 
     # Domains
     createDomain(input: CreateDomainInput!): Domain!
+    createOrgDomain(input: CreateOrgDomainInput!): Domain!
+    assignDomainToSite(domainId: ID!, siteId: ID!): Domain!
     verifyDomain(domainId: ID!): Boolean!
     provisionSsl(domainId: ID!, email: String!): Domain!
     renewSslCertificate(domainId: ID!): Domain!
@@ -1620,6 +1708,9 @@ export const typeDefs = /* GraphQL */ `
       projectId: ID!
       input: UpdateObservabilitySettingsInput!
     ): ObservabilitySettings!
+
+    # Domain Registration / Purchase
+    purchaseDomain(input: PurchaseDomainInput!): DomainRegistrationResult!
 
     # DNS Record Management (Admin)
     addDnsRecord(input: CreateDNSRecordInput!): DNSUpdateResult!
