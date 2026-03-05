@@ -46,7 +46,7 @@ export async function getAkashSDKContext(): Promise<AkashSDKContext> {
   if (!accounts.length) throw new Error('No accounts found in wallet')
   const ownerAddress = accounts[0].address
 
-  const rpcEndpoint = process.env.RPC_ENDPOINT || 'https://akash-rpc.polkachu.com:443'
+  const rpcEndpoint = process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443'
   const grpcEndpoint = process.env.GRPC_ENDPOINT || 'https://akash-grpc.publicnode.com:443'
 
   const chainSDK = createChainNodeSDK({

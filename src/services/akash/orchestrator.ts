@@ -34,7 +34,7 @@ function getAkashEnv(): Record<string, string> {
     AKASH_KEY_NAME: keyName,
     AKASH_FROM: keyName,
     AKASH_KEYRING_BACKEND: 'test',
-    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://akash-rpc.polkachu.com:443',
+    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443',
     AKASH_CHAIN_ID: process.env.AKASH_CHAIN_ID || 'akashnet-2',
     AKASH_GAS: 'auto',
     AKASH_GAS_ADJUSTMENT: '1.5',

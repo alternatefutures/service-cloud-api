@@ -44,7 +44,7 @@ function getAkashEnv(): Record<string, string> {
     AKASH_KEY_NAME: keyName,
     AKASH_FROM: keyName,
     AKASH_KEYRING_BACKEND: 'test',
-    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://akash-rpc.polkachu.com:443',
+    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443',
     AKASH_CHAIN_ID: process.env.AKASH_CHAIN_ID || 'akashnet-2',
     AKASH_GAS: 'auto',
     AKASH_GAS_ADJUSTMENT: '1.5',
@@ -178,7 +178,7 @@ export async function handleSubmitTx(prisma: PrismaClient, deploymentId: string)
       for (const delay of delays) {
         await new Promise(r => setTimeout(r, delay))
         try {
-          const txOutput = await runAkashAsync(['query', 'tx', result.txhash as string, '-o', 'json'], 15_000)
+          const txOutput = await runAkashAsync(['query', 'tx', result.txhash as string, '-o', 'json'], 60_000)
           const txResult = extractJson(txOutput) as Record<string, unknown>
 
           const txLogs = txResult.logs as Array<{ events?: Array<{ type: string; attributes?: Array<{ key: string; value: string }> }> }> | undefined
@@ -254,7 +254,7 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
     const output = await runAkashAsync([
       'query', 'market', 'bid', 'list',
       '--owner', deployment.owner, '--dseq', String(dseq), '-o', 'json',
-    ], 15_000)
+    ], 60_000)
 
     const result = extractJson(output) as { bids?: Array<Record<string, unknown>> }
     const rawBids = result.bids || []
@@ -498,7 +498,7 @@ export async function handlePollUrls(prisma: PrismaClient, payload: AkashPollUrl
     const dseq = Number(deployment.dseq)
     const output = await runProviderServicesAsync([
       'lease-status', '--dseq', String(dseq), '--provider', deployment.provider,
-    ], 15_000)
+    ], 60_000)
 
     const result = extractJson(output) as {
       services?: Record<string, { uris?: string[]; available_replicas?: number }>
