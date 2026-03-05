@@ -21,6 +21,8 @@ const mockContext: Context = {
       findUnique: vi.fn(),
       findMany: vi.fn(),
       update: vi.fn(),
+      create: vi.fn(),
+      delete: vi.fn(),
     },
     site: {
       findUnique: vi.fn(),
