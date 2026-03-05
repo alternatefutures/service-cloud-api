@@ -68,8 +68,8 @@ RUN curl -sSfL -o /tmp/akash.zip https://github.com/akash-network/node/releases/
     chmod +x /usr/local/bin/akash && \
     rm -rf /tmp/akash /tmp/akash.zip
 
-# Install provider-services CLI
-RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/provider/releases/download/v0.10.5/provider-services_linux_amd64.zip && \
+# Install provider-services CLI (v0.10.6 — JWT auth is default, no certs needed)
+RUN curl -sSfL -o /tmp/provider-services.zip https://github.com/akash-network/provider/releases/download/v0.10.6/provider-services_0.10.6_linux_amd64.zip && \
     unzip /tmp/provider-services.zip -d /tmp/ps && \
     mv /tmp/ps/provider-services /usr/local/bin/provider-services && \
     chmod +x /usr/local/bin/provider-services && \
