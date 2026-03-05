@@ -5,7 +5,7 @@ export const giteaServer: Template = {
   name: 'Gitea',
   description:
     'Self-hosted Git service — GitHub/GitLab alternative written in Go. Lightweight, fast, and packed with features: issues, pull requests, CI/CD, packages.',
-  featured: true,
+  featured: false,
   category: 'DEVTOOLS',
   tags: ['git', 'devtools', 'vcs', 'self-hosted', 'go', 'gitea'],
   icon: '🍵',

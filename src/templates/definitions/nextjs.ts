@@ -5,7 +5,7 @@ export const nextjsServer: Template = {
   name: 'Next.js App',
   description:
     'Next.js 14 production server with App Router and SSR. Deploy your Next.js application with standalone output mode for minimal image size.',
-  featured: true,
+  featured: false,
   category: 'WEB_SERVER',
   tags: ['web', 'nextjs', 'react', 'ssr', 'nodejs', 'frontend'],
   icon: '▲',

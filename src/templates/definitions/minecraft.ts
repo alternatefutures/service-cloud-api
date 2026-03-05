@@ -5,7 +5,7 @@ export const minecraftServer: Template = {
   name: 'Minecraft Server',
   description:
     'Minecraft Java Edition server with itzg\'s production-hardened image. Supports Vanilla, Paper, Fabric, Forge, and more. Auto-downloads server JAR on first start.',
-  featured: true,
+  featured: false,
   category: 'GAME_SERVER',
   tags: ['minecraft', 'gameserver', 'java', 'multiplayer', 'game'],
   icon: '⛏️',

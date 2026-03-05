@@ -15,7 +15,7 @@ export const nanobotGateway: Template = {
   name: 'nanobot',
   description:
     'Ultra-lightweight personal AI assistant (~4k lines). Multi-provider (OpenRouter, Claude, GPT), CLI + chat channels (Telegram, Discord, Slack). No web UI.',
-  featured: true,
+  featured: false,
   category: 'AI_ML',
   tags: ['ai', 'assistant', 'agent', 'nanobot', 'openclaw', 'gateway', 'lightweight'],
   icon: '🐈',

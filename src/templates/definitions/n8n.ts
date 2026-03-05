@@ -5,7 +5,7 @@ export const n8nServer: Template = {
   name: 'n8n',
   description:
     'Workflow automation platform — the open-source alternative to Zapier. Connect 400+ apps with a visual editor, code nodes, and AI-powered automations.',
-  featured: true,
+  featured: false,
   category: 'DEVTOOLS',
   tags: ['automation', 'workflow', 'devtools', 'n8n', 'no-code', 'integration'],
   icon: '🔗',

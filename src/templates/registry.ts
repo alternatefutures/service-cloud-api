@@ -31,30 +31,30 @@ import {
 // ─── Registry ────────────────────────────────────────────────────
 
 const templates: Template[] = [
+  // Custom Gateways (AF platform) — featured first
+  milaidyGateway,
+  openclawGateway,
+  nanobotGateway,
   // AI / ML
   ollamaGpu,
   jupyterMlWorkspace,
   comfyuiServer,
+  // Databases
+  postgres,
+  redis,
+  // DevTools
+  n8nServer,
+  giteaServer,
   // Web Servers
   nextjsServer,
   reactVite,
   astroServer,
   nuxtServer,
   hugoServer,
-  // Custom Gateways (AF platform)
-  milaidyGateway,
-  openclawGateway,
-  nanobotGateway,
   // Game Servers
   nodeWsGameserver,
   bunWsGameserver,
   minecraftServer,
-  // Databases
-  postgres,
-  redis,
-  // DevTools
-  giteaServer,
-  n8nServer,
 ]
 
 const templateMap = new Map<string, Template>(
