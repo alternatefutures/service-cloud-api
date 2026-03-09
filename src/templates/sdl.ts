@@ -8,16 +8,32 @@
  *   - signedBy auditor filter
  */
 
+import { randomBytes } from 'crypto'
 import type { Template, TemplateDeployConfig, TemplateGpu } from './schema.js'
+
+function generatePassword(len = 32): string {
+  return randomBytes(len).toString('base64url').slice(0, len)
+}
+
+function generateBase64Secret(len = 32): string {
+  return randomBytes(len).toString('base64')
+}
 
 /**
  * Generate an Akash SDL from a template + user configuration overrides.
+ * If the template has a `customSdl`, uses it directly (with placeholder
+ * replacement and env overrides) instead of auto-generating.
  */
 export function generateSDLFromTemplate(
   template: Template,
   config?: TemplateDeployConfig,
 ): string {
   const serviceName = slugify(config?.serviceName || template.id)
+
+  if (template.customSdl) {
+    return resolveCustomSdl(template, config, serviceName)
+  }
+
   const pricingUakt = template.pricingUakt || 1000
 
   // ── Merge env vars: template defaults + user overrides ──────
@@ -212,4 +228,39 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
+}
+
+/**
+ * Resolve a customSdl template: replace placeholders, merge env overrides.
+ * Placeholders:
+ *   {{SERVICE_NAME}}       — slugified service name
+ *   {{GENERATED_PASSWORD}} — random 32-char alphanumeric (same value everywhere)
+ *   {{GENERATED_SECRET}}   — random base64 secret (same value everywhere)
+ *   {{ENV.KEY}}            — value from env overrides or template defaults
+ */
+function resolveCustomSdl(
+  template: Template,
+  config: TemplateDeployConfig | undefined,
+  serviceName: string,
+): string {
+  const password = generatePassword()
+  const secret = generateBase64Secret()
+
+  const envDefaults: Record<string, string> = {}
+  for (const v of template.envVars) {
+    if (v.default !== null) envDefaults[v.key] = v.default
+  }
+  if (config?.envOverrides) {
+    for (const [k, v] of Object.entries(config.envOverrides)) {
+      envDefaults[k] = v
+    }
+  }
+
+  let sdl = template.customSdl!
+  sdl = sdl.replace(/\{\{SERVICE_NAME}}/g, serviceName)
+  sdl = sdl.replace(/\{\{GENERATED_PASSWORD}}/g, password)
+  sdl = sdl.replace(/\{\{GENERATED_SECRET}}/g, secret)
+  sdl = sdl.replace(/\{\{ENV\.([^}]+)}}/g, (_match, key) => envDefaults[key] ?? '')
+
+  return sdl
 }

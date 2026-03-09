@@ -257,11 +257,14 @@ model Service {
   containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
   internalHostname String?    // Deterministic hostname: {slug}.{project-slug}.internal
   createdByUserId String?
+  parentServiceId String?     // Companion services share the parent's deployment lifecycle
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
   project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   createdByUser   User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  parentService   Service?    @relation("CompanionServices", fields: [parentServiceId], references: [id], onDelete: Cascade)
+  companionServices Service[] @relation("CompanionServices")
 
   // One-to-one (subtype tables have the FK via serviceId)
   site            Site?
@@ -280,6 +283,7 @@ model Service {
   @@unique([type, slug])
   @@index([projectId])
   @@index([createdByUserId])
+  @@index([parentServiceId])
 }
 
 // ============================================

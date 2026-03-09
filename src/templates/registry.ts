@@ -26,18 +26,20 @@ import {
   n8nServer,
   minecraftServer,
   comfyuiServer,
+  hyperscapeServer,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
 
 const templates: Template[] = [
-  // Custom Gateways (AF platform) — featured first
+  // Featured — display order
+  hyperscapeServer,
   milaidyGateway,
   openclawGateway,
-  nanobotGateway,
-  // AI / ML
   ollamaGpu,
   jupyterMlWorkspace,
+  // AI / ML
+  nanobotGateway,
   comfyuiServer,
   // Databases
   postgres,

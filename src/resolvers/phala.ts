@@ -117,15 +117,17 @@ export const phalaFieldResolvers = {
   },
   Service: {
     phalaDeployments: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
       return context.prisma.phalaDeployment.findMany({
-        where: { serviceId: parent.id },
+        where: { serviceId },
         orderBy: { createdAt: 'desc' },
       })
     },
     activePhalaDeployment: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
       return context.prisma.phalaDeployment.findFirst({
         where: {
-          serviceId: parent.id,
+          serviceId,
           status: { in: ['CREATING', 'STARTING', 'ACTIVE'] },
         },
         orderBy: { createdAt: 'desc' },

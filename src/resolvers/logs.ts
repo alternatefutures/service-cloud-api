@@ -30,9 +30,15 @@ export const logsQueries = {
 
     const tailLines = tail ?? 200
 
+    // Companion services: use parent's deployment, filter by companion's SDL service name
+    const deploymentServiceId = svc.parentServiceId || serviceId
+    const logServiceFilter = svc.parentServiceId
+      ? (service || svc.templateId || svc.slug)
+      : service
+
     // Try Akash first — look for the most recent ACTIVE deployment
     const akashDeployment = await context.prisma.akashDeployment.findFirst({
-      where: { serviceId, status: 'ACTIVE' },
+      where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
     })
 
@@ -42,7 +48,7 @@ export const logsQueries = {
       try {
         const logs = await akash.getLogs(akashDeployment.id, {
           tail: tailLines,
-          service,
+          service: logServiceFilter,
         })
         return {
           logs,
@@ -59,7 +65,7 @@ export const logsQueries = {
 
     // Try Phala — look for the most recent ACTIVE deployment
     const phalaDeployment = await context.prisma.phalaDeployment.findFirst({
-      where: { serviceId, status: 'ACTIVE' },
+      where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
       orderBy: { createdAt: 'desc' },
     })
 
@@ -69,7 +75,7 @@ export const logsQueries = {
       try {
         const logs = await phala.getLogs(phalaDeployment.id, {
           tail: tailLines,
-          service,
+          service: logServiceFilter,
         })
         return {
           logs,

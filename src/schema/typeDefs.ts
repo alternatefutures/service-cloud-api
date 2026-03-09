@@ -112,6 +112,7 @@ export const typeDefs = /* GraphQL */ `
     containerPort: Int
     internalHostname: String
     createdByUserId: ID
+    parentServiceId: ID
     createdAt: Date!
     updatedAt: Date!
 
@@ -119,11 +120,10 @@ export const typeDefs = /* GraphQL */ `
     site: Site
     afFunction: AFFunction
     
-    # Akash deployments for this service
+    # Akash deployments for this service (or parent if companion)
     akashDeployments: [AkashDeployment!]!
-    # Get the currently active Akash deployment (if any)
     activeAkashDeployment: AkashDeployment
-    # Phala deployments for this service
+    # Phala deployments for this service (or parent if companion)
     phalaDeployments: [PhalaDeployment!]!
     activePhalaDeployment: PhalaDeployment
 
@@ -468,6 +468,7 @@ export const typeDefs = /* GraphQL */ `
     FAILED
     STOPPED
     DELETED
+    PERMANENTLY_FAILED
   }
 
   type DeploymentProgress {

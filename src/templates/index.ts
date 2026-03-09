@@ -4,6 +4,7 @@
 export type {
   Template,
   TemplateCategory,
+  TemplateCompanion,
   TemplateEnvVar,
   TemplateResources,
   TemplatePort,

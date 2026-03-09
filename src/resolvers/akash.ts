@@ -362,16 +362,18 @@ export const akashFieldResolvers = {
   // Add akashDeployments resolver to Service type
   Service: {
     akashDeployments: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
       const deployments = await context.prisma.akashDeployment.findMany({
-        where: { serviceId: parent.id },
+        where: { serviceId },
         orderBy: { createdAt: 'desc' },
       })
       return deployments.map(formatDeployment)
     },
     activeAkashDeployment: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
       const deployment = await context.prisma.akashDeployment.findFirst({
         where: {
-          serviceId: parent.id,
+          serviceId,
           status: { in: ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING', 'ACTIVE'] },
         },
         orderBy: { createdAt: 'desc' },

@@ -307,11 +307,17 @@ export class SubdomainProxy {
       const akashDep = service.akashDeployments[0]
       if (akashDep?.serviceUrls) {
         const urls = akashDep.serviceUrls as Record<string, { uris?: string[] }>
-        const firstService = Object.values(urls)[0]
-        const uri = firstService?.uris?.[0]
+        // Multi-service deployments have multiple entries (e.g. postgres + app);
+        // internal-only services like postgres have empty uris. Find the first
+        // service with an externally-reachable URI.
+        let uri: string | undefined
+        for (const svc of Object.values(urls)) {
+          if (svc.uris?.length) {
+            uri = svc.uris[0]
+            break
+          }
+        }
         if (uri) {
-          // Akash URIs look like "provider.gpu.subangle.com:31192"
-          // Ensure it has a protocol prefix
           const target = uri.startsWith('http') ? uri : `http://${uri}`
           return { target, status: 'ACTIVE', serviceId: service.id, tier }
         }

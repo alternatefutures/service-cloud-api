@@ -5,6 +5,7 @@
  * template deployment (auth required, creates Service + deploys to Akash).
  */
 
+import { randomBytes } from 'crypto'
 import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
 import { generateInternalHostname } from '../utils/internalHostname.js'
@@ -15,7 +16,12 @@ import {
   generateComposeFromTemplate,
   getEnvKeysFromTemplate,
 } from '../templates/index.js'
+import {
+  resolveConnectionStrings,
+  getConnectionStringsForTemplate,
+} from '../utils/connectionStrings.js'
 import type { TemplateCategory } from '../templates/index.js'
+import type { Template, TemplateCompanion } from '../templates/schema.js'
 import type { Context } from './types.js'
 
 // ─── Queries ─────────────────────────────────────────────────────
@@ -31,6 +37,134 @@ export const templateQueries = {
   template: (_: unknown, { id }: { id: string }) => {
     return getTemplateById(id) ?? null
   },
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function genPassword(len = 32): string {
+  return randomBytes(len).toString('base64url').slice(0, len)
+}
+
+/**
+ * Create companion services (e.g. postgres) for a template, auto-link them,
+ * and inject connection string env vars on the primary service.
+ */
+async function createCompanionServices(
+  prisma: Context['prisma'],
+  primaryService: { id: string; slug: string; projectId: string },
+  projectSlug: string,
+  companions: TemplateCompanion[],
+): Promise<void> {
+  for (const companion of companions) {
+    const companionTemplate = getTemplateById(companion.templateId)
+    if (!companionTemplate) {
+      console.warn(`[Templates] Companion template not found: ${companion.templateId}`)
+      continue
+    }
+
+    const companionName = companion.namePrefix
+      ? `${companion.namePrefix}-${Date.now().toString(36)}`
+      : `${primaryService.slug}-${companion.templateId}-${Date.now().toString(36)}`
+    const companionSlug = generateSlug(companionName)
+
+    const companionService = await prisma.service.create({
+      data: {
+        name: companionName,
+        slug: companionSlug,
+        type: companionTemplate.serviceType,
+        projectId: primaryService.projectId,
+        templateId: companion.templateId,
+        internalHostname: generateInternalHostname(companionSlug, projectSlug),
+        parentServiceId: primaryService.id,
+      },
+    })
+
+    const envValues: Record<string, string> = {}
+    for (const ev of companionTemplate.envVars) {
+      const val = companion.envDefaults?.[ev.key] ?? ev.default
+      if (val !== null && val !== undefined) envValues[ev.key] = val
+    }
+    if (!envValues.POSTGRES_PASSWORD && companion.templateId === 'postgres') {
+      envValues.POSTGRES_PASSWORD = genPassword()
+    }
+
+    if (companionTemplate.envVars?.length) {
+      await prisma.$transaction(
+        companionTemplate.envVars.map(ev =>
+          prisma.serviceEnvVar.create({
+            data: {
+              serviceId: companionService.id,
+              key: ev.key,
+              value: envValues[ev.key] ?? ev.default ?? '',
+              secret: ev.secret ?? false,
+            },
+          })
+        )
+      )
+    }
+    if (companionTemplate.ports?.length) {
+      await prisma.$transaction(
+        companionTemplate.ports.map(p =>
+          prisma.servicePort.create({
+            data: {
+              serviceId: companionService.id,
+              containerPort: p.port,
+              publicPort: p.global ? p.as : null,
+              protocol: 'TCP',
+            },
+          })
+        )
+      )
+    }
+
+    if (companion.autoLink) {
+      await prisma.serviceLink.create({
+        data: {
+          sourceServiceId: primaryService.id,
+          targetServiceId: companionService.id,
+          alias: companion.templateId,
+        },
+      })
+
+      const connStrings = getConnectionStringsForTemplate(companionTemplate)
+      if (connStrings) {
+        const companionEnvVars = await prisma.serviceEnvVar.findMany({
+          where: { serviceId: companionService.id },
+        })
+        const companionPorts = await prisma.servicePort.findMany({
+          where: { serviceId: companionService.id },
+        })
+        const resolved = resolveConnectionStrings(connStrings, {
+          internalHostname: companionService.internalHostname,
+          slug: companionSlug,
+          ports: companionPorts.map(p => ({
+            containerPort: p.containerPort,
+            publicPort: p.publicPort,
+          })),
+          envVars: companionEnvVars.map(e => ({ key: e.key, value: e.value })),
+        })
+
+        for (const { key, value } of resolved) {
+          await prisma.serviceEnvVar.upsert({
+            where: { serviceId_key: { serviceId: primaryService.id, key } },
+            create: {
+              serviceId: primaryService.id,
+              key,
+              value,
+              secret: key.includes('PASSWORD'),
+              source: `link:${companionService.id}`,
+            },
+            update: {
+              value,
+              source: `link:${companionService.id}`,
+            },
+          })
+        }
+      }
+    }
+
+    console.log(`[Templates] Created companion service '${companionName}' (${companion.templateId}) linked to '${primaryService.slug}'`)
+  }
 }
 
 // ─── Mutations ───────────────────────────────────────────────────
@@ -115,6 +249,16 @@ export const templateMutations = {
       )
     }
 
+    // ── Create companion services (e.g. postgres) ────────────
+    if (template.companions?.length) {
+      await createCompanionServices(
+        context.prisma,
+        { id: service.id, slug, projectId: input.projectId },
+        project.slug,
+        template.companions,
+      )
+    }
+
     // ── Convert env overrides from array to Record ───────────
     const envOverrides: Record<string, string> = {}
     if (input.envOverrides) {
@@ -145,7 +289,6 @@ export const templateMutations = {
     })
 
     // ── Deploy to Akash via orchestrator ─────────────────────
-    // Import dynamically to avoid circular deps
     const { getAkashOrchestrator } = await import(
       '../services/akash/orchestrator.js'
     )
@@ -154,12 +297,8 @@ export const templateMutations = {
     try {
       const deploymentId = await orchestrator.deployService(service.id, {
         sdlContent,
-        deposit: input.envOverrides
-          ? undefined // Use default deposit
-          : undefined,
       })
 
-      // deployService returns a string ID — fetch the full record for GraphQL
       const deployment = await context.prisma.akashDeployment.findUnique({
         where: { id: deploymentId },
       })
@@ -174,8 +313,6 @@ export const templateMutations = {
         depositUakt: deployment.depositUakt?.toString() ?? null,
       }
     } catch (error: any) {
-      // If deployment fails, still return a useful error
-      // The AkashDeployment record is created with FAILED status by the orchestrator
       throw new GraphQLError(
         `Template deployment failed: ${error.message || 'Unknown error'}`,
       )
@@ -250,6 +387,16 @@ export const templateMutations = {
             },
           })
         )
+      )
+    }
+
+    // ── Create companion services (e.g. postgres) ────────────
+    if (template.companions?.length) {
+      await createCompanionServices(
+        context.prisma,
+        { id: service.id, slug, projectId: input.projectId },
+        project.slug,
+        template.companions,
       )
     }
 

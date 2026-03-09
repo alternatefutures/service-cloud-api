@@ -114,6 +114,32 @@ export interface Template {
    * Values support {{host}}, {{port}}, {{env.KEY}} placeholders.
    */
   connectionStrings?: Record<string, string>
+  /**
+   * Raw Akash SDL that replaces auto-generation. Used for multi-service
+   * templates (e.g. app + database sidecar). Supports placeholders:
+   *   {{GENERATED_PASSWORD}} — random 32-char alphanumeric
+   *   {{GENERATED_SECRET}}  — random 44-char base64
+   *   {{SERVICE_NAME}}      — slugified service name
+   * Env var overrides from the UI are still injected via injectPersistedEnvVars.
+   */
+  customSdl?: string
+  /**
+   * Companion services deployed alongside this template (e.g. a database).
+   * Each companion creates a separate Service record in the workspace,
+   * auto-linked via ServiceLink with connection string env var injection.
+   */
+  companions?: TemplateCompanion[]
+}
+
+export interface TemplateCompanion {
+  /** ID of an existing template to deploy as companion (e.g. "postgres") */
+  templateId: string
+  /** Display name prefix for the companion service (e.g. "hyperscape-db") */
+  namePrefix?: string
+  /** Pre-filled env var defaults for the companion (e.g. { POSTGRES_DB: "hyperscape" }) */
+  envDefaults?: Record<string, string>
+  /** Auto-create ServiceLink and inject connectionStrings on deploy */
+  autoLink: boolean
 }
 
 export interface TemplateAkashConfig {
