@@ -254,7 +254,7 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
     const output = await runAkashAsync([
       'query', 'market', 'bid', 'list',
       '--owner', deployment.owner, '--dseq', String(dseq), '-o', 'json',
-    ], 60_000)
+    ])
 
     const result = extractJson(output) as { bids?: Array<Record<string, unknown>> }
     const rawBids = result.bids || []
@@ -637,7 +637,7 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
   if (retryCount < MAX_RETRY_COUNT) {
     console.log(`[AkashSteps] Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`)
 
-    if (deployment.dseq) {
+    if (deployment.dseq && Number(deployment.dseq) > 0) {
       try {
         await runAkashAsync([
           'tx', 'deployment', 'close',
@@ -675,7 +675,7 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
     console.error(`[AkashSteps] Deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`)
 
     // Close on-chain deployment to stop leaking AKT
-    if (deployment.dseq) {
+    if (deployment.dseq && Number(deployment.dseq) > 0) {
       try {
         await runAkashAsync([
           'tx', 'deployment', 'close',
