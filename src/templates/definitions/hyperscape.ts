@@ -10,7 +10,7 @@ export const hyperscapeServer: Template = {
   tags: ['game', 'mmorpg', 'rpg', 'multiplayer', 'websocket', 'ai', 'agents', 'metaverse', 'tee', 'duel-arena'],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v2',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v3',
   serviceType: 'VM',
   envVars: [
     {
@@ -102,7 +102,7 @@ services:
           readOnly: false
 
   {{SERVICE_NAME}}:
-    image: ghcr.io/alternatefutures/hyperscape:v2
+    image: ghcr.io/alternatefutures/hyperscape:v3
     env:
       - DATABASE_URL=postgresql://hyperscape:{{GENERATED_PASSWORD}}@postgres:5432/hyperscape
       - JWT_SECRET={{GENERATED_SECRET}}
@@ -110,7 +110,6 @@ services:
       - PORT=5555
       - NODE_ENV=production
       - USE_LOCAL_POSTGRES=false
-      - PLAYWRIGHT_TEST=true
       - PUBLIC_CDN_URL={{ENV.PUBLIC_CDN_URL}}
       - SAVE_INTERVAL={{ENV.SAVE_INTERVAL}}
     expose:
