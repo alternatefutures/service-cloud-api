@@ -7,7 +7,7 @@
 # Build from the hyperscape repo root:
 #   docker build --platform linux/amd64 \
 #     -f /path/to/this/Dockerfile \
-#     -t ghcr.io/alternatefutures/hyperscape:v2 .
+#     -t ghcr.io/alternatefutures/hyperscape:v4 .
 
 FROM oven/bun:1.1.38-debian AS builder
 

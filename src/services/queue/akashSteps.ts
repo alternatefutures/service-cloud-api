@@ -299,7 +299,18 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
       return
     }
 
-    const selectedBid = safeBids.sort((a, b) => parseFloat(a.price.amount) - parseFloat(b.price.amount))[0]
+    const uptimeFiltered = await providerSelector.filterBidsByUptime(safeBids)
+
+    if (uptimeFiltered.length === 0) {
+      await enqueueNext('/queue/akash/step', {
+        step: 'HANDLE_FAILURE',
+        deploymentId,
+        errorMessage: `No bids from providers meeting uptime threshold (${safeBids.length} bid(s) rejected)`,
+      } satisfies AkashHandleFailurePayload)
+      return
+    }
+
+    const selectedBid = uptimeFiltered.sort((a, b) => parseFloat(a.price.amount) - parseFloat(b.price.amount))[0]
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },

@@ -10,7 +10,7 @@ export const hyperscapeServer: Template = {
   tags: ['game', 'mmorpg', 'rpg', 'multiplayer', 'websocket', 'ai', 'agents', 'metaverse', 'tee', 'duel-arena'],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v3',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v4',
   serviceType: 'VM',
   envVars: [
     {
@@ -18,6 +18,19 @@ export const hyperscapeServer: Template = {
       default: 'https://assets.hyperscape.club',
       description: 'CDN base URL for game assets (models, textures, audio)',
       required: true,
+    },
+    {
+      key: 'PUBLIC_PRIVY_APP_ID',
+      default: null,
+      description: 'Privy application ID for wallet-based authentication (must match client)',
+      required: false,
+    },
+    {
+      key: 'PRIVY_APP_SECRET',
+      default: null,
+      description: 'Privy application secret for server-side token verification',
+      required: false,
+      secret: true,
     },
     {
       key: 'OPENAI_API_KEY',
@@ -102,7 +115,7 @@ services:
           readOnly: false
 
   {{SERVICE_NAME}}:
-    image: ghcr.io/alternatefutures/hyperscape:v3
+    image: ghcr.io/alternatefutures/hyperscape:v4
     env:
       - DATABASE_URL=postgresql://hyperscape:{{GENERATED_PASSWORD}}@postgres:5432/hyperscape
       - JWT_SECRET={{GENERATED_SECRET}}
@@ -111,6 +124,8 @@ services:
       - NODE_ENV=production
       - USE_LOCAL_POSTGRES=false
       - PUBLIC_CDN_URL={{ENV.PUBLIC_CDN_URL}}
+      - PUBLIC_PRIVY_APP_ID={{ENV.PUBLIC_PRIVY_APP_ID}}
+      - PRIVY_APP_SECRET={{ENV.PRIVY_APP_SECRET}}
       - SAVE_INTERVAL={{ENV.SAVE_INTERVAL}}
     expose:
       - port: 5555

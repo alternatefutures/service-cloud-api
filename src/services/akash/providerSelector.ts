@@ -72,11 +72,29 @@ const PROXY_PROVIDER = process.env.AKASH_SSL_PROXY_PROVIDER || 'akash1zlsep362zz
 const PROXY_PROVIDER_NAME = process.env.AKASH_SSL_PROXY_PROVIDER_NAME || 'america.computer'
 
 /**
+ * Minimum provider uptime percentage required to accept a bid.
+ * Providers below this threshold are filtered out during bid selection.
+ * Fail-open: if Akashlytics API is unreachable, providers are allowed through.
+ */
+const MIN_UPTIME_PERCENT = parseFloat(process.env.AKASH_MIN_PROVIDER_UPTIME || '99.0')
+const AKASHLYTICS_API_BASE = 'https://api.akashlytics.com/v1/providers'
+const UPTIME_CACHE_TTL_MS = 5 * 60 * 1000
+const UPTIME_FETCH_TIMEOUT_MS = 5_000
+
+interface UptimeCacheEntry {
+  uptime: number | null
+  fetchedAt: number
+}
+
+const uptimeCache = new Map<string, UptimeCacheEntry>()
+
+/**
  * Providers with known issues that should be blocked for all deployments.
  * 
  * History:
  * - 2026-02-05: Added airitdecomp - wildcard DNS not configured for ingress
  * - 2026-02-17: Added akash1chnhn... - consistently fails manifest submission
+ * - 2026-03-11: Added ouroboroz.tech - nginx returns 502 despite healthy container
  */
 const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason: string }> = {
   akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040: {
@@ -98,6 +116,11 @@ const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason:
     address: 'akash1sjwuwre4qprcaa34f6324yz7m8nn0awvc75gp5',
     name: 'quanglong.org',
     reason: 'Repeated kube: lease not found after manifest; 502 Bad Gateway on ingress',
+  },
+  akash18zskyywdy4ng50dd9yjen8daep0z585mc296h4: {
+    address: 'akash18zskyywdy4ng50dd9yjen8daep0z585mc296h4',
+    name: 'ouroboroz.tech',
+    reason: 'Nginx ingress returns persistent 502 Bad Gateway despite healthy running containers',
   },
 }
 
@@ -336,6 +359,107 @@ export class ProviderSelector {
   }
 
   /**
+   * Fetch uptime for a single provider from Akashlytics API.
+   * Returns uptime percentage (0-100) or null if unavailable.
+   * Results are cached for 5 minutes.
+   */
+  async fetchProviderUptime(address: string): Promise<number | null> {
+    const cached = uptimeCache.get(address)
+    if (cached && Date.now() - cached.fetchedAt < UPTIME_CACHE_TTL_MS) {
+      return cached.uptime
+    }
+
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), UPTIME_FETCH_TIMEOUT_MS)
+
+      const res = await fetch(`${AKASHLYTICS_API_BASE}/${address}`, {
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+
+      if (!res.ok) {
+        uptimeCache.set(address, { uptime: null, fetchedAt: Date.now() })
+        return null
+      }
+
+      const data = await res.json() as Record<string, unknown>
+      const uptime = typeof data.uptime === 'number' ? data.uptime
+        : typeof data.uptime === 'string' ? parseFloat(data.uptime)
+        : null
+
+      uptimeCache.set(address, { uptime, fetchedAt: Date.now() })
+      return uptime
+    } catch {
+      uptimeCache.set(address, { uptime: null, fetchedAt: Date.now() })
+      return null
+    }
+  }
+
+  /**
+   * Filter safe bids by provider uptime from Akashlytics.
+   * Fail-open: providers with unknown uptime are kept as fallback.
+   *
+   * @returns Bids from providers meeting the uptime threshold, or all bids
+   *          with unknown uptime if no provider meets the threshold.
+   */
+  async filterBidsByUptime(bids: FilteredBid[]): Promise<FilteredBid[]> {
+    if (bids.length === 0) return bids
+
+    const uptimeResults = await Promise.allSettled(
+      bids.map(bid => this.fetchProviderUptime(bid.bidId.provider))
+    )
+
+    const qualified: FilteredBid[] = []
+    const unknownUptime: FilteredBid[] = []
+    const rejected: Array<{ provider: string; name?: string; uptime: number }> = []
+
+    for (let i = 0; i < bids.length; i++) {
+      const bid = bids[i]
+      const result = uptimeResults[i]
+      const uptime = result.status === 'fulfilled' ? result.value : null
+
+      if (uptime === null) {
+        unknownUptime.push(bid)
+      } else if (uptime >= MIN_UPTIME_PERCENT) {
+        qualified.push(bid)
+      } else {
+        rejected.push({
+          provider: bid.bidId.provider,
+          name: bid.providerName,
+          uptime,
+        })
+      }
+    }
+
+    if (rejected.length > 0) {
+      console.log(
+        `[ProviderSelector] Filtered ${rejected.length} provider(s) below ${MIN_UPTIME_PERCENT}% uptime:`,
+        rejected.map(r => `${r.name || r.provider} (${r.uptime.toFixed(1)}%)`).join(', ')
+      )
+    }
+
+    if (qualified.length > 0) {
+      if (unknownUptime.length > 0) {
+        console.log(
+          `[ProviderSelector] ${unknownUptime.length} provider(s) had unknown uptime (API unavailable), skipped in favor of ${qualified.length} verified provider(s)`
+        )
+      }
+      return qualified
+    }
+
+    if (unknownUptime.length > 0) {
+      console.log(
+        `[ProviderSelector] No providers met uptime threshold (${MIN_UPTIME_PERCENT}%). Falling back to ${unknownUptime.length} provider(s) with unknown uptime.`
+      )
+      return unknownUptime
+    }
+
+    console.log(`[ProviderSelector] All ${bids.length} provider(s) failed uptime check. No bids remain.`)
+    return []
+  }
+
+  /**
    * Generate provider guidance for documentation/UI.
    */
   generateProviderGuidance(serviceType: ServiceType): string {
@@ -378,4 +502,4 @@ export class ProviderSelector {
 export const providerSelector = new ProviderSelector()
 
 // Export constants for external use
-export { PROXY_PROVIDER, PROXY_PROVIDER_NAME, KNOWN_PROVIDERS }
+export { PROXY_PROVIDER, PROXY_PROVIDER_NAME, KNOWN_PROVIDERS, MIN_UPTIME_PERCENT }
