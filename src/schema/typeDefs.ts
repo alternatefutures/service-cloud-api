@@ -1433,6 +1433,18 @@ export const typeDefs = /* GraphQL */ `
     mountPath: String!
   }
 
+  type TemplateComponent {
+    id: String!
+    name: String!
+    description: String
+    primary: Boolean
+    templateId: String
+    internalOnly: Boolean
+    sdlServiceName: String
+    """Resolved default resources for this component (from parent or referenced template)."""
+    defaultResources: TemplateResources
+  }
+
   type Template {
     id: ID!
     name: String!
@@ -1450,6 +1462,7 @@ export const typeDefs = /* GraphQL */ `
     healthCheck: TemplateHealthCheck
     persistentStorage: [TemplatePersistentStorage!]
     pricingUakt: Int
+    components: [TemplateComponent!]
   }
 
   input EnvOverrideInput {
@@ -1476,6 +1489,33 @@ export const typeDefs = /* GraphQL */ `
     serviceName: String
     envOverrides: [EnvOverrideInput!]
     resourceOverrides: ResourceOverrideInput
+  }
+
+  input ComponentTargetInput {
+    componentId: String!
+    provider: String!
+    resourceOverrides: ResourceOverrideInput
+  }
+
+  input DeployCompositeTemplateInput {
+    templateId: String!
+    projectId: ID!
+    """
+    'fullstack' — all components in one lease/provider.
+    'custom' — each component targeted individually via componentTargets.
+    """
+    mode: String!
+    """Provider for fullstack mode ('akash' or 'phala'). Ignored in custom mode."""
+    provider: String
+    """Per-component provider assignments for custom mode."""
+    componentTargets: [ComponentTargetInput!]
+    serviceName: String
+    envOverrides: [EnvOverrideInput!]
+    resourceOverrides: ResourceOverrideInput
+  }
+
+  type CompositeDeploymentResult {
+    primaryServiceId: ID!
   }
 
   # ============================================
@@ -1740,6 +1780,7 @@ export const typeDefs = /* GraphQL */ `
     # Templates
     deployFromTemplate(input: DeployFromTemplateInput!): AkashDeployment!
     deployFromTemplateToPhala(input: DeployFromTemplateInput!): PhalaDeployment!
+    deployCompositeTemplate(input: DeployCompositeTemplateInput!): CompositeDeploymentResult!
 
     # Phala Deployments
     stopPhalaDeployment(id: ID!): PhalaDeployment!

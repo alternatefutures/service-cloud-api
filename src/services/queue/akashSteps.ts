@@ -31,7 +31,11 @@ import {
 const AKASH_CLI_TIMEOUT_MS = 120_000
 
 const AKASH_TERMINAL_STATES = new Set([
-  'ACTIVE', 'CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED',
+  'ACTIVE',
+  'CLOSED',
+  'FAILED',
+  'PERMANENTLY_FAILED',
+  'SUSPENDED',
 ])
 
 function getAkashEnv(): Record<string, string> {
@@ -55,13 +59,19 @@ function getAkashEnv(): Record<string, string> {
   }
 }
 
-async function runAkashAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
+async function runAkashAsync(
+  args: string[],
+  timeout = AKASH_CLI_TIMEOUT_MS
+): Promise<string> {
   const env = getAkashEnv()
   console.log(`[AkashSteps] Running: akash ${args.join(' ')}`)
   return execAsync('akash', args, { env, timeout })
 }
 
-async function runProviderServicesAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
+async function runProviderServicesAsync(
+  args: string[],
+  timeout = AKASH_CLI_TIMEOUT_MS
+): Promise<string> {
   const env = getAkashEnv()
   console.log(`[AkashSteps] Running: provider-services ${args.join(' ')}`)
   return execAsync('provider-services', args, { env, timeout })
@@ -69,13 +79,20 @@ async function runProviderServicesAsync(args: string[], timeout = AKASH_CLI_TIME
 
 function extractJson(raw: string): unknown {
   const trimmed = raw.trim()
-  try { return JSON.parse(trimmed) } catch { /* continue */ }
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    /* continue */
+  }
 
   const objIdx = trimmed.indexOf('{')
   const arrIdx = trimmed.indexOf('[')
-  const startIdx = objIdx === -1 ? arrIdx : arrIdx === -1 ? objIdx : Math.min(objIdx, arrIdx)
+  const startIdx =
+    objIdx === -1 ? arrIdx : arrIdx === -1 ? objIdx : Math.min(objIdx, arrIdx)
   if (startIdx === -1) {
-    throw new SyntaxError(`No JSON found in CLI output: ${trimmed.slice(0, 200)}`)
+    throw new SyntaxError(
+      `No JSON found in CLI output: ${trimmed.slice(0, 200)}`
+    )
   }
   return JSON.parse(trimmed.slice(startIdx))
 }
@@ -86,7 +103,7 @@ function emitProgress(
   stepNumber: number,
   retryCount: number,
   message: string,
-  errorMessage?: string,
+  errorMessage?: string
 ) {
   deploymentEvents.emitProgress({
     deploymentId,
@@ -102,7 +119,11 @@ function emitProgress(
   })
 }
 
-async function enqueueNext(path: string, body: Record<string, unknown>, delaySec?: number) {
+async function enqueueNext(
+  path: string,
+  body: Record<string, unknown>,
+  delaySec?: number
+) {
   if (isQStashEnabled()) {
     await publishJob(path, body, { delaySec })
   } else {
@@ -112,62 +133,157 @@ async function enqueueNext(path: string, body: Record<string, unknown>, delaySec
   }
 }
 
+function isLikelyTcpUri(uri: string): boolean {
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return false
+  const parts = uri.split(':')
+  if (parts.length < 2) return false
+  const port = Number(parts.at(-1))
+  if (Number.isNaN(port)) return false
+  return port !== 80 && port !== 443
+}
+
+async function probeHttpUri(uri: string): Promise<boolean> {
+  const candidates =
+    uri.startsWith('http://') || uri.startsWith('https://')
+      ? [uri]
+      : [`https://${uri}`, `http://${uri}`]
+
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(candidate, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(5000),
+      })
+      if (response.status < 500) return true
+    } catch {
+      // Keep trying candidate URLs.
+    }
+  }
+
+  return false
+}
+
+async function hasUsableEndpoint(
+  services: Record<string, { uris: string[] }>
+): Promise<boolean> {
+  for (const service of Object.values(services)) {
+    for (const uri of service.uris) {
+      if (isLikelyTcpUri(uri)) return true
+      if (await probeHttpUri(uri)) return true
+    }
+  }
+  return false
+}
+
 /**
  * Last-resort: if enqueueNext for HANDLE_FAILURE itself fails, write FAILED
  * directly to the DB so the deployment doesn't hang forever.
  */
-async function failDirectly(prisma: PrismaClient, deploymentId: string, errorMessage: string): Promise<void> {
+async function failDirectly(
+  prisma: PrismaClient,
+  deploymentId: string,
+  errorMessage: string
+): Promise<void> {
   try {
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'FAILED', errorMessage: `[Queue failure] ${errorMessage}` },
+      data: {
+        status: 'FAILED',
+        errorMessage: `[Queue failure] ${errorMessage}`,
+      },
     })
-    console.error(`[AkashSteps] Wrote FAILED directly for ${deploymentId} (enqueue failed)`)
+    console.error(
+      `[AkashSteps] Wrote FAILED directly for ${deploymentId} (enqueue failed)`
+    )
   } catch (dbErr) {
-    console.error(`[AkashSteps] CRITICAL: Could not even write FAILED for ${deploymentId}:`, dbErr)
+    console.error(
+      `[AkashSteps] CRITICAL: Could not even write FAILED for ${deploymentId}:`,
+      dbErr
+    )
   }
 }
 
 // ── Step 1: SUBMIT_TX ─────────────────────────────────────────────────
 
-export async function handleSubmitTx(prisma: PrismaClient, deploymentId: string): Promise<void> {
+export async function handleSubmitTx(
+  prisma: PrismaClient,
+  deploymentId: string
+): Promise<void> {
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
-    select: { id: true, sdlContent: true, retryCount: true, depositUakt: true, status: true },
+    select: {
+      id: true,
+      sdlContent: true,
+      retryCount: true,
+      depositUakt: true,
+      status: true,
+    },
   })
   if (!deployment) throw new Error(`Deployment not found: ${deploymentId}`)
   if (AKASH_TERMINAL_STATES.has(deployment.status)) return
 
-  emitProgress(deploymentId, 'SUBMIT_TX', AKASH_STEP_NUMBERS.SUBMIT_TX, deployment.retryCount, 'Submitting deployment transaction...')
+  emitProgress(
+    deploymentId,
+    'SUBMIT_TX',
+    AKASH_STEP_NUMBERS.SUBMIT_TX,
+    deployment.retryCount,
+    'Submitting deployment transaction...'
+  )
 
   const workDir = mkdtempSync(join(tmpdir(), 'akash-tx-'))
   const sdlPath = join(workDir, 'deploy.yaml')
   writeFileSync(sdlPath, deployment.sdlContent)
 
   try {
-    const deposit = deployment.depositUakt ? Number(deployment.depositUakt) : 5000000
+    const deposit = deployment.depositUakt
+      ? Number(deployment.depositUakt)
+      : 5000000
     const output = await runAkashAsync([
-      'tx', 'deployment', 'create', sdlPath,
-      '--deposit', `${deposit}uakt`,
-      '-o', 'json', '-y',
+      'tx',
+      'deployment',
+      'create',
+      sdlPath,
+      '--deposit',
+      `${deposit}uakt`,
+      '-o',
+      'json',
+      '-y',
     ])
 
     const result = extractJson(output) as Record<string, unknown>
 
-    const txCode = typeof result.code === 'number' ? result.code : typeof result.code === 'string' ? parseInt(result.code as string, 10) : undefined
+    const txCode =
+      typeof result.code === 'number'
+        ? result.code
+        : typeof result.code === 'string'
+          ? parseInt(result.code as string, 10)
+          : undefined
     if (txCode !== undefined && txCode !== 0) {
       const rawLog = (result.raw_log || result.rawLog || '') as string
-      throw new Error(`Akash tx rejected (code ${txCode}): ${rawLog.slice(0, 300)}`)
+      throw new Error(
+        `Akash tx rejected (code ${txCode}): ${rawLog.slice(0, 300)}`
+      )
     }
 
     let dseq: number | undefined
 
-    const logs = result.logs as Array<{ events?: Array<{ type: string; attributes?: Array<{ key: string; value: string }> }> }> | undefined
+    const logs = result.logs as
+      | Array<{
+          events?: Array<{
+            type: string
+            attributes?: Array<{ key: string; value: string }>
+          }>
+        }>
+      | undefined
     if (logs) {
       for (const log of logs) {
         for (const event of log.events || []) {
           const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
-          if (dseqAttr) { dseq = parseInt(dseqAttr.value, 10); break }
+          if (dseqAttr) {
+            dseq = parseInt(dseqAttr.value, 10)
+            break
+          }
         }
         if (dseq) break
       }
@@ -178,39 +294,62 @@ export async function handleSubmitTx(prisma: PrismaClient, deploymentId: string)
       for (const delay of delays) {
         await new Promise(r => setTimeout(r, delay))
         try {
-          const txOutput = await runAkashAsync(['query', 'tx', result.txhash as string, '-o', 'json'], 60_000)
+          const txOutput = await runAkashAsync(
+            ['query', 'tx', result.txhash as string, '-o', 'json'],
+            60_000
+          )
           const txResult = extractJson(txOutput) as Record<string, unknown>
 
-          const txLogs = txResult.logs as Array<{ events?: Array<{ type: string; attributes?: Array<{ key: string; value: string }> }> }> | undefined
+          const txLogs = txResult.logs as
+            | Array<{
+                events?: Array<{
+                  type: string
+                  attributes?: Array<{ key: string; value: string }>
+                }>
+              }>
+            | undefined
           if (txLogs) {
             for (const log of txLogs) {
               for (const event of log.events || []) {
                 const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
-                if (dseqAttr) { dseq = parseInt(dseqAttr.value, 10); break }
+                if (dseqAttr) {
+                  dseq = parseInt(dseqAttr.value, 10)
+                  break
+                }
               }
               if (dseq) break
             }
           }
 
           if (!dseq) {
-            const tx = txResult.tx as { body?: { messages?: Array<{ id?: { dseq?: string } }> } } | undefined
+            const tx = txResult.tx as
+              | { body?: { messages?: Array<{ id?: { dseq?: string } }> } }
+              | undefined
             const msgDseq = tx?.body?.messages?.[0]?.id?.dseq
             if (msgDseq) dseq = parseInt(msgDseq, 10)
           }
 
           if (dseq) break
         } catch (err) {
-          console.warn(`[AkashSteps] tx query attempt failed, retrying...`, (err as Error).message?.slice(0, 120))
+          console.warn(
+            `[AkashSteps] tx query attempt failed, retrying...`,
+            (err as Error).message?.slice(0, 120)
+          )
         }
       }
     }
 
     if (!dseq || isNaN(dseq) || dseq <= 0) {
-      throw new Error('Failed to extract dseq from deployment creation response')
+      throw new Error(
+        'Failed to extract dseq from deployment creation response'
+      )
     }
 
     const keyName = process.env.AKASH_KEY_NAME || 'default'
-    const ownerOutput = await runAkashAsync(['keys', 'show', keyName, '-a'], 15_000)
+    const ownerOutput = await runAkashAsync(
+      ['keys', 'show', keyName, '-a'],
+      15_000
+    )
     const owner = ownerOutput.trim()
 
     await prisma.akashDeployment.update({
@@ -218,11 +357,26 @@ export async function handleSubmitTx(prisma: PrismaClient, deploymentId: string)
       data: { dseq: BigInt(dseq), owner, status: 'WAITING_BIDS' },
     })
 
-    emitProgress(deploymentId, 'SUBMIT_TX', AKASH_STEP_NUMBERS.SUBMIT_TX, deployment.retryCount, `Deployment created on-chain (dseq: ${dseq}). Waiting for bids...`)
+    emitProgress(
+      deploymentId,
+      'SUBMIT_TX',
+      AKASH_STEP_NUMBERS.SUBMIT_TX,
+      deployment.retryCount,
+      `Deployment created on-chain (dseq: ${dseq}). Waiting for bids...`
+    )
 
-    await enqueueNext('/queue/akash/step', { step: 'CHECK_BIDS', deploymentId, attempt: 1 } satisfies AkashCheckBidsPayload, 10)
+    await enqueueNext(
+      '/queue/akash/step',
+      {
+        step: 'CHECK_BIDS',
+        deploymentId,
+        attempt: 1,
+      } satisfies AkashCheckBidsPayload,
+      10
+    )
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : 'Unknown error during tx submission'
+    const errMsg =
+      err instanceof Error ? err.message : 'Unknown error during tx submission'
     try {
       await enqueueNext('/queue/akash/step', {
         step: 'HANDLE_FAILURE',
@@ -233,30 +387,59 @@ export async function handleSubmitTx(prisma: PrismaClient, deploymentId: string)
       await failDirectly(prisma, deploymentId, errMsg)
     }
   } finally {
-    try { rmSync(workDir, { recursive: true }) } catch { /* ignore */ }
+    try {
+      rmSync(workDir, { recursive: true })
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 // ── Step 2: CHECK_BIDS ────────────────────────────────────────────────
 
-export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckBidsPayload): Promise<void> {
+export async function handleCheckBids(
+  prisma: PrismaClient,
+  payload: AkashCheckBidsPayload
+): Promise<void> {
   const { deploymentId, attempt } = payload
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
-    select: { id: true, owner: true, dseq: true, retryCount: true, status: true },
+    select: {
+      id: true,
+      owner: true,
+      dseq: true,
+      retryCount: true,
+      status: true,
+    },
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
 
-  emitProgress(deploymentId, 'CHECK_BIDS', AKASH_STEP_NUMBERS.CHECK_BIDS, deployment.retryCount, `Checking for provider bids (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})...`)
+  emitProgress(
+    deploymentId,
+    'CHECK_BIDS',
+    AKASH_STEP_NUMBERS.CHECK_BIDS,
+    deployment.retryCount,
+    `Checking for provider bids (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})...`
+  )
 
   try {
     const dseq = Number(deployment.dseq)
     const output = await runAkashAsync([
-      'query', 'market', 'bid', 'list',
-      '--owner', deployment.owner, '--dseq', String(dseq), '-o', 'json',
+      'query',
+      'market',
+      'bid',
+      'list',
+      '--owner',
+      deployment.owner,
+      '--dseq',
+      String(dseq),
+      '-o',
+      'json',
     ])
 
-    const result = extractJson(output) as { bids?: Array<Record<string, unknown>> }
+    const result = extractJson(output) as {
+      bids?: Array<Record<string, unknown>>
+    }
     const rawBids = result.bids || []
 
     if (rawBids.length === 0) {
@@ -268,7 +451,15 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
         } satisfies AkashHandleFailurePayload)
         return
       }
-      await enqueueNext('/queue/akash/step', { step: 'CHECK_BIDS', deploymentId, attempt: attempt + 1 } satisfies AkashCheckBidsPayload, attempt * 5)
+      await enqueueNext(
+        '/queue/akash/step',
+        {
+          step: 'CHECK_BIDS',
+          deploymentId,
+          attempt: attempt + 1,
+        } satisfies AkashCheckBidsPayload,
+        attempt * 5
+      )
       return
     }
 
@@ -277,8 +468,15 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
       const bidId = bid.bid_id || bid.id || {}
       const price = bid.price || {}
       return {
-        bidId: { provider: String(bidId.provider || ''), gseq: Number(bidId.gseq || 1), oseq: Number(bidId.oseq || 1) },
-        price: { amount: String(price.amount || '0'), denom: String(price.denom || 'uakt') },
+        bidId: {
+          provider: String(bidId.provider || ''),
+          gseq: Number(bidId.gseq || 1),
+          oseq: Number(bidId.oseq || 1),
+        },
+        price: {
+          amount: String(price.amount || '0'),
+          denom: String(price.denom || 'uakt'),
+        },
       }
     })
 
@@ -310,7 +508,9 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
       return
     }
 
-    const selectedBid = uptimeFiltered.sort((a, b) => parseFloat(a.price.amount) - parseFloat(b.price.amount))[0]
+    const selectedBid = uptimeFiltered.sort(
+      (a, b) => parseFloat(a.price.amount) - parseFloat(b.price.amount)
+    )[0]
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
@@ -323,7 +523,13 @@ export async function handleCheckBids(prisma: PrismaClient, payload: AkashCheckB
       },
     })
 
-    emitProgress(deploymentId, 'CHECK_BIDS', AKASH_STEP_NUMBERS.CHECK_BIDS, deployment.retryCount, `Selected provider from ${safeBids.length} bid(s). Creating lease...`)
+    emitProgress(
+      deploymentId,
+      'CHECK_BIDS',
+      AKASH_STEP_NUMBERS.CHECK_BIDS,
+      deployment.retryCount,
+      `Selected provider from ${safeBids.length} bid(s). Creating lease...`
+    )
 
     await enqueueNext('/queue/akash/step', {
       step: 'CREATE_LEASE',
@@ -353,7 +559,7 @@ async function resolveProviderGpuModel(
   providerAddr: string,
   dseq: bigint,
   prisma: PrismaClient,
-  deploymentId: string,
+  deploymentId: string
 ): Promise<string | null> {
   try {
     const deployment = await prisma.akashDeployment.findUnique({
@@ -361,7 +567,9 @@ async function resolveProviderGpuModel(
       select: { sdlContent: true },
     })
     if (deployment?.sdlContent) {
-      const modelMatch = deployment.sdlContent.match(/gpu:[\s\S]*?model:\s*(\S+)/m)
+      const modelMatch = deployment.sdlContent.match(
+        /gpu:[\s\S]*?model:\s*(\S+)/m
+      )
       if (modelMatch?.[1] && modelMatch[1] !== 'nvidia') {
         return modelMatch[1]
       }
@@ -369,7 +577,7 @@ async function resolveProviderGpuModel(
 
     const output = await runAkashAsync(
       ['query', 'provider', 'get', providerAddr, '-o', 'json'],
-      15_000,
+      15_000
     )
     const result = extractJson(output) as {
       provider?: { attributes?: Array<{ key: string; value: string }> }
@@ -378,13 +586,15 @@ async function resolveProviderGpuModel(
     const attrs = result.attributes || result.provider?.attributes || []
 
     for (const attr of attrs) {
-      const gpuMatch = attr.key.match(/capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/)
+      const gpuMatch = attr.key.match(
+        /capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/
+      )
       if (gpuMatch?.[2]) return `${gpuMatch[1]}-${gpuMatch[2]}`
     }
   } catch (err) {
     console.warn(
       `[AkashSteps] Could not resolve GPU model for provider ${providerAddr}:`,
-      err instanceof Error ? err.message : err,
+      err instanceof Error ? err.message : err
     )
   }
   return null
@@ -392,37 +602,82 @@ async function resolveProviderGpuModel(
 
 // ── Step 3: CREATE_LEASE ──────────────────────────────────────────────
 
-export async function handleCreateLease(prisma: PrismaClient, payload: AkashCreateLeasePayload): Promise<void> {
+export async function handleCreateLease(
+  prisma: PrismaClient,
+  payload: AkashCreateLeasePayload
+): Promise<void> {
   const { deploymentId, provider, gseq, oseq } = payload
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
-    select: { id: true, owner: true, dseq: true, retryCount: true, status: true },
+    select: {
+      id: true,
+      owner: true,
+      dseq: true,
+      retryCount: true,
+      status: true,
+    },
   })
   if (!deployment) return
   if (AKASH_TERMINAL_STATES.has(deployment.status)) return
 
-  emitProgress(deploymentId, 'CREATE_LEASE', AKASH_STEP_NUMBERS.CREATE_LEASE, deployment.retryCount, 'Creating lease with selected provider...')
+  emitProgress(
+    deploymentId,
+    'CREATE_LEASE',
+    AKASH_STEP_NUMBERS.CREATE_LEASE,
+    deployment.retryCount,
+    'Creating lease with selected provider...'
+  )
 
   try {
     const dseq = Number(deployment.dseq)
     await runAkashAsync([
-      'tx', 'market', 'lease', 'create',
-      '--dseq', String(dseq), '--gseq', String(gseq), '--oseq', String(oseq),
-      '--provider', provider, '-o', 'json', '-y',
+      'tx',
+      'market',
+      'lease',
+      'create',
+      '--dseq',
+      String(dseq),
+      '--gseq',
+      String(gseq),
+      '--oseq',
+      String(oseq),
+      '--provider',
+      provider,
+      '-o',
+      'json',
+      '-y',
     ])
 
     await new Promise(r => setTimeout(r, 6000))
 
-    const gpuModel = await resolveProviderGpuModel(provider, deployment.dseq, prisma, deploymentId)
+    const gpuModel = await resolveProviderGpuModel(
+      provider,
+      deployment.dseq,
+      prisma,
+      deploymentId
+    )
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
       data: { status: 'SENDING_MANIFEST', ...(gpuModel ? { gpuModel } : {}) },
     })
 
-    emitProgress(deploymentId, 'CREATE_LEASE', AKASH_STEP_NUMBERS.CREATE_LEASE, deployment.retryCount, 'Lease created. Sending manifest...')
+    emitProgress(
+      deploymentId,
+      'CREATE_LEASE',
+      AKASH_STEP_NUMBERS.CREATE_LEASE,
+      deployment.retryCount,
+      'Lease created. Sending manifest...'
+    )
 
-    await enqueueNext('/queue/akash/step', { step: 'SEND_MANIFEST', deploymentId } satisfies AkashSendManifestPayload, 5)
+    await enqueueNext(
+      '/queue/akash/step',
+      {
+        step: 'SEND_MANIFEST',
+        deploymentId,
+      } satisfies AkashSendManifestPayload,
+      5
+    )
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : 'Error creating lease'
     try {
@@ -439,16 +694,32 @@ export async function handleCreateLease(prisma: PrismaClient, payload: AkashCrea
 
 // ── Step 4: SEND_MANIFEST ─────────────────────────────────────────────
 
-export async function handleSendManifest(prisma: PrismaClient, payload: AkashSendManifestPayload): Promise<void> {
+export async function handleSendManifest(
+  prisma: PrismaClient,
+  payload: AkashSendManifestPayload
+): Promise<void> {
   const { deploymentId } = payload
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
-    select: { id: true, dseq: true, provider: true, sdlContent: true, retryCount: true, status: true },
+    select: {
+      id: true,
+      dseq: true,
+      provider: true,
+      sdlContent: true,
+      retryCount: true,
+      status: true,
+    },
   })
   if (!deployment || !deployment.provider) return
   if (AKASH_TERMINAL_STATES.has(deployment.status)) return
 
-  emitProgress(deploymentId, 'SEND_MANIFEST', AKASH_STEP_NUMBERS.SEND_MANIFEST, deployment.retryCount, 'Sending deployment manifest to provider...')
+  emitProgress(
+    deploymentId,
+    'SEND_MANIFEST',
+    AKASH_STEP_NUMBERS.SEND_MANIFEST,
+    deployment.retryCount,
+    'Sending deployment manifest to provider...'
+  )
 
   const workDir = mkdtempSync(join(tmpdir(), 'akash-manifest-'))
   const sdlPath = join(workDir, 'deploy.yaml')
@@ -458,14 +729,22 @@ export async function handleSendManifest(prisma: PrismaClient, payload: AkashSen
     const dseq = Number(deployment.dseq)
     try {
       await runProviderServicesAsync([
-        'send-manifest', sdlPath,
-        '--dseq', String(dseq), '--provider', deployment.provider,
+        'send-manifest',
+        sdlPath,
+        '--dseq',
+        String(dseq),
+        '--provider',
+        deployment.provider,
       ])
     } catch {
       await new Promise(r => setTimeout(r, 5000))
       await runProviderServicesAsync([
-        'send-manifest', sdlPath,
-        '--dseq', String(dseq), '--provider', deployment.provider,
+        'send-manifest',
+        sdlPath,
+        '--dseq',
+        String(dseq),
+        '--provider',
+        deployment.provider,
       ])
     }
 
@@ -474,9 +753,23 @@ export async function handleSendManifest(prisma: PrismaClient, payload: AkashSen
       data: { status: 'DEPLOYING' },
     })
 
-    emitProgress(deploymentId, 'SEND_MANIFEST', AKASH_STEP_NUMBERS.SEND_MANIFEST, deployment.retryCount, 'Manifest sent. Waiting for service URLs...')
+    emitProgress(
+      deploymentId,
+      'SEND_MANIFEST',
+      AKASH_STEP_NUMBERS.SEND_MANIFEST,
+      deployment.retryCount,
+      'Manifest sent. Waiting for service URLs...'
+    )
 
-    await enqueueNext('/queue/akash/step', { step: 'POLL_URLS', deploymentId, attempt: 1 } satisfies AkashPollUrlsPayload, 10)
+    await enqueueNext(
+      '/queue/akash/step',
+      {
+        step: 'POLL_URLS',
+        deploymentId,
+        attempt: 1,
+      } satisfies AkashPollUrlsPayload,
+      10
+    )
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : 'Error sending manifest'
     try {
@@ -489,31 +782,69 @@ export async function handleSendManifest(prisma: PrismaClient, payload: AkashSen
       await failDirectly(prisma, deploymentId, errMsg)
     }
   } finally {
-    try { rmSync(workDir, { recursive: true }) } catch { /* ignore */ }
+    try {
+      rmSync(workDir, { recursive: true })
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 // ── Step 5: POLL_URLS ─────────────────────────────────────────────────
 
-export async function handlePollUrls(prisma: PrismaClient, payload: AkashPollUrlsPayload): Promise<void> {
+export async function handlePollUrls(
+  prisma: PrismaClient,
+  payload: AkashPollUrlsPayload
+): Promise<void> {
   const { deploymentId, attempt } = payload
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
-    include: { service: { include: { afFunction: true, site: true, project: true } } },
+    include: {
+      service: { include: { afFunction: true, site: true, project: true } },
+    },
   })
-  if (!deployment || !deployment.provider || AKASH_TERMINAL_STATES.has(deployment.status)) return
+  if (
+    !deployment ||
+    !deployment.provider ||
+    AKASH_TERMINAL_STATES.has(deployment.status)
+  )
+    return
 
-  emitProgress(deploymentId, 'POLL_URLS', AKASH_STEP_NUMBERS.POLL_URLS, deployment.retryCount, `Polling for service URLs (attempt ${attempt}/${URL_POLL_MAX_ATTEMPTS})...`)
+  emitProgress(
+    deploymentId,
+    'POLL_URLS',
+    AKASH_STEP_NUMBERS.POLL_URLS,
+    deployment.retryCount,
+    `Polling for service URLs (attempt ${attempt}/${URL_POLL_MAX_ATTEMPTS})...`
+  )
 
   try {
     const dseq = Number(deployment.dseq)
-    const output = await runProviderServicesAsync([
-      'lease-status', '--dseq', String(dseq), '--provider', deployment.provider,
-    ], 60_000)
+    const output = await runProviderServicesAsync(
+      [
+        'lease-status',
+        '--dseq',
+        String(dseq),
+        '--provider',
+        deployment.provider,
+      ],
+      60_000
+    )
 
     const result = extractJson(output) as {
-      services?: Record<string, { uris?: string[]; available_replicas?: number }>
-      forwarded_ports?: Record<string, Array<{ host: string; port: number; externalPort: number; proto: string }>>
+      services?: Record<
+        string,
+        { uris?: string[]; available_replicas?: number }
+      >
+      forwarded_ports?: Record<
+        string,
+        Array<{
+          host: string
+          port: number
+          externalPort: number
+          proto: string
+        }>
+      >
     }
     const services = result.services || {}
     const forwardedPorts = result.forwarded_ports || {}
@@ -528,14 +859,33 @@ export async function handlePollUrls(prisma: PrismaClient, payload: AkashPollUrl
       parsed[k] = { uris }
     }
     const hasEndpoints = Object.values(parsed).some(s => s.uris.length > 0)
-    const hasReadyReplicas = Object.values(services).some(s => (s.available_replicas ?? 0) > 0)
+    const hasReadyReplicas = Object.values(services).some(
+      s => (s.available_replicas ?? 0) > 0
+    )
+    const hasReachableEndpoint = await hasUsableEndpoint(parsed)
 
-    if (!hasEndpoints && !hasReadyReplicas) {
+    if (!hasReachableEndpoint) {
       if (attempt >= URL_POLL_MAX_ATTEMPTS) {
-        await finalizeDeployment(prisma, deployment, parsed)
+        const reason =
+          hasEndpoints || hasReadyReplicas
+            ? 'Deployment never exposed a healthy endpoint'
+            : 'Deployment never exposed any endpoints'
+        await enqueueNext('/queue/akash/step', {
+          step: 'HANDLE_FAILURE',
+          deploymentId,
+          errorMessage: reason,
+        } satisfies AkashHandleFailurePayload)
         return
       }
-      await enqueueNext('/queue/akash/step', { step: 'POLL_URLS', deploymentId, attempt: attempt + 1 } satisfies AkashPollUrlsPayload, 5)
+      await enqueueNext(
+        '/queue/akash/step',
+        {
+          step: 'POLL_URLS',
+          deploymentId,
+          attempt: attempt + 1,
+        } satisfies AkashPollUrlsPayload,
+        5
+      )
       return
     }
 
@@ -545,14 +895,22 @@ export async function handlePollUrls(prisma: PrismaClient, payload: AkashPollUrl
       await finalizeDeployment(prisma, deployment, {})
       return
     }
-    await enqueueNext('/queue/akash/step', { step: 'POLL_URLS', deploymentId, attempt: attempt + 1 } satisfies AkashPollUrlsPayload, 5)
+    await enqueueNext(
+      '/queue/akash/step',
+      {
+        step: 'POLL_URLS',
+        deploymentId,
+        attempt: attempt + 1,
+      } satisfies AkashPollUrlsPayload,
+      5
+    )
   }
 }
 
 async function finalizeDeployment(
   prisma: PrismaClient,
   deployment: any,
-  serviceUrls: Record<string, { uris: string[] }>,
+  serviceUrls: Record<string, { uris: string[] }>
 ): Promise<void> {
   try {
     const organizationId = deployment.service?.project?.organizationId
@@ -560,7 +918,7 @@ async function finalizeDeployment(
       const escrowService = getEscrowService(prisma)
       const billingApi = getBillingApiClient()
       const orgMarkup = await billingApi.getOrgMarkup(
-        (await billingApi.getOrgBilling(organizationId)).orgBillingId,
+        (await billingApi.getOrgBilling(organizationId)).orgBillingId
       )
       await escrowService.createEscrow({
         akashDeploymentId: deployment.id,
@@ -571,7 +929,10 @@ async function finalizeDeployment(
       })
     }
   } catch (escrowErr) {
-    console.warn(`[AkashSteps] Escrow creation failed for ${deployment.id}:`, escrowErr instanceof Error ? escrowErr.message : escrowErr)
+    console.warn(
+      `[AkashSteps] Escrow creation failed for ${deployment.id}:`,
+      escrowErr instanceof Error ? escrowErr.message : escrowErr
+    )
   }
 
   let gpuModelUpdate: string | undefined
@@ -582,7 +943,7 @@ async function finalizeDeployment(
         deployment.provider,
         deployment.dseq,
         prisma,
-        deployment.id,
+        deployment.id
       )
       if (resolved) gpuModelUpdate = resolved
     }
@@ -609,7 +970,13 @@ async function finalizeDeployment(
     })
   }
 
-  emitProgress(deployment.id, 'POLL_URLS', AKASH_STEP_NUMBERS.POLL_URLS, deployment.retryCount, 'Deployment is now active!')
+  emitProgress(
+    deployment.id,
+    'POLL_URLS',
+    AKASH_STEP_NUMBERS.POLL_URLS,
+    deployment.retryCount,
+    'Deployment is now active!'
+  )
 
   deploymentEvents.emitStatus({
     deploymentId: deployment.id,
@@ -617,12 +984,17 @@ async function finalizeDeployment(
     timestamp: new Date(),
   })
 
-  console.log(`[AkashSteps] Deployment ${deployment.id} is ACTIVE: ${invokeUrl}`)
+  console.log(
+    `[AkashSteps] Deployment ${deployment.id} is ACTIVE: ${invokeUrl}`
+  )
 }
 
 // ── FAILURE handler ───────────────────────────────────────────────────
 
-export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFailurePayload): Promise<void> {
+export async function handleFailure(
+  prisma: PrismaClient,
+  payload: AkashHandleFailurePayload
+): Promise<void> {
   const { deploymentId, errorMessage } = payload
   const deployment = await prisma.akashDeployment.findUnique({
     where: { id: deploymentId },
@@ -632,7 +1004,9 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
 
   // Guard: don't demote terminal states (stale/duplicate messages)
   if (AKASH_TERMINAL_STATES.has(deployment.status)) {
-    console.warn(`[AkashSteps] Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`)
+    console.warn(
+      `[AkashSteps] Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`
+    )
     return
   }
 
@@ -643,19 +1017,37 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
     data: { status: 'FAILED', errorMessage },
   })
 
-  emitProgress(deploymentId, 'HANDLE_FAILURE', AKASH_STEP_NUMBERS.HANDLE_FAILURE, retryCount, `Deployment failed: ${errorMessage}`, errorMessage)
+  emitProgress(
+    deploymentId,
+    'HANDLE_FAILURE',
+    AKASH_STEP_NUMBERS.HANDLE_FAILURE,
+    retryCount,
+    `Deployment failed: ${errorMessage}`,
+    errorMessage
+  )
 
   if (retryCount < MAX_RETRY_COUNT) {
-    console.log(`[AkashSteps] Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`)
+    console.log(
+      `[AkashSteps] Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`
+    )
 
     if (deployment.dseq && Number(deployment.dseq) > 0) {
       try {
         await runAkashAsync([
-          'tx', 'deployment', 'close',
-          '--dseq', String(Number(deployment.dseq)), '-o', 'json', '-y',
+          'tx',
+          'deployment',
+          'close',
+          '--dseq',
+          String(Number(deployment.dseq)),
+          '-o',
+          'json',
+          '-y',
         ])
       } catch (closeErr) {
-        console.warn(`[AkashSteps] Failed to close on-chain deployment for retry:`, closeErr instanceof Error ? closeErr.message : closeErr)
+        console.warn(
+          `[AkashSteps] Failed to close on-chain deployment for retry:`,
+          closeErr instanceof Error ? closeErr.message : closeErr
+        )
       }
     }
 
@@ -675,25 +1067,50 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
       },
     })
 
-    emitProgress(newDeployment.id, 'SUBMIT_TX', AKASH_STEP_NUMBERS.SUBMIT_TX, retryCount + 1, `Retrying deployment (attempt ${retryCount + 2}/${MAX_RETRY_COUNT + 1})...`)
+    emitProgress(
+      newDeployment.id,
+      'SUBMIT_TX',
+      AKASH_STEP_NUMBERS.SUBMIT_TX,
+      retryCount + 1,
+      `Retrying deployment (attempt ${retryCount + 2}/${MAX_RETRY_COUNT + 1})...`
+    )
 
     try {
-      await enqueueNext('/queue/akash/step', { step: 'SUBMIT_TX', deploymentId: newDeployment.id }, 5)
+      await enqueueNext(
+        '/queue/akash/step',
+        { step: 'SUBMIT_TX', deploymentId: newDeployment.id },
+        5
+      )
     } catch {
-      await failDirectly(prisma, newDeployment.id, 'Failed to enqueue retry step')
+      await failDirectly(
+        prisma,
+        newDeployment.id,
+        'Failed to enqueue retry step'
+      )
     }
   } else {
-    console.error(`[AkashSteps] Deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`)
+    console.error(
+      `[AkashSteps] Deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`
+    )
 
     // Close on-chain deployment to stop leaking AKT
     if (deployment.dseq && Number(deployment.dseq) > 0) {
       try {
         await runAkashAsync([
-          'tx', 'deployment', 'close',
-          '--dseq', String(Number(deployment.dseq)), '-o', 'json', '-y',
+          'tx',
+          'deployment',
+          'close',
+          '--dseq',
+          String(Number(deployment.dseq)),
+          '-o',
+          'json',
+          '-y',
         ])
       } catch (closeErr) {
-        console.warn(`[AkashSteps] Failed to close on-chain deployment on permanent failure:`, closeErr instanceof Error ? closeErr.message : closeErr)
+        console.warn(
+          `[AkashSteps] Failed to close on-chain deployment on permanent failure:`,
+          closeErr instanceof Error ? closeErr.message : closeErr
+        )
       }
     }
 
@@ -702,7 +1119,10 @@ export async function handleFailure(prisma: PrismaClient, payload: AkashHandleFa
       data: { status: 'PERMANENTLY_FAILED' as any },
     })
 
-    if (deployment.service?.type === 'FUNCTION' && deployment.service?.afFunction) {
+    if (
+      deployment.service?.type === 'FUNCTION' &&
+      deployment.service?.afFunction
+    ) {
       await prisma.aFFunction.update({
         where: { id: deployment.service.afFunction.id },
         data: { status: 'FAILED' },

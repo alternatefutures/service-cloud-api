@@ -11,6 +11,7 @@
  */
 
 import type { Template, TemplateDeployConfig } from './schema.js'
+import type { ResolvedComponent } from './sdl.js'
 
 /**
  * Generate docker-compose.yml content from a template + user config.
@@ -109,4 +110,45 @@ function buildVolumeLines(template: Template): string {
 
 function escapeYamlString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
+}
+
+// ─── Composite Compose Generator ────────────────────────────────
+
+/**
+ * Generate a docker-compose.yml for a single resolved component
+ * targeting Phala. Phala CVMs are single-container, so each component
+ * gets its own compose. envLinks are pre-resolved to AF proxy URLs.
+ */
+export function generateCompositeCompose(component: ResolvedComponent): string {
+  const envEntries = Object.entries(component.resolvedEnv)
+  const envBlock = envEntries.length > 0
+    ? `    environment:\n${envEntries.map(([k, v]) => `      - ${k}=${escapeYamlString(v)}`).join('\n')}\n`
+    : ''
+
+  const portBlock = component.ports.length > 0
+    ? `    ports:\n${component.ports.map(p => `      - "${p.as}:${p.port}"`).join('\n')}\n`
+    : ''
+
+  const commandBlock = component.startCommand
+    ? `    command: ["sh", "-c", "${escapeYamlString(component.startCommand)}"]\n`
+    : ''
+
+  const hasVolumes = component.persistentStorage.length > 0
+  const volumeMounts = hasVolumes
+    ? component.persistentStorage.map(v => `      - ${v.name}:${v.mountPath}`).join('\n') + '\n'
+    : ''
+
+  let yaml = `services:
+  app:
+    image: ${component.dockerImage}
+${envBlock}${commandBlock}${portBlock}    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+${volumeMounts}
+`
+
+  if (hasVolumes) {
+    yaml += `volumes:\n${component.persistentStorage.map(v => `  ${v.name}: {}`).join('\n')}\n`
+  }
+
+  return yaml
 }

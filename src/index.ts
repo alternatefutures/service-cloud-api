@@ -211,7 +211,6 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
   return yoga(req, res)
 }
 
-// Create HTTP server with custom request handler
 const server = createServer(requestHandler)
 
 // Initialize Chat WebSocket Server

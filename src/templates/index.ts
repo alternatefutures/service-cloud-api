@@ -5,6 +5,7 @@ export type {
   Template,
   TemplateCategory,
   TemplateCompanion,
+  TemplateComponent,
   TemplateEnvVar,
   TemplateResources,
   TemplatePort,
@@ -20,8 +21,17 @@ export {
   getAvailableCategories,
 } from './registry.js'
 
-export { generateSDLFromTemplate } from './sdl.js'
+export {
+  generateSDLFromTemplate,
+  generateCompositeSDL,
+  resolveEnvLinks,
+  slugify,
+  generatePassword,
+  generateBase64Secret,
+} from './sdl.js'
+export type { ResolvedComponent, CompositeContext } from './sdl.js'
 export {
   generateComposeFromTemplate,
+  generateCompositeCompose,
   getEnvKeysFromTemplate,
 } from './compose.js'

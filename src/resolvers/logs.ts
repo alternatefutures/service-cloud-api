@@ -32,9 +32,7 @@ export const logsQueries = {
 
     // Companion services: use parent's deployment, filter by companion's SDL service name
     const deploymentServiceId = svc.parentServiceId || serviceId
-    const logServiceFilter = svc.parentServiceId
-      ? (service || svc.templateId || svc.slug)
-      : service
+    const logServiceFilter = service || svc.sdlServiceName || undefined
 
     // Try Akash first — look for the most recent ACTIVE deployment
     const akashDeployment = await context.prisma.akashDeployment.findFirst({

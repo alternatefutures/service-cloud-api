@@ -50,7 +50,7 @@ export const postgres: Template = {
   persistentStorage: [
     {
       name: 'pgdata',
-      size: '10Gi',
+      size: '2Gi',
       mountPath: '/var/lib/postgresql/data',
     },
   ],

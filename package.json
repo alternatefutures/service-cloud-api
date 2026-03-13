@@ -16,7 +16,7 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio --port 1611",
+    "db:studio": "BROWSER=none prisma studio --port 1611",
     "db:seed": "tsx prisma/seed.ts",
     "generate:invoice": "tsx scripts/generate-sample-invoice.ts",
     "billing:run-now": "tsx scripts/run-compute-billing-now.ts",

@@ -130,11 +130,15 @@ export class SubdomainProxy {
     this.proxy.on('error', (err, req, res) => {
       console.error('[SubdomainProxy] Backend error:', err.message)
       if (res && 'writeHead' in res && !res.headersSent) {
-        ;(res as ServerResponse).writeHead(502, { 'Content-Type': 'application/json' })
-        ;(res as ServerResponse).end(JSON.stringify({
-          error: 'Bad Gateway',
-          message: 'The upstream service is unavailable.',
-        }))
+        ;(res as ServerResponse).writeHead(502, {
+          'Content-Type': 'application/json',
+        })
+        ;(res as ServerResponse).end(
+          JSON.stringify({
+            error: 'Bad Gateway',
+            message: 'The upstream service is unavailable.',
+          })
+        )
       }
     })
   }
@@ -180,7 +184,10 @@ export class SubdomainProxy {
    * Handle an HTTP request by proxying it to the correct backend.
    * Returns true if the request was handled, false if not a proxied subdomain.
    */
-  async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  async handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): Promise<boolean> {
     const host = req.headers.host || ''
     const parsed = this.parseSubdomain(host)
     if (!parsed) return false
@@ -223,7 +230,7 @@ export class SubdomainProxy {
   async handleUpgrade(
     req: IncomingMessage,
     socket: import('node:stream').Duplex,
-    head: Buffer,
+    head: Buffer
   ): Promise<boolean> {
     const host = req.headers.host || ''
     const parsed = this.parseSubdomain(host)
@@ -276,7 +283,10 @@ export class SubdomainProxy {
    *   1. Active AkashDeployment with serviceUrls
    *   2. Active PhalaDeployment with appUrl
    */
-  private async lookupBackend(slug: string, tier: ProxyTier): Promise<BackendLookupResult> {
+  private async lookupBackend(
+    slug: string,
+    tier: ProxyTier
+  ): Promise<BackendLookupResult> {
     try {
       // Find the service by slug
       const service = await this.prisma.service.findFirst({
@@ -284,6 +294,8 @@ export class SubdomainProxy {
         select: {
           id: true,
           type: true,
+          sdlServiceName: true,
+          parentServiceId: true,
           akashDeployments: {
             where: { status: 'ACTIVE' },
             orderBy: { deployedAt: 'desc' },
@@ -303,20 +315,47 @@ export class SubdomainProxy {
         return { target: null, status: 'NOT_FOUND', tier }
       }
 
-      // Try Akash first
-      const akashDep = service.akashDeployments[0]
+      // Companion services share the parent's Akash deployment
+      let akashDep: { serviceUrls: unknown; status: string } | undefined =
+        service.akashDeployments[0]
+      if (!akashDep && service.parentServiceId) {
+        const parent = await this.prisma.service.findUnique({
+          where: { id: service.parentServiceId },
+          select: {
+            akashDeployments: {
+              where: { status: 'ACTIVE' },
+              orderBy: { deployedAt: 'desc' },
+              take: 1,
+              select: { serviceUrls: true, status: true },
+            },
+          },
+        })
+        akashDep = parent?.akashDeployments[0]
+      }
+
+      // Try Akash
       if (akashDep?.serviceUrls) {
         const urls = akashDep.serviceUrls as Record<string, { uris?: string[] }>
-        // Multi-service deployments have multiple entries (e.g. postgres + app);
-        // internal-only services like postgres have empty uris. Find the first
-        // service with an externally-reachable URI.
+
+        // If this service has an sdlServiceName, use it for a direct lookup
+        // instead of iterating (needed for multi-service deployments with
+        // multiple globally-exposed containers).
         let uri: string | undefined
-        for (const svc of Object.values(urls)) {
-          if (svc.uris?.length) {
-            uri = svc.uris[0]
-            break
+        if (
+          service.sdlServiceName &&
+          urls[service.sdlServiceName]?.uris?.length
+        ) {
+          uri = urls[service.sdlServiceName].uris![0]
+        } else {
+          // Fallback: find the first service with externally-reachable URIs
+          for (const svc of Object.values(urls)) {
+            if (svc.uris?.length) {
+              uri = svc.uris[0]
+              break
+            }
           }
         }
+
         if (uri) {
           const target = uri.startsWith('http') ? uri : `http://${uri}`
           return { target, status: 'ACTIVE', serviceId: service.id, tier }
@@ -334,11 +373,21 @@ export class SubdomainProxy {
 
       // Deployment exists but URIs not yet available (provider still setting up ingress)
       if (akashDep || phalaDep) {
-        return { target: null, status: 'PROVISIONING', serviceId: service.id, tier }
+        return {
+          target: null,
+          status: 'PROVISIONING',
+          serviceId: service.id,
+          tier,
+        }
       }
 
       // Service exists but no active deployment at all
-      return { target: null, status: 'NO_ACTIVE_DEPLOYMENT', serviceId: service.id, tier }
+      return {
+        target: null,
+        status: 'NO_ACTIVE_DEPLOYMENT',
+        serviceId: service.id,
+        tier,
+      }
     } catch (err) {
       console.error('[SubdomainProxy] DB lookup error:', err)
       return { target: null, status: 'INTERNAL_ERROR', tier }
@@ -351,10 +400,12 @@ export class SubdomainProxy {
     switch (status) {
       case 'NOT_FOUND':
         res.writeHead(404, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({
-          error: 'Not Found',
-          message: `No service found for this ${tier === 'agents' ? 'agent' : 'app'} subdomain.`,
-        }))
+        res.end(
+          JSON.stringify({
+            error: 'Not Found',
+            message: `No service found for this ${tier === 'agents' ? 'agent' : 'app'} subdomain.`,
+          })
+        )
         break
 
       case 'PROVISIONING':
@@ -362,26 +413,33 @@ export class SubdomainProxy {
           'Content-Type': 'application/json',
           'Retry-After': '15',
         })
-        res.end(JSON.stringify({
-          error: 'Provisioning',
-          message: 'Your deployment is active but the URL is still being set up. Please refresh in a few seconds.',
-        }))
+        res.end(
+          JSON.stringify({
+            error: 'Provisioning',
+            message:
+              'Your deployment is active but the URL is still being set up. Please refresh in a few seconds.',
+          })
+        )
         break
 
       case 'NO_ACTIVE_DEPLOYMENT':
         res.writeHead(503, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({
-          error: 'Service Unavailable',
-          message: 'This service exists but has no active deployment.',
-        }))
+        res.end(
+          JSON.stringify({
+            error: 'Service Unavailable',
+            message: 'This service exists but has no active deployment.',
+          })
+        )
         break
 
       case 'INTERNAL_ERROR':
         res.writeHead(502, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({
-          error: 'Bad Gateway',
-          message: 'An internal error occurred while routing your request.',
-        }))
+        res.end(
+          JSON.stringify({
+            error: 'Bad Gateway',
+            message: 'An internal error occurred while routing your request.',
+          })
+        )
         break
 
       default:

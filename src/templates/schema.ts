@@ -127,8 +127,13 @@ export interface Template {
    * Companion services deployed alongside this template (e.g. a database).
    * Each companion creates a separate Service record in the workspace,
    * auto-linked via ServiceLink with connection string env var injection.
+   * @deprecated Use `components` + `topologies` for new composite templates.
    */
   companions?: TemplateCompanion[]
+
+  // ── Composable multi-service support ──────────────────────────
+  /** Deployable sub-services (e.g. db, server, client) */
+  components?: TemplateComponent[]
 }
 
 export interface TemplateCompanion {
@@ -149,6 +154,81 @@ export interface TemplateAkashConfig {
   runUser?: string
   /** UID of the run user (for chown) */
   runUid?: number
+}
+
+// ─── Composable Template System ─────────────────────────────────
+
+/**
+ * A deployable component within a composite template.
+ * Source is exactly one of: `primary` (parent template), `templateId`
+ * (reference), or `inline` (self-contained definition).
+ */
+export interface TemplateComponent {
+  /** Unique within this template (e.g. 'db', 'server', 'client') */
+  id: string
+  /** Display name (e.g. 'PostgreSQL Database') */
+  name: string
+  description?: string
+
+  // ── Source (exactly one) ──────────────────────────────────────
+  /** Use parent template's dockerImage/resources/ports/envVars/etc. */
+  primary?: boolean
+  /** Reference an existing template by ID (e.g. 'postgres') */
+  templateId?: string
+  /** Fully inline component definition */
+  inline?: {
+    dockerImage: string
+    resources: TemplateResources
+    ports?: TemplatePort[]
+    envVars?: TemplateEnvVar[]
+    persistentStorage?: TemplatePersistentStorage[]
+    healthCheck?: TemplateHealthCheck
+    startCommand?: string
+    akash?: TemplateAkashConfig
+    connectionStrings?: Record<string, string>
+    pricingUakt?: number
+  }
+
+  // ── Behavior ──────────────────────────────────────────────────
+  /** Don't expose ports globally — internal-only (e.g. databases) */
+  internalOnly?: boolean
+  /** Override the Akash SDL service name (default: component id) */
+  sdlServiceName?: string
+  /** Pre-fill env vars when source is `templateId` */
+  envDefaults?: Record<string, string>
+  /** Override start command (wraps or replaces the source template's CMD) */
+  startCommand?: string
+
+  // ── Cross-component env var linking ───────────────────────────
+  /**
+   * Env vars resolved at deploy time and injected on this component.
+   * Supports placeholders:
+   *   {{component.<id>.host}}       — internal hostname (same lease) or AF proxy URL
+   *   {{component.<id>.proxyUrl}}   — always the AF proxy URL
+   *   {{component.<id>.env.<KEY>}}  — resolved env var value from that component
+   *   {{generated.password}}         — random 32-char password (same everywhere)
+   *   {{generated.secret}}           — random base64 secret (same everywhere)
+   */
+  envLinks?: Record<string, string>
+}
+
+export interface TopologyTarget {
+  /** Which component this target refers to */
+  componentId: string
+  /** Which provider deploys this component */
+  provider: 'akash' | 'phala'
+  /** Components with the same group share a lease (Akash) or co-deploy (Phala) */
+  group: string
+}
+
+/**
+ * A pre-configured deployment arrangement — maps components to providers.
+ */
+export interface DeploymentTopology {
+  id: string
+  name: string
+  description: string
+  targets: TopologyTarget[]
 }
 
 /**

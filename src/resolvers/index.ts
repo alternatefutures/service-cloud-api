@@ -28,6 +28,7 @@ import {
 import {
   templateQueries,
   templateMutations,
+  templateFieldResolvers,
 } from './templates.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
 import {
@@ -1854,6 +1855,9 @@ export const resolvers = {
       })
     },
   },
+
+  // Template component field resolvers
+  ...templateFieldResolvers,
 
   // Chat field resolvers
   Agent: chatResolvers.Agent,

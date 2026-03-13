@@ -330,6 +330,103 @@ Before building a wrapper, verify these things about the base image:
 - [ ] Template definition: `MILAIDY_API_BIND=0.0.0.0` (or equivalent) in `envVars`
 - [ ] Template definition: port matches the public port from the entrypoint
 
+## Composable Templates
+
+Composable templates add `components` (sub-services) and `topologies` (deployment arrangements) to the basic template system. Use them when a template needs multiple containers or cross-provider routing.
+
+### How to add components and topologies to a template
+
+1. Define your components in the template's `components` array. Each component needs a unique `id` and exactly one source (`primary`, `templateId`, or `inline`).
+2. Set `sdlServiceName` on each component — this becomes the Akash SDL service name and is stored on the `Service` DB record for proxy resolution.
+3. Mark internal-only components (e.g. databases) with `internalOnly: true` — their ports won't be exposed globally.
+4. Use `envLinks` for cross-component env var references (resolved at deploy time).
+5. Define `topologies` — each topology lists which components to deploy and on which provider/group.
+6. Set `defaultTopology` to the preferred arrangement.
+
+### envLinks placeholder reference
+
+```
+{{component.<id>.host}}         → Internal DNS name (same group) or AF proxy URL (cross-group)
+{{component.<id>.proxyUrl}}     → Always AF proxy URL: <slug>-app.alternatefutures.ai
+{{component.<id>.env.<KEY>}}    → Resolved env var from target component
+{{generated.password}}          → Shared 32-char random password
+{{generated.secret}}            → Shared base64 random secret
+```
+
+**Host resolution rule**: If the source component and target component are in the **same Akash group**, `host` resolves to the target's `sdlServiceName` (internal DNS, zero-latency). Otherwise it resolves to the AF proxy URL. This means the same template definition works for both bundled (single-lease) and split (cross-provider) deployments without changes.
+
+### Example: converting a simple template to composable
+
+Before (simple template with `customSdl`):
+
+```typescript
+export const myApp: Template = {
+  id: 'my-app',
+  dockerImage: 'myapp:v1',
+  // ... resources, ports, envVars ...
+  customSdl: '... raw YAML with {{SERVICE_NAME}} and postgres ...',
+  companions: [{ templateId: 'postgres', autoLink: true }],
+}
+```
+
+After (composable):
+
+```typescript
+export const myApp: Template = {
+  id: 'my-app',
+  dockerImage: 'myapp:v1',
+  // ... resources, ports, envVars ...
+
+  components: [
+    {
+      id: 'db',
+      name: 'Database',
+      templateId: 'postgres',
+      internalOnly: true,
+      sdlServiceName: 'postgres',
+      envDefaults: { POSTGRES_DB: 'myapp' },
+    },
+    {
+      id: 'app',
+      name: 'Application',
+      primary: true,
+      sdlServiceName: 'app',
+      envLinks: {
+        DATABASE_URL: 'postgresql://postgres:{{generated.password}}@{{component.db.host}}:5432/myapp',
+      },
+    },
+  ],
+
+  topologies: [
+    {
+      id: 'bundled',
+      name: 'Bundled',
+      description: 'App + DB in one Akash lease',
+      targets: [
+        { componentId: 'db', provider: 'akash', group: 'main' },
+        { componentId: 'app', provider: 'akash', group: 'main' },
+      ],
+    },
+  ],
+  defaultTopology: 'bundled',
+}
+```
+
+### New files touched when adding a composable template
+
+The composable system adds these files to the standard template chain:
+
+| File | Purpose |
+|------|---------|
+| `sdl.ts` → `generateCompositeSDL()` | Generates multi-service Akash SDL from `ResolvedComponent[]` |
+| `sdl.ts` → `resolveEnvLinks()` | Resolves `envLinks` placeholders based on co-location context |
+| `compose.ts` → `generateCompositeCompose()` | Generates single-service Phala compose from a `ResolvedComponent` |
+| `resolvers/templates.ts` → `deployCompositeTemplate` | Mutation: creates services, resolves env, dispatches to providers |
+| `prisma/schema.prisma` → `sdlServiceName` | Service model field for multi-service proxy resolution |
+| `services/proxy/subdomainProxy.ts` | Uses `sdlServiceName` for direct URI lookup in `serviceUrls` |
+
+---
+
 ## Reference
 
 ### TemplateCategory
@@ -362,6 +459,9 @@ Must match the `ServiceType` enum used in the Prisma schema:
 | `pricingUakt`      | SDL generator — pricing section   |
 | `serviceType`      | Prisma Service record             |
 | `featured`         | Frontend — shows in carousel      |
+| `components`       | Composite SDL/compose generators — sub-service definitions |
+| `topologies`       | Composite deploy resolver — provider/group routing per component |
+| `defaultTopology`  | Frontend — pre-selected topology in config sheet |
 
 ### icon field
 
@@ -379,6 +479,21 @@ Backend (service-cloud-api/src/templates/):
 
 Frontend (web-app/components/templates/):
   4. template-icons.tsx          ← add icon case (optional, not needed for URL icons)
+```
+
+**Additional files for composable templates** (templates with `components` + `topologies`):
+
+```
+Backend (service-cloud-api/src/templates/):
+  5. schema.ts                   ← TemplateComponent, DeploymentTopology, TopologyTarget types
+  6. sdl.ts                      ← generateCompositeSDL() — multi-service Akash SDL
+  7. compose.ts                  ← generateCompositeCompose() — single-service Phala compose
+
+Backend (service-cloud-api/src/):
+  8. resolvers/templates.ts      ← deployCompositeTemplate mutation + resolveComponents()
+
+If adding a new component image:
+  9. docker/<name>/Dockerfile    ← NEW Docker build for the component
 ```
 
 No GraphQL schema changes needed — the `Template` type already covers all fields.

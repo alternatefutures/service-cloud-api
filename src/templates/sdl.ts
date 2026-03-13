@@ -9,7 +9,17 @@
  */
 
 import { randomBytes } from 'crypto'
-import type { Template, TemplateDeployConfig, TemplateGpu } from './schema.js'
+import type {
+  Template,
+  TemplateComponent,
+  TemplateDeployConfig,
+  TemplateGpu,
+  TemplatePort,
+  TemplatePersistentStorage,
+  TemplateResources,
+  TemplateEnvVar,
+  TemplateAkashConfig,
+} from './schema.js'
 
 function generatePassword(len = 32): string {
   return randomBytes(len).toString('base64url').slice(0, len)
@@ -26,7 +36,7 @@ function generateBase64Secret(len = 32): string {
  */
 export function generateSDLFromTemplate(
   template: Template,
-  config?: TemplateDeployConfig,
+  config?: TemplateDeployConfig
 ): string {
   const serviceName = slugify(config?.serviceName || template.id)
 
@@ -42,13 +52,14 @@ export function generateSDLFromTemplate(
   // ── Resources (allow overrides) ─────────────────────────────
   const cpu = config?.resourceOverrides?.cpu ?? template.resources.cpu
   const memory = config?.resourceOverrides?.memory ?? template.resources.memory
-  const storage = config?.resourceOverrides?.storage ?? template.resources.storage
+  const storage =
+    config?.resourceOverrides?.storage ?? template.resources.storage
 
   // GPU: null override = explicitly disabled; undefined = use template default
   const gpu: TemplateGpu | undefined =
     config?.resourceOverrides?.gpu === null
       ? undefined
-      : config?.resourceOverrides?.gpu ?? template.resources.gpu
+      : (config?.resourceOverrides?.gpu ?? template.resources.gpu)
 
   // ── Ports / expose ──────────────────────────────────────────
   const exposeBlock = template.ports
@@ -56,12 +67,13 @@ export function generateSDLFromTemplate(
       p => `      - port: ${p.port}
         as: ${p.as}
         to:
-          - global: ${p.global}`,
+          - global: ${p.global}`
     )
     .join('\n')
 
   // ── Persistent storage (if any) ─────────────────────────────
-  const hasPersistent = template.persistentStorage && template.persistentStorage.length > 0
+  const hasPersistent =
+    template.persistentStorage && template.persistentStorage.length > 0
   const storageProfileBlock = buildStorageProfileBlock(storage, template)
   const paramsBlock = hasPersistent ? buildParamsBlock(template) : ''
 
@@ -135,7 +147,7 @@ deployment:
 
 function buildEnvLines(
   template: Template,
-  overrides?: Record<string, string>,
+  overrides?: Record<string, string>
 ): string {
   const merged: Record<string, string> = {}
 
@@ -149,7 +161,8 @@ function buildEnvLines(
   // Inject akash-base entrypoint env vars from template.akash config
   if (template.akash) {
     const a = template.akash
-    if (a.chownPaths?.length) merged['AKASH_CHOWN_PATHS'] = a.chownPaths.join(':')
+    if (a.chownPaths?.length)
+      merged['AKASH_CHOWN_PATHS'] = a.chownPaths.join(':')
     if (a.runUser) merged['AKASH_RUN_USER'] = a.runUser
     if (a.runUid != null) merged['AKASH_RUN_UID'] = String(a.runUid)
   }
@@ -169,9 +182,7 @@ function buildEnvLines(
 }
 
 function buildGpuProfileBlock(gpu: TemplateGpu): string {
-  const modelLine = gpu.model
-    ? `\n                - model: ${gpu.model}`
-    : ''
+  const modelLine = gpu.model ? `\n                - model: ${gpu.model}` : ''
   return `        gpu:
           units: ${gpu.units}
           attributes:
@@ -182,7 +193,7 @@ function buildGpuProfileBlock(gpu: TemplateGpu): string {
 
 function buildStorageProfileBlock(
   ephemeralSize: string,
-  template: Template,
+  template: Template
 ): string {
   const lines: string[] = []
 
@@ -212,7 +223,7 @@ function buildParamsBlock(template: Template): string {
     .map(
       vol => `        ${vol.name}:
           mount: ${vol.mountPath}
-          readOnly: false`,
+          readOnly: false`
     )
     .join('\n')
 
@@ -232,16 +243,12 @@ function slugify(s: string): string {
 
 /**
  * Resolve a customSdl template: replace placeholders, merge env overrides.
- * Placeholders:
- *   {{SERVICE_NAME}}       — slugified service name
- *   {{GENERATED_PASSWORD}} — random 32-char alphanumeric (same value everywhere)
- *   {{GENERATED_SECRET}}   — random base64 secret (same value everywhere)
- *   {{ENV.KEY}}            — value from env overrides or template defaults
+ * @deprecated Use generateCompositeSDL for new composite templates.
  */
 function resolveCustomSdl(
   template: Template,
   config: TemplateDeployConfig | undefined,
-  serviceName: string,
+  serviceName: string
 ): string {
   const password = generatePassword()
   const secret = generateBase64Secret()
@@ -260,7 +267,268 @@ function resolveCustomSdl(
   sdl = sdl.replace(/\{\{SERVICE_NAME}}/g, serviceName)
   sdl = sdl.replace(/\{\{GENERATED_PASSWORD}}/g, password)
   sdl = sdl.replace(/\{\{GENERATED_SECRET}}/g, secret)
-  sdl = sdl.replace(/\{\{ENV\.([^}]+)}}/g, (_match, key) => envDefaults[key] ?? '')
+  sdl = sdl.replace(
+    /\{\{ENV\.([^}]+)}}/g,
+    (_match, key) => envDefaults[key] ?? ''
+  )
 
   return sdl
 }
+
+// ─── Composite SDL Generator ─────────────────────────────────────
+
+/**
+ * Fully resolved component ready for SDL generation. Created by
+ * resolveComponents() in the deployment resolver.
+ */
+export interface ResolvedComponent {
+  id: string
+  sdlServiceName: string
+  dockerImage: string
+  resources: TemplateResources
+  ports: TemplatePort[]
+  envVars: TemplateEnvVar[]
+  persistentStorage: TemplatePersistentStorage[]
+  healthCheck?: { path: string; port: number }
+  startCommand?: string
+  akash?: TemplateAkashConfig
+  pricingUakt: number
+  internalOnly: boolean
+  /** Merged env: template defaults + envDefaults + resolved envLinks */
+  resolvedEnv: Record<string, string>
+}
+
+/**
+ * Context passed to the envLinks resolver so it knows how to resolve
+ * cross-component placeholders based on co-location.
+ */
+export interface CompositeContext {
+  /** componentId → slug assigned at service creation */
+  slugs: Record<string, string>
+  /** componentId → group from topology targets */
+  groups: Record<string, string>
+  /** componentId → provider from topology targets */
+  providers: Record<string, 'akash' | 'phala'>
+  /** Shared generated secrets for this deployment */
+  password: string
+  secret: string
+}
+
+// Deployed containers always connect via the production proxy domain,
+// regardless of whether service-cloud-api runs locally or in production.
+const DEPLOY_DOMAIN = process.env.PROXY_DEPLOY_DOMAIN || 'alternatefutures.ai'
+
+function getProxyUrlForSlug(slug: string): string {
+  return `${slug}-app.${DEPLOY_DOMAIN}`
+}
+
+function getProxyHttpUrl(slug: string): string {
+  return `https://${getProxyUrlForSlug(slug)}`
+}
+
+function getProxyWsUrl(slug: string): string {
+  return `wss://${getProxyUrlForSlug(slug)}`
+}
+
+/**
+ * Resolve envLinks placeholders for a component given the composite context.
+ * Returns a Record of env key → resolved value.
+ */
+export function resolveEnvLinks(
+  envLinks: Record<string, string>,
+  componentId: string,
+  allComponents: ResolvedComponent[],
+  ctx: CompositeContext
+): Record<string, string> {
+  const resolved: Record<string, string> = {}
+  const componentMap = new Map(allComponents.map(c => [c.id, c]))
+
+  for (const [key, tpl] of Object.entries(envLinks)) {
+    resolved[key] = tpl.replace(/\{\{([^}]+)\}\}/g, (_match, expr: string) => {
+      if (expr === 'generated.password') return ctx.password
+      if (expr === 'generated.secret') return ctx.secret
+
+      const compMatch = expr.match(/^component\.([^.]+)\.(.+)$/)
+      if (!compMatch) return _match
+
+      const [, targetId, field] = compMatch
+      const targetSlug = ctx.slugs[targetId]
+      if (!targetSlug) return _match
+
+      if (field === 'proxyUrl') {
+        return getProxyUrlForSlug(targetSlug)
+      }
+
+      if (field === 'proxyHttpUrl') {
+        return getProxyHttpUrl(targetSlug)
+      }
+
+      if (field === 'proxyWsUrl') {
+        return getProxyWsUrl(targetSlug)
+      }
+
+      if (field === 'host') {
+        const sameGroup = ctx.groups[componentId] === ctx.groups[targetId]
+        const bothAkash =
+          ctx.providers[componentId] === 'akash' &&
+          ctx.providers[targetId] === 'akash'
+        if (sameGroup && bothAkash) {
+          const target = componentMap.get(targetId)
+          return target?.sdlServiceName ?? targetId
+        }
+        return getProxyUrlForSlug(targetSlug)
+      }
+
+      const envMatch = field.match(/^env\.(.+)$/)
+      if (envMatch) {
+        const envKey = envMatch[1]
+        const target = componentMap.get(targetId)
+        return target?.resolvedEnv[envKey] ?? ''
+      }
+
+      return _match
+    })
+  }
+
+  return resolved
+}
+
+/**
+ * Generate a multi-service Akash SDL from resolved components.
+ * All components passed here belong to the same Akash deployment group.
+ */
+export function generateCompositeSDL(components: ResolvedComponent[]): string {
+  const hasGpu = components.some(c => c.resources.gpu)
+
+  // ── Services block ────────────────────────────────────────────
+  const servicesBlock = components
+    .map(comp => {
+      const envEntries = Object.entries(comp.resolvedEnv)
+      const envBlock =
+        envEntries.length > 0
+          ? `    env:\n${envEntries.map(([k, v]) => `      - ${k}=${v}`).join('\n')}\n`
+          : ''
+
+      const commandBlock = comp.startCommand
+        ? `    command:\n      - /bin/sh\n      - -c\n    args:\n      - |\n        ${comp.startCommand.split('\n').join('\n        ')}\n`
+        : ''
+
+      const consumers = components.filter(
+        c => c.id !== comp.id && !c.internalOnly
+      )
+      const exposeLines = comp.ports
+        .map(p => {
+          if (comp.internalOnly && consumers.length > 0) {
+            const toLines = consumers
+              .map(c => `          - service: ${c.sdlServiceName}`)
+              .join('\n')
+            return `      - port: ${p.port}
+        to:
+${toLines}`
+          }
+          return `      - port: ${p.port}
+        as: ${p.as}
+        to:
+          - global: true`
+        })
+        .join('\n')
+
+      const hasPersist = comp.persistentStorage.length > 0
+      let paramsBlock = ''
+      if (hasPersist) {
+        const mounts = comp.persistentStorage
+          .map(
+            vol =>
+              `        ${vol.name}:\n          mount: ${vol.mountPath}\n          readOnly: false`
+          )
+          .join('\n')
+        paramsBlock = `    params:\n      storage:\n${mounts}\n`
+      }
+
+      return `  ${comp.sdlServiceName}:
+    image: ${comp.dockerImage}
+${envBlock}${commandBlock}    expose:
+${exposeLines}
+${paramsBlock}`
+    })
+    .join('\n')
+
+  // ── Compute profiles ──────────────────────────────────────────
+  const computeBlock = components
+    .map(comp => {
+      const gpu = comp.resources.gpu
+      const gpuBlock = gpu ? buildGpuProfileBlock(gpu) : ''
+
+      const storageLines: string[] = []
+      storageLines.push(`          - size: ${comp.resources.storage}`)
+      for (const vol of comp.persistentStorage) {
+        storageLines.push(`          - name: ${vol.name}`)
+        storageLines.push(`            size: ${vol.size}`)
+        storageLines.push(`            attributes:`)
+        storageLines.push(`              persistent: true`)
+        storageLines.push(`              class: beta3`)
+      }
+
+      return `    ${comp.sdlServiceName}:
+      resources:
+        cpu:
+          units: ${comp.resources.cpu}
+        memory:
+          size: ${comp.resources.memory}
+${gpuBlock}        storage:
+${storageLines.join('\n')}`
+    })
+    .join('\n\n')
+
+  // ── Placement / pricing ───────────────────────────────────────
+  const pricingLines = components
+    .map(
+      c =>
+        `        ${c.sdlServiceName}:\n          denom: uakt\n          amount: ${c.pricingUakt}`
+    )
+    .join('\n')
+
+  // Multi-service deployments (especially with persistent storage) already
+  // drastically limit the provider pool. Skip the signedBy auditor filter
+  // to avoid zero-bid situations.
+  const hasPersistent = components.some(c => c.persistentStorage.length > 0)
+  const skipAuditor = hasGpu || hasPersistent || components.length > 1
+
+  const placementBlock = skipAuditor
+    ? `  placement:
+    dcloud:
+      pricing:
+${pricingLines}`
+    : `  placement:
+    dcloud:
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
+      pricing:
+${pricingLines}`
+
+  // ── Deployment block ──────────────────────────────────────────
+  const deployBlock = components
+    .map(
+      c =>
+        `  ${c.sdlServiceName}:\n    dcloud:\n      profile: ${c.sdlServiceName}\n      count: 1`
+    )
+    .join('\n')
+
+  return `---
+version: "2.0"
+
+services:
+${servicesBlock}
+profiles:
+  compute:
+${computeBlock}
+
+${placementBlock}
+
+deployment:
+${deployBlock}
+`
+}
+
+export { slugify, generatePassword, generateBase64Secret }

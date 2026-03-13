@@ -306,8 +306,27 @@ export const akashMutations = {
 
 export const akashFieldResolvers = {
   AkashDeployment: {
-    image: (parent: any) => {
-      const match = parent.sdlContent?.match(/image:\s*["']?([^\s"']+)/)
+    image: async (parent: any, _: unknown, context: Context) => {
+      if (!parent.sdlContent) return null
+
+      // For multi-service SDLs, find the image for the owning service's SDL name
+      const service = await context.prisma.service.findUnique({
+        where: { id: parent.serviceId },
+      })
+      const sdlName = service?.sdlServiceName
+      if (sdlName) {
+        const sectionRegex = new RegExp(
+          `(?:^|\\n)\\s*${sdlName}:\\s*\\n([\\s\\S]*?)(?=\\n\\s*\\S+:\\s*\\n|$)`,
+        )
+        const section = parent.sdlContent.match(sectionRegex)
+        if (section) {
+          const imgMatch = section[1].match(/image:\s*["']?([^\s"']+)/)
+          if (imgMatch) return imgMatch[1]
+        }
+      }
+
+      // Fallback: first image in the SDL
+      const match = parent.sdlContent.match(/image:\s*["']?([^\s"']+)/)
       return match ? match[1] : null
     },
     costPerDay: async (parent: any) => {
