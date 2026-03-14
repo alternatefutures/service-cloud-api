@@ -122,11 +122,23 @@ export const resolvers = {
       })
     },
 
-    // Projects
+    // Fixed by audit 2026-03: added auth + ownership check (was unauthenticated)
     project: async (_: unknown, { id }: { id: string }, context: Context) => {
-      return context.prisma.project.findUnique({
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+      const project = await context.prisma.project.findUnique({
         where: { id },
       })
+      if (!project) return null
+      const isAuthorized = context.organizationId
+        ? project.organizationId === context.organizationId ||
+          (project.userId === context.userId && project.organizationId === null)
+        : project.userId === context.userId
+      if (!isAuthorized) {
+        throw new GraphQLError('Not authorized to access this project')
+      }
+      return project
     },
 
     projects: async (_: unknown, __: unknown, context: Context) => {
@@ -191,15 +203,31 @@ export const resolvers = {
       })
     },
 
-    // Sites
+    // Fixed by audit 2026-03: added auth + ownership check (was unauthenticated)
     site: async (
       _: unknown,
       { where }: { where: { id: string } },
       context: Context
     ) => {
-      return context.prisma.site.findUnique({
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+      const site = await context.prisma.site.findUnique({
         where: { id: where.id },
+        include: { project: { select: { userId: true, organizationId: true } } },
       })
+      if (!site) return null
+      const p = (site as any).project
+      if (p) {
+        const isAuthorized = context.organizationId
+          ? p.organizationId === context.organizationId ||
+            (p.userId === context.userId && p.organizationId === null)
+          : p.userId === context.userId
+        if (!isAuthorized) {
+          throw new GraphQLError('Not authorized to access this site')
+        }
+      }
+      return site
     },
 
     sites: async (_: unknown, _args: { where?: unknown } | undefined, context: Context) => {
@@ -213,22 +241,42 @@ export const resolvers = {
       return { data }
     },
 
+    // Fixed by audit 2026-03: added auth + ownership check (was unauthenticated)
     siteBySlug: async (
       _: unknown,
       { where }: { where: { slug: string } },
       context: Context
     ) => {
-      return context.prisma.site.findUnique({
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+      const site = await context.prisma.site.findUnique({
         where: { slug: where.slug },
+        include: { project: { select: { userId: true, organizationId: true } } },
       })
+      if (!site) return null
+      const p = (site as any).project
+      if (p) {
+        const isAuthorized = context.organizationId
+          ? p.organizationId === context.organizationId ||
+            (p.userId === context.userId && p.organizationId === null)
+          : p.userId === context.userId
+        if (!isAuthorized) {
+          throw new GraphQLError('Not authorized to access this site')
+        }
+      }
+      return site
     },
 
-    // IPNS Records
+    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     ipnsRecord: async (
       _: unknown,
       { name }: { name: string },
       context: Context
     ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
       return context.prisma.iPNSRecord.findUnique({
         where: { name },
       })
@@ -276,12 +324,15 @@ export const resolvers = {
       return { data: [] }
     },
 
-    // Deployments (SDK compatibility)
+    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     deployment: async (
       _: unknown,
       { where }: { where: { id: string } },
       context: Context
     ) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
       return context.prisma.deployment.findUnique({
         where: { id: where.id },
       })
@@ -331,7 +382,11 @@ export const resolvers = {
       return { data }
     },
 
+    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     zone: async (_: unknown, { id }: { id: string }, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
       return context.prisma.zone.findUnique({ where: { id } })
     },
 
@@ -341,7 +396,11 @@ export const resolvers = {
       return { data: [] }
     },
 
+    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     pin: async (_: unknown, { where }: { where: { cid: string } }, context: Context) => {
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
       return context.prisma.pin.findUnique({ where: { cid: where.cid } })
     },
 

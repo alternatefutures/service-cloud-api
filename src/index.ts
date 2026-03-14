@@ -272,9 +272,13 @@ server.listen(port, () => {
 })
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM signal received: closing HTTP server')
+// Fixed by audit 2026-03: stop ALL schedulers on shutdown (was missing storage, invoice, compute schedulers)
+async function gracefulShutdown(signal: string) {
+  console.log(`${signal} signal received: closing HTTP server`)
   stopStaleDeploymentSweeper()
+  storageSnapshotScheduler.stop()
+  invoiceScheduler.stop()
+  computeBillingScheduler.stop()
   server.close(async () => {
     await chatServer.shutdown()
     await usageAggregator.shutdown()
@@ -282,15 +286,7 @@ process.on('SIGTERM', async () => {
     await prisma.$disconnect()
     process.exit(0)
   })
-})
+}
 
-process.on('SIGINT', async () => {
-  console.log('\nSIGINT signal received: closing HTTP server')
-  server.close(async () => {
-    await chatServer.shutdown()
-    await usageAggregator.shutdown()
-    await telemetryIngestionService.stop()
-    await prisma.$disconnect()
-    process.exit(0)
-  })
-})
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('\nSIGINT'))

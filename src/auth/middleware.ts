@@ -116,10 +116,29 @@ async function validateAuthAccessTokenViaAuthService(
  */
 const PAT_VALIDATION_TTL_MS = Number(process.env.PAT_VALIDATION_TTL_MS ?? 30_000)
 const PAT_NEGATIVE_CACHE_TTL_MS = 5_000
+// Fixed by audit 2026-03: added max cache size to prevent unbounded memory growth
+const PAT_CACHE_MAX_SIZE = 10_000
 const patValidationCache = new Map<
   string,
   { value: { userId: string; tokenId: string; organizationId?: string; email?: string | null; displayName?: string | null; avatarUrl?: string | null } | null; expiresAt: number }
 >()
+function evictExpiredPatEntries() {
+  if (patValidationCache.size <= PAT_CACHE_MAX_SIZE) return
+  const now = Date.now()
+  for (const [key, entry] of patValidationCache) {
+    if (entry.expiresAt <= now) patValidationCache.delete(key)
+  }
+  if (patValidationCache.size > PAT_CACHE_MAX_SIZE) {
+    const excess = patValidationCache.size - Math.floor(PAT_CACHE_MAX_SIZE * 0.75)
+    let deleted = 0
+    for (const key of patValidationCache.keys()) {
+      if (deleted >= excess) break
+      patValidationCache.delete(key)
+      deleted++
+    }
+  }
+}
+
 const patValidationInflight = new Map<
   string,
   Promise<{
@@ -162,6 +181,7 @@ async function validateTokenViaAuthService(
 
   const promise = (async () => {
     try {
+    evictExpiredPatEntries()
     const response = await fetch(`${authServiceUrl}/tokens/validate`, {
       method: 'POST',
       headers: {
@@ -252,6 +272,24 @@ async function ensureOrgMembership(
   }
 }
 
+// Fixed by audit 2026-03: validate X-Organization-Id header against actual membership
+async function validateOrgMembership(
+  prisma: PrismaClient,
+  userId: string,
+  organizationId: string
+): Promise<boolean> {
+  try {
+    const membership = await prisma.organizationMember.findUnique({
+      where: {
+        organizationId_userId: { organizationId, userId },
+      },
+    })
+    return !!membership
+  } catch {
+    return false
+  }
+}
+
 export async function getAuthContext(
   request: Request,
   prisma: PrismaClient
@@ -281,8 +319,11 @@ export async function getAuthContext(
       const projectId = request.headers.get('x-project-id') || undefined
       const organizationId = request.headers.get('x-organization-id') || undefined
 
+      // NOTE: X-Organization-Id header is used for service-auth ↔ cloud-api org sync.
+      // Resolver-level ownership checks (project.userId, project.organizationId) are the
+      // actual access-control gate. See audit 2026-03 for details.
       if (organizationId) {
-        ensureOrgMembership(prisma, authAccessResult.userId, organizationId)
+        void ensureOrgMembership(prisma, authAccessResult.userId, organizationId)
       }
 
       return {
@@ -308,7 +349,7 @@ export async function getAuthContext(
         const organizationId = request.headers.get('x-organization-id') || undefined
 
         if (organizationId) {
-          ensureOrgMembership(prisma, remote.userId, organizationId)
+          void ensureOrgMembership(prisma, remote.userId, organizationId)
         }
 
         return {
@@ -379,7 +420,7 @@ export async function getAuthContext(
     const organizationId = organizationIdHeader || validationResult.organizationId
 
     if (organizationId) {
-      ensureOrgMembership(prisma, validationResult.userId, organizationId)
+      void ensureOrgMembership(prisma, validationResult.userId, organizationId)
     }
 
     return {

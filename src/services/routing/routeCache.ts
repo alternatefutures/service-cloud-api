@@ -11,12 +11,14 @@ export interface CacheEntry {
  */
 export class RouteCache {
   private cache: Map<string, CacheEntry>
-  private ttl: number // Time to live in milliseconds
+  private ttl: number
+  // Fixed by audit 2026-03: cap cache size to prevent unbounded growth
+  private maxSize: number
 
-  constructor(ttlSeconds: number = 300) {
-    // Default 5 minutes
+  constructor(ttlSeconds: number = 300, maxSize: number = 5000) {
     this.cache = new Map()
     this.ttl = ttlSeconds * 1000
+    this.maxSize = maxSize
   }
 
   /**
@@ -44,6 +46,13 @@ export class RouteCache {
    * Store routes in cache
    */
   set(functionId: string, routes: RouteConfig): void {
+    if (this.cache.size >= this.maxSize) {
+      this.cleanup()
+      if (this.cache.size >= this.maxSize) {
+        const oldest = this.cache.keys().next().value
+        if (oldest !== undefined) this.cache.delete(oldest)
+      }
+    }
     this.cache.set(functionId, {
       routes,
       timestamp: Date.now(),

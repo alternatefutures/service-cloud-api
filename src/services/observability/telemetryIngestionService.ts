@@ -226,11 +226,9 @@ export class TelemetryIngestionService {
       try {
         await this.flushEntry(entry)
 
-        // Reset the entry counters after successful flush
-        entry.spansCount = 0
-        entry.metricsCount = 0
-        entry.logsCount = 0
-        entry.bytesIngested = BigInt(0)
+        // Fixed by audit 2026-03: remove flushed entries instead of just resetting counters
+        // to prevent unbounded Map growth from distinct projectIds
+        this.buffer.delete(entry.projectId)
       } catch (error) {
         errors.push(error as Error)
       }

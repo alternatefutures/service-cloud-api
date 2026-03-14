@@ -8,8 +8,9 @@
  * Provider auth: JWT (automatic in provider-services v0.10.0+, no certs needed).
  */
 
-import { execSync, spawn } from 'child_process'
+import { execSync, execFileSync, spawn } from 'child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { Prisma } from '@prisma/client'
@@ -45,11 +46,11 @@ function getAkashEnv(): Record<string, string> {
   }
 }
 
+// Fixed by audit 2026-03: use execFileSync to prevent shell injection (was execSync with string concat)
 function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
   const env = getAkashEnv()
-  const cmd = `akash ${args.join(' ')}`
-  console.log(`[AkashOrchestrator] Running: ${cmd}`)
-  return execSync(cmd, {
+  console.log(`[AkashOrchestrator] Running: akash ${args.join(' ')}`)
+  return execFileSync('akash', args, {
     encoding: 'utf-8',
     env,
     timeout,
@@ -61,14 +62,14 @@ function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
  * Run provider-services CLI (used for manifest sending and lease operations).
  * Falls back to akash CLI if provider-services is not available.
  */
+// Fixed by audit 2026-03: use execFileSync to prevent shell injection (was execSync with string concat)
 function runProviderServices(
   args: string[],
   timeout = AKASH_CLI_TIMEOUT_MS
 ): string {
   const env = getAkashEnv()
-  const cmd = `provider-services ${args.join(' ')}`
-  console.log(`[AkashOrchestrator] Running: ${cmd}`)
-  return execSync(cmd, {
+  console.log(`[AkashOrchestrator] Running: provider-services ${args.join(' ')}`)
+  return execFileSync('provider-services', args, {
     encoding: 'utf-8',
     env,
     timeout,
@@ -1153,7 +1154,9 @@ deployment:
 `
   }
 
+  // Fixed by audit 2026-03: generate random password per deployment (was hardcoded 'akash')
   private generateVMSDL(name: string): string {
+    const password = randomBytes(16).toString('hex')
     return `---
 version: "2.0"
 
@@ -1166,7 +1169,7 @@ services:
       - |
         apt-get update && apt-get install -y openssh-server
         mkdir /run/sshd
-        echo 'root:akash' | chpasswd
+        echo 'root:${password}' | chpasswd
         sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
         /usr/sbin/sshd -D
     expose:
@@ -1205,7 +1208,9 @@ deployment:
 `
   }
 
+  // Fixed by audit 2026-03: generate random password per deployment (was hardcoded 'akash_secure_password')
   private generateDatabaseSDL(name: string): string {
+    const dbPassword = randomBytes(20).toString('hex')
     return `---
 version: "2.0"
 
@@ -1215,7 +1220,7 @@ services:
     env:
       - POSTGRES_DB=akashdb
       - POSTGRES_USER=akash
-      - POSTGRES_PASSWORD=akash_secure_password
+      - POSTGRES_PASSWORD=${dbPassword}
     expose:
       - port: 5432
         as: 5432

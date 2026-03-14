@@ -27,6 +27,8 @@ export class ChatServer {
   private agentService: AgentService
   private prisma: PrismaClient
   private jwtSecret: string
+  // Fixed by audit 2026-03: store interval ref so it can be cleared on shutdown
+  private cleanupTimer: NodeJS.Timeout | null = null
 
   constructor(prisma: PrismaClient, jwtSecret: string) {
     this.prisma = prisma
@@ -294,9 +296,9 @@ export class ChatServer {
    * Start periodic cleanup of stale connections
    */
   private startCleanupInterval(): void {
-    setInterval(() => {
+    this.cleanupTimer = setInterval(() => {
       this.connectionManager.cleanupStaleConnections()
-    }, 60000) // Clean up every minute
+    }, 60000)
   }
 
   /**
@@ -323,6 +325,10 @@ export class ChatServer {
    */
   async shutdown(): Promise<void> {
     console.log('Shutting down chat server...')
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer)
+      this.cleanupTimer = null
+    }
     this.wss.close()
     await this.prisma.$disconnect()
   }

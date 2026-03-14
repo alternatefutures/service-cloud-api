@@ -56,6 +56,10 @@ export class EscrowService {
 
     // Resolve org billing ID
     const orgBilling = await this.billingApi.getOrgBilling(args.organizationId)
+    // Fixed by audit 2026-03: guard against missing billing config
+    if (!orgBilling) {
+      throw new Error(`Organization billing not configured for org ${args.organizationId}`)
+    }
 
     // Debit wallet (fails if insufficient balance)
     await this.billingApi.escrowDeposit({

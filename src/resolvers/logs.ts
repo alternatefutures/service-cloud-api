@@ -21,6 +21,10 @@ export const logsQueries = {
     { serviceId, tail, service }: ServiceLogsArgs,
     context: Context,
   ) => {
+    // Fixed by audit 2026-03: added auth check (was unauthenticated)
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated')
+    }
     const svc = await context.prisma.service.findUnique({
       where: { id: serviceId },
     })
