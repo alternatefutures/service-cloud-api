@@ -88,7 +88,12 @@ describe('Query Resolvers', () => {
 
   describe('project', () => {
     it('should return project by id', async () => {
-      const mockProject = { id: 'project-123', name: 'Test Project' }
+      const mockProject = {
+        id: 'project-123',
+        name: 'Test Project',
+        userId: 'user-123',
+        organizationId: null,
+      }
       vi.mocked(mockContext.prisma.project.findUnique).mockResolvedValue(
         mockProject
       )
@@ -136,7 +141,14 @@ describe('Query Resolvers', () => {
 
   describe('site', () => {
     it('should return site by id', async () => {
-      const mockSite = { id: 'site-123', name: 'Test Site' }
+      const mockSite = {
+        id: 'site-123',
+        name: 'Test Site',
+        project: {
+          userId: 'user-123',
+          organizationId: null,
+        },
+      }
       vi.mocked(mockContext.prisma.site.findUnique).mockResolvedValue(mockSite)
 
       const result = await resolvers.Query.site(
@@ -148,6 +160,14 @@ describe('Query Resolvers', () => {
       expect(result).toEqual(mockSite)
       expect(mockContext.prisma.site.findUnique).toHaveBeenCalledWith({
         where: { id: 'site-123' },
+        include: {
+          project: {
+            select: {
+              userId: true,
+              organizationId: true,
+            },
+          },
+        },
       })
     })
   })
@@ -180,7 +200,14 @@ describe('Query Resolvers', () => {
 
   describe('siteBySlug', () => {
     it('should return site by slug', async () => {
-      const mockSite = { id: 'site-123', slug: 'test-site' }
+      const mockSite = {
+        id: 'site-123',
+        slug: 'test-site',
+        project: {
+          userId: 'user-123',
+          organizationId: null,
+        },
+      }
       vi.mocked(mockContext.prisma.site.findUnique).mockResolvedValue(mockSite)
 
       const result = await resolvers.Query.siteBySlug(
@@ -192,6 +219,14 @@ describe('Query Resolvers', () => {
       expect(result).toEqual(mockSite)
       expect(mockContext.prisma.site.findUnique).toHaveBeenCalledWith({
         where: { slug: 'test-site' },
+        include: {
+          project: {
+            select: {
+              userId: true,
+              organizationId: true,
+            },
+          },
+        },
       })
     })
   })
