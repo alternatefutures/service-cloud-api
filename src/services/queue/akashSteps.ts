@@ -497,20 +497,34 @@ export async function handleCheckBids(
       return
     }
 
-    const uptimeFiltered = await providerSelector.filterBidsByUptime(safeBids)
-
-    if (uptimeFiltered.length === 0) {
-      await enqueueNext('/queue/akash/step', {
-        step: 'HANDLE_FAILURE',
-        deploymentId,
-        errorMessage: `No bids from providers meeting uptime threshold (${safeBids.length} bid(s) rejected)`,
-      } satisfies AkashHandleFailurePayload)
+    // If no preferred providers have bid yet and we haven't exhausted
+    // polling attempts, wait for more bids before settling on unverified
+    const hasPreferred = safeBids.some(b => providerSelector.isPreferredProvider(b.bidId.provider))
+    if (!hasPreferred && attempt < BID_POLL_MAX_ATTEMPTS) {
+      console.log(
+        `[ProviderSelector] ${safeBids.length} bid(s) but none preferred — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`
+      )
+      await enqueueNext(
+        '/queue/akash/step',
+        {
+          step: 'CHECK_BIDS',
+          deploymentId,
+          attempt: attempt + 1,
+        } satisfies AkashCheckBidsPayload,
+        5
+      )
       return
     }
 
-    const selectedBid = uptimeFiltered.sort(
-      (a, b) => parseFloat(a.price.amount) - parseFloat(b.price.amount)
-    )[0]
+    const selectedBid = providerSelector.selectPreferredBid(safeBids)
+    if (!selectedBid) {
+      await enqueueNext('/queue/akash/step', {
+        step: 'HANDLE_FAILURE',
+        deploymentId,
+        errorMessage: 'No bids remaining after preferred provider selection',
+      } satisfies AkashHandleFailurePayload)
+      return
+    }
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
@@ -523,12 +537,13 @@ export async function handleCheckBids(
       },
     })
 
+    const isPreferred = providerSelector.isPreferredProvider(selectedBid.bidId.provider)
     emitProgress(
       deploymentId,
       'CHECK_BIDS',
       AKASH_STEP_NUMBERS.CHECK_BIDS,
       deployment.retryCount,
-      `Selected provider from ${safeBids.length} bid(s). Creating lease...`
+      `Selected ${isPreferred ? 'preferred' : 'unverified'} provider from ${safeBids.length} bid(s). Creating lease...`
     )
 
     await enqueueNext('/queue/akash/step', {
@@ -862,14 +877,18 @@ export async function handlePollUrls(
     const hasReadyReplicas = Object.values(services).some(
       s => (s.available_replicas ?? 0) > 0
     )
-    const hasReachableEndpoint = await hasUsableEndpoint(parsed)
 
-    if (!hasReachableEndpoint) {
+    // Deployment is ready when URIs are assigned and replicas are running.
+    // HTTP probes are unreliable during container startup (502/503 from
+    // provider ingress is normal while the app boots). The user can check
+    // actual app health from the UI once the deployment is marked ACTIVE.
+    const isReady = hasEndpoints && hasReadyReplicas
+
+    if (!isReady) {
       if (attempt >= URL_POLL_MAX_ATTEMPTS) {
-        const reason =
-          hasEndpoints || hasReadyReplicas
-            ? 'Deployment never exposed a healthy endpoint'
-            : 'Deployment never exposed any endpoints'
+        const reason = hasEndpoints
+          ? 'Deployment has URIs but container never started (0 replicas)'
+          : 'Deployment never exposed any endpoints'
         await enqueueNext('/queue/akash/step', {
           step: 'HANDLE_FAILURE',
           deploymentId,

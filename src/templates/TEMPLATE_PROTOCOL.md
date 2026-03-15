@@ -324,6 +324,7 @@ Before building a wrapper, verify these things about the base image:
 - [ ] Entrypoint: `wait` (no `-n`) for multi-process
 - [ ] If app has a UI: `serve-with-ui.mjs` pattern implemented
 - [ ] Tested locally: `docker run --rm -p 8080:<public-port> <wrapper-image>`
+- [ ] If image uses Bun workspaces: also tested locally with `docker run --platform linux/amd64 ...` to verify runtime package resolution (Docker `COPY` flattens workspace symlinks; Bun may keep deps in per-package `node_modules`)
 - [ ] Pushed with a **versioned tag** (`:v1`, not `:latest`)
 - [ ] Template definition: `dockerImage` points to the versioned tag
 - [ ] Template definition: **no** `startCommand` (entrypoint handles everything)
@@ -354,6 +355,8 @@ Composable templates add `components` (sub-services) and `topologies` (deploymen
 ```
 
 **Host resolution rule**: If the source component and target component are in the **same Akash group**, `host` resolves to the target's `sdlServiceName` (internal DNS, zero-latency). Otherwise it resolves to the AF proxy URL. This means the same template definition works for both bundled (single-lease) and split (cross-provider) deployments without changes.
+
+**Bun/Kubernetes warning**: Do **not** assume that because `{{component.<id>.host}}` resolves to an internal service name (for example `postgres`), the application runtime will resolve that hostname the same way as shell tools do. In the Hyperscape incident series (2026-03-15), `getent hosts postgres` and `curl postgres:5432` worked inside the container, but Bun/`pg-pool` still threw `ENOTFOUND`. If the app runs on Bun and needs a peer service in the same lease, prefer the Kubernetes-injected `*_SERVICE_HOST` env var (for example `POSTGRES_SERVICE_HOST`) or rewrite the connection string in `startCommand` before launching Bun.
 
 ### Example: converting a simple template to composable
 
@@ -537,6 +540,7 @@ Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have 
 - [ ] No `startCommand` if the image has a custom ENTRYPOINT (wrapper images)
 - [ ] Bind address env var set to `0.0.0.0` (not `127.0.0.1`)
 - [ ] Image tag is versioned (`:v1`, not `:latest` or `:main`) for Akash
+- [ ] If using Bun + internal Akash/K8s service DNS: proved the hostname resolves inside the app runtime itself, not just with shell tools (`getent`, `curl`). If not, use the injected `*_SERVICE_HOST` env var in `startCommand`
 - [ ] Tested: template appears in the "Add a service" page
 - [ ] Tested: clicking template opens config sheet with correct env vars
 - [ ] Tested: deployed service is reachable and UI loads (if applicable)

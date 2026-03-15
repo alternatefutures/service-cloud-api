@@ -21,7 +21,7 @@ export const hyperscapeServer: Template = {
   ],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v6',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v12',
   serviceType: 'VM',
   envVars: [
     {
@@ -114,9 +114,13 @@ export const hyperscapeServer: Template = {
       primary: true,
       sdlServiceName: 'app',
       startCommand: [
+        'if [ -n "$POSTGRES_SERVICE_HOST" ]; then',
+        '  export DATABASE_URL=$(echo "$DATABASE_URL" | sed "s/@postgres:/@${POSTGRES_SERVICE_HOST}:/")',
+        '  echo "Resolved postgres -> $POSTGRES_SERVICE_HOST via K8s service discovery"',
+        'fi',
         'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
-        '  curl -so /dev/null --connect-timeout 2 http://postgres:5432/ 2>/dev/null',
-        '  [ $? -ne 7 ] && break',
+        '  curl -so /dev/null --connect-timeout 2 http://${POSTGRES_SERVICE_HOST:-postgres}:5432/ 2>/dev/null',
+        '  rc=$?; [ $rc -ne 6 ] && [ $rc -ne 7 ] && break',
         '  echo "Waiting for postgres ($i/15)..."',
         '  sleep 2',
         'done',
@@ -143,7 +147,7 @@ export const hyperscapeServer: Template = {
         'Lightweight static file server for the game client. Uses the same image as the server — no separate build needed.',
       sdlServiceName: 'web',
       inline: {
-        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v6',
+        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v12',
         resources: { cpu: 0.5, memory: '256Mi', storage: '1Gi' },
         ports: [{ port: 80, as: 80, global: true }],
         healthCheck: { path: '/', port: 80 },

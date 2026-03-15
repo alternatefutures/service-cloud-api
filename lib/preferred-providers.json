@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-03-15T20:57:35.646Z",
+  "providers": [
+    {
+      "address": "akash175llqyjvxfle9qwt740vm46772dzaznpzgm576",
+      "name": "JJOzzie Tech",
+      "verified": true,
+      "testedAt": "2026-03-15T20:57:35.646Z",
+      "templatesPassed": 9,
+      "templatesTested": 9,
+      "notes": "Passed: hyperscape, milaidy-gateway, openclaw-gateway, nanobot-gateway, postgres, redis, n8n, gitea, minecraft-server"
+    },
+    {
+      "address": "akash1k94uya5rhrtj9rfw850az9aq2d6vdpjmtnlgd0",
+      "name": "Provider k94",
+      "verified": true,
+      "testedAt": "2026-03-15T13:20:32.918Z",
+      "templatesPassed": 4,
+      "templatesTested": 4,
+      "notes": "Handles heavier images (hyperscape, minecraft). Slightly higher prices."
+    },
+    {
+      "address": "akash1sevd2ymtty3dpq9ycxgkhuzzk4fe6mchqdwd4e",
+      "name": "Provider sev",
+      "verified": true,
+      "testedAt": "2026-03-15T20:57:35.646Z",
+      "templatesPassed": 4,
+      "templatesTested": 7,
+      "notes": "Passed: react-vite, hugo-server, node-ws-gameserver, bun-ws-gameserver. Failed: nextjs-server, astro-server, nuxt-server"
+    },
+    {
+      "address": "akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr",
+      "name": "Provider 15pk",
+      "verified": true,
+      "testedAt": "2026-03-15T20:57:35.646Z",
+      "templatesPassed": 3,
+      "templatesTested": 3,
+      "notes": "Passed: ollama-gpu, jupyter-ml-workspace, comfyui"
+    }
+  ]
+}

@@ -5,6 +5,11 @@
  * Prevents NAT hairpin issues by ensuring services that route through the SSL proxy
  * are not deployed on the same provider as the proxy.
  *
+ * Preferred providers are loaded from lib/preferred-providers.json — a curated
+ * whitelist of verified providers. During bid selection, preferred providers are
+ * chosen over unverified ones (cheapest preferred first), with unverified providers
+ * used only as a last resort.
+ *
  * Usage:
  *   import { ProviderSelector } from './providerSelector';
  *
@@ -13,7 +18,51 @@
  *   const isSafe = selector.isProviderSafe(providerAddress, 'backend');
  */
 
+import { readFileSync } from 'fs'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
+
 export type ServiceType = 'proxy' | 'backend' | 'standalone'
+
+// ── Preferred Providers (verified whitelist) ────────────────────────────
+
+export interface PreferredProviderEntry {
+  address: string
+  name: string
+  verified: boolean
+}
+
+interface PreferredProvidersFile {
+  providers: PreferredProviderEntry[]
+}
+
+function loadPreferredProviders(): Set<string> {
+  // Try multiple resolution strategies since tsx/ts-node can alter import.meta.url
+  const candidates = [
+    resolve(process.cwd(), 'lib/preferred-providers.json'),
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/preferred-providers.json'),
+  ]
+
+  for (const filePath of candidates) {
+    try {
+      const raw = readFileSync(filePath, 'utf-8')
+      const data = JSON.parse(raw) as PreferredProvidersFile
+      const addrs = new Set<string>()
+      for (const p of data.providers ?? []) {
+        if (p.verified && p.address) addrs.add(p.address)
+      }
+      console.log(`[ProviderSelector] Loaded ${addrs.size} preferred provider(s) from ${filePath}`)
+      return addrs
+    } catch {
+      continue
+    }
+  }
+
+  console.log('[ProviderSelector] No preferred-providers.json found, all providers treated equally')
+  return new Set()
+}
+
+const PREFERRED_PROVIDERS = loadPreferredProviders()
 
 export interface ProviderInfo {
   address: string
@@ -121,6 +170,11 @@ const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason:
     address: 'akash18zskyywdy4ng50dd9yjen8daep0z585mc296h4',
     name: 'ouroboroz.tech',
     reason: 'Nginx ingress returns persistent 502 Bad Gateway despite healthy running containers',
+  },
+  akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe: {
+    address: 'akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe',
+    name: 'Unknown (ut3m...)',
+    reason: 'Accepts bids but containers never start — 0 replicas, no URIs after multiple attempts',
   },
 }
 
@@ -359,6 +413,58 @@ export class ProviderSelector {
   }
 
   /**
+   * Select the best bid from safe+uptime-filtered bids using the preferred
+   * provider whitelist. Preferred (verified) providers are chosen first,
+   * sorted by price ascending. Unverified providers are only used when no
+   * preferred provider has bid.
+   *
+   * @returns The best bid, or null if the list is empty
+   */
+  selectPreferredBid(bids: FilteredBid[]): FilteredBid | null {
+    if (bids.length === 0) return null
+
+    const preferred: FilteredBid[] = []
+    const unverified: FilteredBid[] = []
+
+    for (const bid of bids) {
+      if (PREFERRED_PROVIDERS.has(bid.bidId.provider)) {
+        preferred.push(bid)
+      } else {
+        unverified.push(bid)
+      }
+    }
+
+    const byPrice = (a: FilteredBid, b: FilteredBid) =>
+      parseFloat(a.price.amount) - parseFloat(b.price.amount)
+
+    if (preferred.length > 0) {
+      preferred.sort(byPrice)
+      console.log(
+        `[ProviderSelector] ${preferred.length} preferred provider(s) bidding, ` +
+        `picking cheapest: ${preferred[0].bidId.provider} @ ${preferred[0].price.amount} uakt`
+      )
+      return preferred[0]
+    }
+
+    // No preferred providers bid — fall back to cheapest unverified
+    unverified.sort(byPrice)
+    console.log(
+      `[ProviderSelector] No preferred providers among ${bids.length} bid(s). ` +
+      `Bidders: ${bids.map(b => b.bidId.provider).join(', ')}. ` +
+      `Preferred: ${[...PREFERRED_PROVIDERS].join(', ')}. ` +
+      `Falling back to cheapest: ${unverified[0].bidId.provider}`
+    )
+    return unverified[0]
+  }
+
+  /**
+   * Check whether a provider address is in the preferred whitelist.
+   */
+  isPreferredProvider(address: string): boolean {
+    return PREFERRED_PROVIDERS.has(address)
+  }
+
+  /**
    * Fetch uptime for a single provider from Akashlytics API.
    * Returns uptime percentage (0-100) or null if unavailable.
    * Results are cached for 5 minutes.
@@ -418,6 +524,12 @@ export class ProviderSelector {
       const bid = bids[i]
       const result = uptimeResults[i]
       const uptime = result.status === 'fulfilled' ? result.value : null
+
+      // Preferred (verified) providers always pass — we tested them ourselves
+      if (PREFERRED_PROVIDERS.has(bid.bidId.provider)) {
+        qualified.push(bid)
+        continue
+      }
 
       if (uptime === null) {
         unknownUptime.push(bid)
