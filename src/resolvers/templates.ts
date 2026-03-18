@@ -8,6 +8,7 @@
 import { randomBytes } from 'crypto'
 import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
+import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { generateInternalHostname } from '../utils/internalHostname.js'
 import {
   getAllTemplates,
@@ -202,6 +203,9 @@ export const templateMutations = {
     },
     context: Context
   ) => {
+    // ── Subscription check ────────────────────────────────────
+    await assertSubscriptionActive(context.organizationId)
+
     // ── Auth ──────────────────────────────────────────────────
     if (!context.userId) {
       throw new GraphQLError('Not authenticated')

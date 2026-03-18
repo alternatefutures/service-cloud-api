@@ -8,6 +8,7 @@
 import { GraphQLError } from 'graphql'
 import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 import { getEscrowService } from '../services/billing/escrowService.js'
+import { assertSubscriptionActive } from './subscriptionCheck.js'
 import type { Context } from './types.js'
 
 // Helper to format AkashDeployment for GraphQL (BigInt → String conversion)
@@ -111,6 +112,8 @@ export const akashMutations = {
       throw new GraphQLError('Not authenticated')
     }
 
+    await assertSubscriptionActive(context.organizationId)
+
     // Get the service from the registry
     const service = await context.prisma.service.findUnique({
       where: { id: input.serviceId },
@@ -175,6 +178,8 @@ export const akashMutations = {
     if (!context.userId) {
       throw new GraphQLError('Not authenticated')
     }
+
+    await assertSubscriptionActive(context.organizationId)
 
     // Get the function with its service
     const func = await context.prisma.aFFunction.findUnique({

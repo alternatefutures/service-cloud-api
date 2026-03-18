@@ -162,6 +162,23 @@ class BillingApiClient {
   }
 
   // ========================================
+  // SUBSCRIPTION STATUS
+  // ========================================
+
+  /**
+   * Check org subscription status (for pre-deploy gating)
+   */
+  async getSubscriptionStatus(orgId: string): Promise<{
+    status: string
+    trialEnd: number | null
+    daysRemaining: number | null
+    graceRemaining: number | null
+    planName: string | null
+  }> {
+    return this.request(`/subscription-status/${orgId}`)
+  }
+
+  // ========================================
   // NOTIFICATIONS
   // ========================================
 
