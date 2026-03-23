@@ -35,6 +35,7 @@ import type {
   TemplateComponent,
 } from '../templates/schema.js'
 import type { Context } from './types.js'
+import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
 
 // ─── Queries ─────────────────────────────────────────────────────
 
@@ -293,6 +294,9 @@ export const templateMutations = {
       }
     }
 
+    // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
+    await injectPlatformEnvVars(template, envOverrides, context, slug)
+
     // ── Build resource overrides ─────────────────────────────
     const resourceOverrides = input.resourceOverrides
       ? {
@@ -447,6 +451,9 @@ export const templateMutations = {
       }
     }
 
+    // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
+    await injectPlatformEnvVars(template, envOverrides, context, slug)
+
     const composeContent = generateComposeFromTemplate(template, {
       serviceName: slug,
       envOverrides,
@@ -585,6 +592,12 @@ export const templateMutations = {
     if (input.envOverrides) {
       for (const { key, value } of input.envOverrides) envOverrides[key] = value
     }
+
+    // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
+    const primarySlug = generateSlug(
+      input.serviceName || `${template.id}-${Date.now().toString(36)}`
+    )
+    await injectPlatformEnvVars(template, envOverrides, context, primarySlug)
 
     // ── Resolve components ──────────────────────────────────────
     const activeComponentIds = new Set(targets.map(t => t.componentId))
@@ -923,7 +936,10 @@ function resolveComponent(
       if (a.runUser) env['AKASH_RUN_USER'] = a.runUser
       if (a.runUid != null) env['AKASH_RUN_UID'] = String(a.runUid)
     }
-    if (comp.templateId === 'postgres' && !env.POSTGRES_PASSWORD) {
+    const isPostgres = comp.templateId === 'postgres' ||
+      ref.dockerImage.startsWith('postgres') ||
+      ref.dockerImage.startsWith('pgvector/')
+    if (isPostgres && !env.POSTGRES_PASSWORD) {
       env.POSTGRES_PASSWORD = ctx.password
     }
 

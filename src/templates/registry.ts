@@ -27,6 +27,7 @@ import {
   minecraftServer,
   comfyuiServer,
   hyperscapeServer,
+  alternateAgent,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
@@ -38,6 +39,7 @@ const templates: Template[] = [
   openclawGateway,
   ollamaGpu,
   jupyterMlWorkspace,
+  alternateAgent,
   // AI / ML
   nanobotGateway,
   comfyuiServer,

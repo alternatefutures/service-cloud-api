@@ -1401,6 +1401,7 @@ export const typeDefs = /* GraphQL */ `
     description: String!
     required: Boolean!
     secret: Boolean
+    platformInjected: String
   }
 
   type TemplateGpu {

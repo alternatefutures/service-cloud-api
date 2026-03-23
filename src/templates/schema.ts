@@ -24,6 +24,13 @@ export interface TemplateEnvVar {
   required: boolean
   /** If true, value is hidden in UI (for secrets) */
   secret?: boolean
+  /**
+   * When set, the deploy pipeline auto-injects this value.
+   * The deploy UI pre-fills these fields (visible but auto-populated).
+   *   'orgId'  — injects the deploying user's organization ID
+   *   'apiKey' — generates a scoped PAT via service-auth
+   */
+  platformInjected?: 'orgId' | 'apiKey'
 }
 
 export interface TemplateGpu {
