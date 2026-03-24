@@ -18,6 +18,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "BROWSER=none prisma studio --port 1611",
     "db:seed": "tsx prisma/seed.ts",
+    "schema:export": "tsx scripts/export-schema.ts schema.graphql",
     "generate:invoice": "tsx scripts/generate-sample-invoice.ts",
     "billing:run-now": "tsx scripts/run-compute-billing-now.ts",
     "billing:backfill": "tsx scripts/backfill-compute-billing.ts",

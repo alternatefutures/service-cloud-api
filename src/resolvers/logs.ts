@@ -8,6 +8,7 @@
 
 import { GraphQLError } from 'graphql'
 import type { Context } from './types.js'
+import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 
 export interface ServiceLogsArgs {
   serviceId: string
@@ -21,9 +22,7 @@ export const logsQueries = {
     { serviceId, tail, service }: ServiceLogsArgs,
     context: Context,
   ) => {
-    if (!context.userId) {
-      throw new GraphQLError('Not authenticated')
-    }
+    requireAuth(context)
     const svc = await context.prisma.service.findUnique({
       where: { id: serviceId },
       include: { project: { select: { userId: true, organizationId: true } } },
@@ -34,13 +33,7 @@ export const logsQueries = {
 
     const p = (svc as any).project
     if (p) {
-      const isAuthorized = context.organizationId
-        ? p.organizationId === context.organizationId ||
-          (p.userId === context.userId && p.organizationId === null)
-        : p.userId === context.userId
-      if (!isAuthorized) {
-        throw new GraphQLError('Not authorized to view logs for this service')
-      }
+      assertProjectAccess(context, p, 'Not authorized to view logs for this service')
     }
 
     const tailLines = tail ?? 200

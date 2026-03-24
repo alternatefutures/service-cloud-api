@@ -39,6 +39,7 @@ import {
 import { logsQueries } from './logs.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
+import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 
 export type { Context }
 
@@ -122,29 +123,18 @@ export const resolvers = {
       })
     },
 
-    // Fixed by audit 2026-03: added auth + ownership check (was unauthenticated)
     project: async (_: unknown, { id }: { id: string }, context: Context) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
       const project = await context.prisma.project.findUnique({
         where: { id },
       })
       if (!project) return null
-      const isAuthorized = context.organizationId
-        ? project.organizationId === context.organizationId ||
-          (project.userId === context.userId && project.organizationId === null)
-        : project.userId === context.userId
-      if (!isAuthorized) {
-        throw new GraphQLError('Not authorized to access this project')
-      }
+      assertProjectAccess(context, project)
       return project
     },
 
     projects: async (_: unknown, __: unknown, context: Context) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
       // If organizationId is provided, include both:
       // - org-scoped projects for that org
       // - user-owned "personal" projects (organizationId null)
@@ -165,15 +155,12 @@ export const resolvers = {
       return { data }
     },
 
-    // Service registry (canonical workloads)
     serviceRegistry: async (
       _: unknown,
       { projectId }: { projectId?: string | null },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
 
       const targetProjectId = projectId ?? context.projectId
       if (!targetProjectId) {
@@ -187,15 +174,7 @@ export const resolvers = {
       if (!project) {
         throw new GraphQLError('Project not found')
       }
-
-      const isAuthorized = context.organizationId
-        ? project.organizationId === context.organizationId ||
-          (project.userId === context.userId && project.organizationId === null)
-        : project.userId === context.userId
-
-      if (!isAuthorized) {
-        throw new GraphQLError('Not authorized to access this project')
-      }
+      assertProjectAccess(context, project)
 
       return context.prisma.service.findMany({
         where: { projectId: targetProjectId },
@@ -218,15 +197,7 @@ export const resolvers = {
       })
       if (!site) return null
       const p = (site as any).project
-      if (p) {
-        const isAuthorized = context.organizationId
-          ? p.organizationId === context.organizationId ||
-            (p.userId === context.userId && p.organizationId === null)
-          : p.userId === context.userId
-        if (!isAuthorized) {
-          throw new GraphQLError('Not authorized to access this site')
-        }
-      }
+      if (p) assertProjectAccess(context, p, 'Not authorized to access this site')
       return site
     },
 
@@ -237,46 +208,31 @@ export const resolvers = {
       const data = await context.prisma.site.findMany({
         where: { projectId: context.projectId },
       })
-      // Return wrapped format for SDK compatibility
       return { data }
     },
 
-    // Fixed by audit 2026-03: added auth + ownership check (was unauthenticated)
     siteBySlug: async (
       _: unknown,
       { where }: { where: { slug: string } },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
       const site = await context.prisma.site.findUnique({
         where: { slug: where.slug },
         include: { project: { select: { userId: true, organizationId: true } } },
       })
       if (!site) return null
       const p = (site as any).project
-      if (p) {
-        const isAuthorized = context.organizationId
-          ? p.organizationId === context.organizationId ||
-            (p.userId === context.userId && p.organizationId === null)
-          : p.userId === context.userId
-        if (!isAuthorized) {
-          throw new GraphQLError('Not authorized to access this site')
-        }
-      }
+      if (p) assertProjectAccess(context, p, 'Not authorized to access this site')
       return site
     },
 
-    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     ipnsRecord: async (
       _: unknown,
       { name }: { name: string },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
       return context.prisma.iPNSRecord.findUnique({
         where: { name },
       })
@@ -1282,14 +1238,7 @@ export const resolvers = {
         throw new GraphQLError('Project not found')
       }
 
-      // Verify ownership: must be the project creator or in the same org
-      const isAuthorized = context.organizationId
-        ? project.organizationId === context.organizationId
-        : project.userId === context.userId
-
-      if (!isAuthorized) {
-        throw new GraphQLError('Not authorized to delete this project')
-      }
+      assertProjectAccess(context, project, 'Not authorized to delete this project')
 
       // Delete all services (cascades to sites, functions, akash deployments)
       await context.prisma.service.deleteMany({
@@ -1388,9 +1337,7 @@ export const resolvers = {
       { data }: { data: { siteId: string; cid: string } },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
 
       const site = await context.prisma.site.findUnique({
         where: { id: data.siteId },
@@ -1402,15 +1349,7 @@ export const resolvers = {
       }
 
       const p = (site as any).project
-      if (p) {
-        const isAuthorized = context.organizationId
-          ? p.organizationId === context.organizationId ||
-            (p.userId === context.userId && p.organizationId === null)
-          : p.userId === context.userId
-        if (!isAuthorized) {
-          throw new GraphQLError('Not authorized to deploy to this site')
-        }
-      }
+      if (p) assertProjectAccess(context, p, 'Not authorized to deploy to this site')
 
       return context.prisma.deployment.create({
         data: {
@@ -1456,15 +1395,7 @@ export const resolvers = {
       }
 
       const p = (site as any).project
-      if (p) {
-        const isAuthorized = context.organizationId
-          ? p.organizationId === context.organizationId ||
-            (p.userId === context.userId && p.organizationId === null)
-          : p.userId === context.userId
-        if (!isAuthorized) {
-          throw new GraphQLError('Not authorized to deploy to this site')
-        }
-      }
+      if (p) assertProjectAccess(context, p, 'Not authorized to deploy to this site')
 
       const deploymentService = new DeploymentService(context.prisma)
 

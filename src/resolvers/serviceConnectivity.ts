@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql'
 import type { Context } from './types.js'
+import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { getTemplateById } from '../templates/index.js'
 import {
   resolveConnectionStrings,
@@ -63,21 +64,14 @@ export const serviceConnectivityQueries = {
     { projectId }: { projectId: string },
     context: Context
   ) => {
-    if (!context.userId) throw new GraphQLError('Not authenticated')
+    requireAuth(context)
 
     const project = await context.prisma.project.findUnique({
       where: { id: projectId },
       select: { userId: true, organizationId: true },
     })
     if (!project) throw new GraphQLError('Project not found')
-
-    const isAuthorized = context.organizationId
-      ? project.organizationId === context.organizationId ||
-        (project.userId === context.userId && project.organizationId === null)
-      : project.userId === context.userId
-    if (!isAuthorized) {
-      throw new GraphQLError('Not authorized to access this project')
-    }
+    assertProjectAccess(context, project)
 
     const services = await context.prisma.service.findMany({
       where: { projectId },
