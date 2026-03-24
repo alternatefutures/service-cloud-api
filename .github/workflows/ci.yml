@@ -62,13 +62,38 @@ jobs:
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/alternatefutures_test
 
-      - name: Run tests
-        run: pnpm test
+      - name: Run tests with coverage
+        run: pnpm test:coverage
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/alternatefutures_test
           REDIS_URL: redis://localhost:6379
           JWT_SECRET: test-secret-key
           NODE_ENV: test
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage/coverage-summary.json ]; then
+            TOTAL=$(node -e "const c = require('./coverage/coverage-summary.json'); console.log(Math.round(c.total.lines.pct))")
+            echo "## Coverage: ${TOTAL}%" >> $GITHUB_STEP_SUMMARY
+            node -e "
+              const c = require('./coverage/coverage-summary.json').total;
+              console.log('| Metric | Percentage |');
+              console.log('|--------|-----------|');
+              console.log('| Lines | ' + c.lines.pct + '% |');
+              console.log('| Functions | ' + c.functions.pct + '% |');
+              console.log('| Branches | ' + c.branches.pct + '% |');
+              console.log('| Statements | ' + c.statements.pct + '% |');
+            " >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   lint:
     name: Lint & Type Check
