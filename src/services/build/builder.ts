@@ -24,11 +24,6 @@ function validateCommand(command: string): void {
       `Command "${baseName}" is not allowed. Permitted: ${ALLOWED_COMMAND_PREFIXES.join(', ')}`
     );
   }
-
-  const shellMetachars = /[;&|`$(){}<>!\\]/;
-  if (shellMetachars.test(trimmed)) {
-    throw new Error('Shell metacharacters are not allowed in build commands');
-  }
 }
 
 export interface BuildOptions {

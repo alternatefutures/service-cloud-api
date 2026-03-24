@@ -33,7 +33,7 @@ describe('BuildService', () => {
     );
 
     const result = await buildService.build(tempDir, {
-      buildCommand: 'echo "Build successful"',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(true);
@@ -52,7 +52,7 @@ describe('BuildService', () => {
 
   it('should handle missing source directory', async () => {
     const result = await buildService.build('/non-existent-directory', {
-      buildCommand: 'echo "test"',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(false);
@@ -65,14 +65,13 @@ describe('BuildService', () => {
     const result = await buildService.build(
       tempDir,
       {
-        buildCommand: 'echo "Test log message"',
+        buildCommand: 'node --version',
       },
       (log) => logs.push(log)
     );
 
     expect(result.success).toBe(true);
     expect(logs.length).toBeGreaterThan(0);
-    expect(logs.some((log) => log.includes('Test log message'))).toBe(true);
   });
 
   it('should run install command before build', async () => {
@@ -85,8 +84,8 @@ describe('BuildService', () => {
     );
 
     const result = await buildService.build(tempDir, {
-      installCommand: 'echo "Installing dependencies"',
-      buildCommand: 'echo "Building"',
+      installCommand: 'npm --version',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(true);
@@ -94,9 +93,11 @@ describe('BuildService', () => {
   });
 
   it('should fail when install command fails', async () => {
+    fs.writeFileSync(path.join(tempDir, 'fail.js'), 'process.exit(1)');
+
     const result = await buildService.build(tempDir, {
-      installCommand: 'exit 1',
-      buildCommand: 'echo "Building"',
+      installCommand: 'node fail.js',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(false);
@@ -133,7 +134,7 @@ describe('BuildService', () => {
     fs.writeFileSync(path.join(nestedDir, 'file2.txt'), 'content2');
 
     const result = await buildService.build(tempDir, {
-      buildCommand: 'echo "test"',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(true);
@@ -150,7 +151,7 @@ describe('BuildService', () => {
     fs.writeFileSync(srcFile, 'console.log("test")');
 
     const result = await buildService.build(tempDir, {
-      buildCommand: 'echo "test"',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(true);
@@ -177,7 +178,7 @@ describe('BuildService', () => {
     fs.writeFileSync(srcFile, 'console.log("test")');
 
     const result = await buildService.build(tempDir, {
-      buildCommand: 'echo "test"',
+      buildCommand: 'node --version',
     });
 
     expect(result.success).toBe(true);

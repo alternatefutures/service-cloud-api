@@ -47,6 +47,7 @@ describe('Deployment Resolvers', () => {
           findUnique: vi.fn().mockResolvedValue({
             id: 'site-123',
             name: 'Test Site',
+            project: { userId: 'user-123', organizationId: null },
           }),
         },
         deployment: {
@@ -86,6 +87,7 @@ describe('Deployment Resolvers', () => {
 
       expect(mockContext.prisma.site.findUnique).toHaveBeenCalledWith({
         where: { id: 'site-123' },
+        include: { project: { select: { userId: true, organizationId: true } } },
       })
     })
 

@@ -344,12 +344,13 @@ export const domainRegistrationQueries = {
     })
     const orgHostnames = new Set(orgDomains.map((d: any) => d.hostname))
 
-    return allDomains.filter((d: any) => {
+    const filtered = (allDomains.domains || []).filter((d: any) => {
       const hostname = d.domain
         ? `${d.domain.name}.${d.domain.extension}`
         : d.hostname
       return hostname && orgHostnames.has(hostname)
     })
+    return { domains: filtered, total: filtered.length }
   },
 }
 
