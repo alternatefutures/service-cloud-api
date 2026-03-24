@@ -80,8 +80,9 @@ jobs:
             echo "API healthy"
             echo "healthy=true" >> $GITHUB_OUTPUT
           else
-            echo "::warning::Health check did not pass"
+            echo "::error::Post-deploy health check failed for service-cloud-api"
             echo "healthy=false" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
       - name: Discord notification (success)
