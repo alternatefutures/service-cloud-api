@@ -21,6 +21,9 @@
 import { readFileSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('provider-selector')
 
 export type ServiceType = 'proxy' | 'backend' | 'standalone'
 
@@ -51,14 +54,14 @@ function loadPreferredProviders(): Set<string> {
       for (const p of data.providers ?? []) {
         if (p.verified && p.address) addrs.add(p.address)
       }
-      console.log(`[ProviderSelector] Loaded ${addrs.size} preferred provider(s) from ${filePath}`)
+      log.info(`Loaded ${addrs.size} preferred provider(s) from ${filePath}`)
       return addrs
     } catch {
       continue
     }
   }
 
-  console.log('[ProviderSelector] No preferred-providers.json found, all providers treated equally')
+  log.info('No preferred-providers.json found, all providers treated equally')
   return new Set()
 }
 
@@ -439,8 +442,8 @@ export class ProviderSelector {
 
     if (preferred.length > 0) {
       preferred.sort(byPrice)
-      console.log(
-        `[ProviderSelector] ${preferred.length} preferred provider(s) bidding, ` +
+      log.info(
+        `${preferred.length} preferred provider(s) bidding, ` +
         `picking cheapest: ${preferred[0].bidId.provider} @ ${preferred[0].price.amount} uakt`
       )
       return preferred[0]
@@ -448,8 +451,8 @@ export class ProviderSelector {
 
     // No preferred providers bid — fall back to cheapest unverified
     unverified.sort(byPrice)
-    console.log(
-      `[ProviderSelector] No preferred providers among ${bids.length} bid(s). ` +
+    log.info(
+      `No preferred providers among ${bids.length} bid(s). ` +
       `Bidders: ${bids.map(b => b.bidId.provider).join(', ')}. ` +
       `Preferred: ${[...PREFERRED_PROVIDERS].join(', ')}. ` +
       `Falling back to cheapest: ${unverified[0].bidId.provider}`
@@ -545,29 +548,28 @@ export class ProviderSelector {
     }
 
     if (rejected.length > 0) {
-      console.log(
-        `[ProviderSelector] Filtered ${rejected.length} provider(s) below ${MIN_UPTIME_PERCENT}% uptime:`,
-        rejected.map(r => `${r.name || r.provider} (${r.uptime.toFixed(1)}%)`).join(', ')
+      log.info(
+        `Filtered ${rejected.length} provider(s) below ${MIN_UPTIME_PERCENT}% uptime: ${rejected.map(r => `${r.name || r.provider} (${r.uptime.toFixed(1)}%)`).join(', ')}`
       )
     }
 
     if (qualified.length > 0) {
       if (unknownUptime.length > 0) {
-        console.log(
-          `[ProviderSelector] ${unknownUptime.length} provider(s) had unknown uptime (API unavailable), skipped in favor of ${qualified.length} verified provider(s)`
+        log.info(
+          `${unknownUptime.length} provider(s) had unknown uptime (API unavailable), skipped in favor of ${qualified.length} verified provider(s)`
         )
       }
       return qualified
     }
 
     if (unknownUptime.length > 0) {
-      console.log(
-        `[ProviderSelector] No providers met uptime threshold (${MIN_UPTIME_PERCENT}%). Falling back to ${unknownUptime.length} provider(s) with unknown uptime.`
+      log.info(
+        `No providers met uptime threshold (${MIN_UPTIME_PERCENT}%). Falling back to ${unknownUptime.length} provider(s) with unknown uptime.`
       )
       return unknownUptime
     }
 
-    console.log(`[ProviderSelector] All ${bids.length} provider(s) failed uptime check. No bids remain.`)
+    log.info(`All ${bids.length} provider(s) failed uptime check. No bids remain.`)
     return []
   }
 

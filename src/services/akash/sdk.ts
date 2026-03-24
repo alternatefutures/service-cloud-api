@@ -14,6 +14,9 @@ import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 import { createChainNodeSDK } from '@akashnetwork/chain-sdk/chain'
 // @ts-ignore
 import { SDL } from '@akashnetwork/chain-sdk/sdl'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('akash-sdk')
 
 export type ChainNodeSDK = ReturnType<typeof createChainNodeSDK>
 export { SDL }
@@ -59,6 +62,6 @@ export async function getAkashSDKContext(): Promise<AkashSDKContext> {
   })
 
   sdkContext = { wallet, chainSDK, ownerAddress }
-  console.log(`[AkashSDK] Initialized for ${ownerAddress}`)
+  log.info(`Initialized for ${ownerAddress}`)
   return sdkContext
 }

@@ -2,6 +2,9 @@ import { InfisicalSDK, type Secret } from '@infisical/sdk'
 import { setInterval } from 'node:timers'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('infisical')
 
 const __filename = fileURLToPath(import.meta.url)
 const serviceRoot = path.resolve(path.dirname(__filename), '..', '..')
@@ -11,7 +14,7 @@ const secretsCache: Record<string, string> = {}
 
 export async function initInfisical() {
   if (process.env.INFISICAL_CLIENT_ID && process.env.INFISICAL_CLIENT_SECRET) {
-    console.log('🔐 Initializing Infisical client...')
+    log.info('Initializing Infisical client...')
 
     // Initialize client
     client = new InfisicalSDK({
@@ -38,10 +41,10 @@ export async function initInfisical() {
       process.env[secret.secretKey] = secret.secretValue
     })
 
-    console.log(`✅ Loaded ${result.secrets.length} secrets from Infisical`)
+    log.info(`Loaded ${result.secrets.length} secrets from Infisical`)
   } else {
-    console.log(
-      '⚠️  No INFISICAL_CLIENT_ID/SECRET found, using local .env.local/.env files'
+    log.info(
+      'No INFISICAL_CLIENT_ID/SECRET found, using local .env.local/.env files'
     )
     const dotenv = await import('dotenv')
     dotenv.config({ path: path.join(serviceRoot, '.env') })
@@ -59,7 +62,7 @@ export function getSecret(key: string): string {
 
 export async function refreshSecrets() {
   if (client) {
-    console.log('🔄 Refreshing secrets from Infisical...')
+    log.info('Refreshing secrets from Infisical...')
     await initInfisical()
   }
 }
@@ -68,7 +71,7 @@ export async function refreshSecrets() {
 if (process.env.NODE_ENV === 'production') {
   setInterval(
     () => {
-      refreshSecrets().catch(console.error)
+      refreshSecrets().catch(err => log.error(err, 'Failed to refresh secrets'))
     },
     60 * 60 * 1000
   ) // 1 hour

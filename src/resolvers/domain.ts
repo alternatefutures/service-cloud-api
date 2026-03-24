@@ -20,6 +20,9 @@ import {
 } from '../jobs/sslRenewal.js'
 import { DomainUsageTracker } from '../services/billing/domainUsageTracker.js'
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('resolver-domain')
 
 /**
  * Track domain usage asynchronously without blocking the main operation
@@ -51,13 +54,9 @@ async function trackDomainUsageAsync(
     await trackingFn(domainUsageTracker, customer, subscription)
   } catch (error) {
     // Log error but don't propagate to avoid blocking domain operations
-    console.error(
-      '[Domain Usage Tracking]',
-      error instanceof Error ? error.message : 'Unknown error',
-      {
-        userId,
-        timestamp: new Date().toISOString(),
-      }
+    log.error(
+      { userId, err: error instanceof Error ? error : undefined },
+      `Usage tracking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     )
   }
 }

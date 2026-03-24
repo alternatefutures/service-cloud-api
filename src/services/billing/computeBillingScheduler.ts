@@ -14,6 +14,9 @@ import type { PrismaClient } from '@prisma/client'
 import { getEscrowService } from './escrowService.js'
 import { getBillingApiClient } from './billingApiClient.js'
 import { getPhalaHourlyRate, applyMargin } from '../../config/pricing.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('compute-billing')
 
 export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
@@ -27,7 +30,7 @@ export class ComputeBillingScheduler {
    */
   start() {
     if (this.cronJob) {
-      console.log('[ComputeBilling] Already running')
+      log.info('Already running')
       return
     }
 
@@ -35,7 +38,7 @@ export class ComputeBillingScheduler {
       await this.runBillingCycle()
     })
 
-    console.log('[ComputeBilling] Started — runs daily at 3 AM')
+    log.info('Started — runs daily at 3 AM')
   }
 
   /**
@@ -45,7 +48,7 @@ export class ComputeBillingScheduler {
     if (this.cronJob) {
       this.cronJob.stop()
       this.cronJob = null
-      console.log('[ComputeBilling] Stopped')
+      log.info('Stopped')
     }
   }
 
@@ -65,7 +68,7 @@ export class ComputeBillingScheduler {
       opts.noPause ? 'NO-PAUSE' : null,
     ].filter(Boolean).join(', ')
 
-    console.log('[ComputeBilling] Manual trigger — running billing cycle now' + (flags ? ` (${flags})` : ''))
+    log.info({ flags: flags || undefined }, 'Manual trigger — running billing cycle now')
     try {
       await this.runBillingCycle()
     } finally {
@@ -80,7 +83,7 @@ export class ComputeBillingScheduler {
 
   private async runBillingCycle() {
     const startTime = Date.now()
-    console.log('[ComputeBilling] Starting daily billing cycle...')
+    log.info('Starting daily billing cycle')
 
     const stats = {
       akashProcessed: 0,
@@ -100,22 +103,26 @@ export class ComputeBillingScheduler {
 
       // Step 3: Check balance thresholds and pause if needed
       if (this.noPauseMode) {
-        console.log('[ComputeBilling] Skipping threshold/pause check (--no-pause mode)')
+        log.info('Skipping threshold/pause check (no-pause mode)')
       } else {
         await this.checkThresholds(stats)
       }
 
       const duration = Date.now() - startTime
-      console.log(
-        `[ComputeBilling] Cycle complete: ` +
-        `Akash=${stats.akashProcessed} (${stats.akashErrors} err), ` +
-        `Phala=${stats.phalaProcessed} (${stats.phalaErrors} err), ` +
-        `Paused=${stats.orgsPaused} orgs, ` +
-        `Debited=$${(stats.totalDebitedCents / 100).toFixed(2)}, ` +
-        `Duration=${duration}ms`
+      log.info(
+        {
+          akashProcessed: stats.akashProcessed,
+          akashErrors: stats.akashErrors,
+          phalaProcessed: stats.phalaProcessed,
+          phalaErrors: stats.phalaErrors,
+          orgsPaused: stats.orgsPaused,
+          totalDebitedCents: stats.totalDebitedCents,
+          durationMs: duration,
+        },
+        'Cycle complete'
       )
     } catch (error) {
-      console.error('[ComputeBilling] Fatal error in billing cycle:', error)
+      log.error(error, 'Fatal error in billing cycle')
     }
   }
 
@@ -135,20 +142,25 @@ export class ComputeBillingScheduler {
       include: { akashDeployment: { select: { id: true, status: true } } },
     })
 
-    console.log(`[ComputeBilling] Processing ${activeEscrows.length} active Akash escrows`)
+    log.info({ count: activeEscrows.length }, 'Processing active Akash escrows')
 
     for (const escrow of activeEscrows) {
       try {
         // Skip if deployment is no longer active
         if (escrow.akashDeployment.status !== 'ACTIVE') {
-          console.log(`[ComputeBilling] Akash escrow ${escrow.id}: deployment status=${escrow.akashDeployment.status} — skipping`)
+          log.info({ escrowId: escrow.id, status: escrow.akashDeployment.status }, 'Akash escrow deployment not active — skipping')
           continue
         }
 
-        console.log(
-          `[ComputeBilling] Akash escrow ${escrow.id}: ` +
-          `deployment=${escrow.akashDeploymentId}, rate=$${(escrow.dailyRateCents / 100).toFixed(2)}/day, ` +
-          `consumed=$${(escrow.consumedCents / 100).toFixed(2)}/${(escrow.depositCents / 100).toFixed(2)}`
+        log.info(
+          {
+            escrowId: escrow.id,
+            deploymentId: escrow.akashDeploymentId,
+            dailyRateCents: escrow.dailyRateCents,
+            consumedCents: escrow.consumedCents,
+            depositCents: escrow.depositCents,
+          },
+          'Processing Akash escrow'
         )
 
         const updated = await escrowService.processDailyConsumption(escrow.id, this.forceMode)
@@ -156,16 +168,13 @@ export class ComputeBillingScheduler {
         if (updated) {
           stats.akashProcessed++
           stats.totalDebitedCents += escrow.dailyRateCents
-          console.log(`[ComputeBilling] Akash escrow ${escrow.id}: ✅ consumed $${(escrow.dailyRateCents / 100).toFixed(2)}`)
+          log.info({ escrowId: escrow.id, consumedCents: escrow.dailyRateCents }, 'Akash escrow consumed daily rate')
         } else {
-          console.log(`[ComputeBilling] Akash escrow ${escrow.id}: skipped (too soon since last billing or not active)`)
+          log.info({ escrowId: escrow.id }, 'Akash escrow skipped (too soon since last billing or not active)')
         }
       } catch (error) {
         stats.akashErrors++
-        console.error(
-          `[ComputeBilling] Akash escrow ${escrow.id} error:`,
-          error instanceof Error ? error.message : error
-        )
+        log.error({ escrowId: escrow.id, err: error }, 'Akash escrow error')
       }
     }
   }
@@ -189,14 +198,14 @@ export class ComputeBillingScheduler {
       },
     })
 
-    console.log(`[ComputeBilling] Processing ${activePhala.length} active Phala deployments`)
+    log.info({ count: activePhala.length }, 'Processing active Phala deployments')
 
     const now = new Date()
 
     for (const deployment of activePhala) {
       try {
         if (!deployment.orgBillingId || !deployment.hourlyRateCents) {
-          console.log(`[ComputeBilling] Phala ${deployment.id}: missing orgBillingId or hourlyRateCents — skipping`)
+          log.info({ deploymentId: deployment.id }, 'Phala deployment missing orgBillingId or hourlyRateCents — skipping')
           continue
         }
 
@@ -204,15 +213,20 @@ export class ComputeBillingScheduler {
         const lastBilled = deployment.lastBilledAt || deployment.activeStartedAt || deployment.createdAt
         const hoursSinceLastBill = (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
 
-        console.log(
-          `[ComputeBilling] Phala ${deployment.id}: ` +
-          `lastBilled=${lastBilled.toISOString()}, hoursSince=${hoursSinceLastBill.toFixed(2)}, ` +
-          `rate=$${(deployment.hourlyRateCents / 100).toFixed(2)}/hr, orgBilling=${deployment.orgBillingId}`
+        log.info(
+          {
+            deploymentId: deployment.id,
+            lastBilled: lastBilled.toISOString(),
+            hoursSince: Number(hoursSinceLastBill.toFixed(2)),
+            hourlyRateCents: deployment.hourlyRateCents,
+            orgBillingId: deployment.orgBillingId,
+          },
+          'Processing Phala deployment'
         )
 
         // Don't bill if less than 1 hour since last billing (skip in force mode)
         if (hoursSinceLastBill < 1 && !this.forceMode) {
-          console.log(`[ComputeBilling] Phala ${deployment.id}: <1h since last bill — skipping (use --force to override)`)
+          log.info({ deploymentId: deployment.id }, 'Phala deployment <1h since last bill — skipping')
           continue
         }
 
@@ -221,7 +235,7 @@ export class ComputeBillingScheduler {
         const amountCents = billableHours * deployment.hourlyRateCents
 
         if (amountCents <= 0) {
-          console.log(`[ComputeBilling] Phala ${deployment.id}: amountCents=0 — skipping`)
+          log.info({ deploymentId: deployment.id }, 'Phala deployment amountCents=0 — skipping')
           continue
         }
 
@@ -229,8 +243,9 @@ export class ComputeBillingScheduler {
         const runId = this.forceMode ? `force_${Date.now()}` : dateKey
         const idempotencyKey = `phala_daily:${deployment.id}:${runId}`
 
-        console.log(
-          `[ComputeBilling] Phala ${deployment.id}: billing ${billableHours}h × $${(deployment.hourlyRateCents / 100).toFixed(2)} = $${(amountCents / 100).toFixed(2)}`
+        log.info(
+          { deploymentId: deployment.id, billableHours, hourlyRateCents: deployment.hourlyRateCents, amountCents },
+          'Billing Phala deployment'
         )
 
         const result = await billingApi.computeDebit({
@@ -244,7 +259,7 @@ export class ComputeBillingScheduler {
         })
 
         if (result.alreadyProcessed) {
-          console.log(`[ComputeBilling] Phala ${deployment.id}: already processed (idempotency hit)`)
+          log.info({ deploymentId: deployment.id }, 'Phala deployment already processed (idempotency hit)')
         } else {
           // Update Phala deployment billing state
           await this.prisma.phalaDeployment.update({
@@ -257,7 +272,7 @@ export class ComputeBillingScheduler {
 
           stats.phalaProcessed++
           stats.totalDebitedCents += amountCents
-          console.log(`[ComputeBilling] Phala ${deployment.id}: ✅ debited $${(amountCents / 100).toFixed(2)}`)
+          log.info({ deploymentId: deployment.id, debitedCents: amountCents }, 'Phala deployment debited')
         }
       } catch (error) {
         stats.phalaErrors++
@@ -265,16 +280,12 @@ export class ComputeBillingScheduler {
 
         // If insufficient balance, mark for pausing (handled in threshold check)
         if (errMsg.includes('INSUFFICIENT_BALANCE')) {
-          console.warn(`[ComputeBilling] Phala ${deployment.id}: insufficient balance — will pause`)
+          log.warn({ deploymentId: deployment.id }, 'Phala deployment insufficient balance — will pause')
         } else {
-          console.error(`[ComputeBilling] Phala ${deployment.id} error:`, errMsg)
-          // Log the full error in debug mode
-          if (error instanceof Error && error.stack) {
-            console.error(`[ComputeBilling] Stack:`, error.stack)
-          }
-          if ((error as any).body) {
-            console.error(`[ComputeBilling] Response body:`, JSON.stringify((error as any).body))
-          }
+          log.error(
+            { deploymentId: deployment.id, err: error, body: (error as any).body },
+            'Phala deployment error'
+          )
         }
       }
     }
@@ -323,16 +334,16 @@ export class ComputeBillingScheduler {
         const balanceInfo = await billingApi.getOrgBalance(orgBillingId)
 
         if (balanceInfo.balanceCents < dailyCostCents) {
-          console.warn(
-            `[ComputeBilling] Org ${orgId} balance ($${(balanceInfo.balanceCents / 100).toFixed(2)}) ` +
-            `< 1 day burn ($${(dailyCostCents / 100).toFixed(2)}). PAUSING deployments.`
+          log.warn(
+            { orgId, balanceCents: balanceInfo.balanceCents, dailyCostCents },
+            'Org balance below 1-day burn — pausing deployments'
           )
 
           await this.pauseOrgDeployments(orgBillingId, orgId, balanceInfo.balanceCents, dailyCostCents)
           stats.orgsPaused++
         }
       } catch (error) {
-        console.error(`[ComputeBilling] Threshold check failed for org ${orgBillingId}:`, error)
+        log.error({ orgBillingId, err: error }, 'Threshold check failed')
       }
     }
   }
@@ -380,7 +391,7 @@ export class ComputeBillingScheduler {
           const orchestrator = getAkashOrchestrator(this.prisma)
           await orchestrator.closeDeployment(Number(deployment.dseq))
         } catch (err) {
-          console.warn(`[ComputeBilling] Failed to close Akash dseq=${deployment.dseq} on-chain:`, err)
+          log.warn({ dseq: deployment.dseq, err }, 'Failed to close Akash deployment on-chain')
         }
 
         // Pause escrow
@@ -390,7 +401,7 @@ export class ComputeBillingScheduler {
 
         pausedServices.push(`Akash: dseq=${deployment.dseq}`)
       } catch (error) {
-        console.error(`[ComputeBilling] Failed to pause Akash ${deployment.id}:`, error)
+        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Akash deployment')
       }
     }
 
@@ -415,7 +426,7 @@ export class ComputeBillingScheduler {
 
         pausedServices.push(`Phala: ${deployment.name}`)
       } catch (error) {
-        console.error(`[ComputeBilling] Failed to pause Phala ${deployment.id}:`, error)
+        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Phala deployment')
       }
     }
 
@@ -433,7 +444,7 @@ export class ComputeBillingScheduler {
           pausedServices,
         })
       } catch (error) {
-        console.error(`[ComputeBilling] Failed to send pause notification for org ${orgId}:`, error)
+        log.error({ orgId, err: error }, 'Failed to send pause notification')
       }
     }
   }

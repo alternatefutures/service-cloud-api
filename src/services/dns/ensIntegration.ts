@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
 
 const prisma = new PrismaClient()
+const log = createLogger('ens')
 
 export interface EnsConfig {
   providerUrl?: string // Ethereum RPC provider URL
@@ -99,7 +101,7 @@ export async function getEnsContentHash(
 
     return domain?.ensContentHash || null
   } catch (error) {
-    console.error('ENS content hash lookup failed:', error)
+    log.error(error, 'ENS content hash lookup failed')
     return null
   }
 }
@@ -132,7 +134,7 @@ export async function verifyEnsOwnership(
     // Placeholder implementation
     return true
   } catch (error) {
-    console.error('ENS ownership verification failed:', error)
+    log.error(error, 'ENS ownership verification failed')
     return false
   }
 }
@@ -190,9 +192,9 @@ export async function updateEnsOnDeploy(
     if (domain.ensName) {
       try {
         await setEnsContentHash(domain.id, domain.ensName, contentHash, config)
-        console.log(`Updated ENS record ${domain.ensName} to CID ${newCid}`)
+        log.info(`Updated ENS record ${domain.ensName} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update ENS record ${domain.ensName}:`, error)
+        log.error(error, `Failed to update ENS record ${domain.ensName}`)
       }
     }
   }
@@ -220,7 +222,7 @@ export async function checkEnsAvailability(
 
     return !existing
   } catch (error) {
-    console.error('ENS availability check failed:', error)
+    log.error(error, 'ENS availability check failed')
     return false
   }
 }
@@ -248,7 +250,7 @@ export async function getEnsRecord(
       resolver: 'unknown', // Would query from ENS registry
     }
   } catch (error) {
-    console.error('Failed to get ENS record:', error)
+    log.error(error, 'Failed to get ENS record')
     return null
   }
 }

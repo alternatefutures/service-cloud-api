@@ -13,6 +13,10 @@
  * using the org's active plan usageMarkup rate.
  */
 
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('pricing')
+
 // ============================================
 // DEFAULT PLAN MARGINS (fallbacks — actual per-org
 // margin comes from SubscriptionPlan.usageMarkup)
@@ -113,7 +117,7 @@ export async function getAktUsdPrice(): Promise<number> {
       return price
     }
   } catch (err) {
-    console.warn('[pricing] CoinGecko AKT price fetch failed, using fallback:', (err as Error).message)
+    log.warn({ err: (err as Error).message }, 'CoinGecko AKT price fetch failed, using fallback')
   }
 
   return _aktCache?.price ?? AKT_USD_PRICE_FALLBACK

@@ -4,8 +4,10 @@ import {
   shouldRenewCertificate,
   requestSslCertificate,
 } from '../services/dns/sslCertificate.js'
+import { createLogger } from '../lib/logger.js'
 
 const prisma = new PrismaClient()
+const log = createLogger('ssl-renewal')
 
 /**
  * Check all domains for SSL certificate expiration and renew if needed
@@ -14,17 +16,17 @@ const prisma = new PrismaClient()
 export function startSslRenewalJob() {
   // Run every day at 2:00 AM
   cron.schedule('0 2 * * *', async () => {
-    console.log('[SSL Renewal] Starting SSL certificate renewal check...')
+    log.info('Starting SSL certificate renewal check')
 
     try {
       await checkAndRenewCertificates()
-      console.log('[SSL Renewal] SSL renewal check completed successfully')
+      log.info('SSL renewal check completed successfully')
     } catch (error) {
-      console.error('[SSL Renewal] Error during SSL renewal check:', error)
+      log.error(error, 'Error during SSL renewal check')
     }
   })
 
-  console.log('[SSL Renewal] SSL renewal cron job started (runs daily at 2 AM)')
+  log.info('SSL renewal cron job started (runs daily at 2 AM)')
 }
 
 /**
@@ -55,8 +57,8 @@ export async function checkAndRenewCertificates() {
     },
   })
 
-  console.log(
-    `[SSL Renewal] Found ${domainsWithSsl.length} domains with active SSL certificates`
+  log.info(
+    `Found ${domainsWithSsl.length} domains with active SSL certificates`
   )
 
   const renewalResults = {
@@ -77,8 +79,8 @@ export async function checkAndRenewCertificates() {
         continue
       }
 
-      console.log(
-        `[SSL Renewal] Renewing certificate for ${domain.hostname} (expires: ${domain.sslExpiresAt})`
+      log.info(
+        `Renewing certificate for ${domain.hostname} (expires: ${domain.sslExpiresAt})`
       )
 
       // Set status to pending
@@ -107,17 +109,17 @@ export async function checkAndRenewCertificates() {
       })
 
       renewalResults.renewed++
-      console.log(
-        `[SSL Renewal] Successfully renewed certificate for ${domain.hostname}`
+      log.info(
+        `Successfully renewed certificate for ${domain.hostname}`
       )
 
       // TODO: Store new certificate and private key securely
       // TODO: Send notification email to site owner
     } catch (error: any) {
       renewalResults.failed++
-      console.error(
-        `[SSL Renewal] Failed to renew certificate for ${domain.hostname}:`,
-        error.message
+      log.error(
+        error,
+        `Failed to renew certificate for ${domain.hostname}`
       )
 
       // Update domain with failed status
@@ -130,7 +132,7 @@ export async function checkAndRenewCertificates() {
     }
   }
 
-  console.log('[SSL Renewal] Renewal summary:', renewalResults)
+  log.info(renewalResults, 'Renewal summary')
 
   return renewalResults
 }
@@ -205,8 +207,8 @@ export async function renewSslCertificate(domainId: string) {
     throw new Error('Domain must be verified before renewing SSL certificate')
   }
 
-  console.log(
-    `[SSL Renewal] Manually renewing certificate for ${domain.hostname}`
+  log.info(
+    `Manually renewing certificate for ${domain.hostname}`
   )
 
   // Set status to pending
@@ -232,8 +234,8 @@ export async function renewSslCertificate(domainId: string) {
       },
     })
 
-    console.log(
-      `[SSL Renewal] Successfully renewed certificate for ${domain.hostname}`
+    log.info(
+      `Successfully renewed certificate for ${domain.hostname}`
     )
 
     return cert

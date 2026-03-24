@@ -13,6 +13,9 @@
 import type { PrismaClient, DeploymentEscrow, EscrowStatus } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('escrow-service')
 
 /** Default escrow covers 30 days of estimated deployment cost */
 const DEFAULT_ESCROW_DAYS = 30
@@ -85,9 +88,9 @@ export class EscrowService {
       },
     })
 
-    console.log(
-      `[EscrowService] Created escrow for deployment ${args.akashDeploymentId}: ` +
-      `$${(depositCents / 100).toFixed(2)} deposit, $${(dailyRateCents / 100).toFixed(2)}/day`
+    log.info(
+      { deploymentId: args.akashDeploymentId, depositCents, dailyRateCents },
+      'Created escrow for deployment'
     )
 
     return escrow
@@ -190,12 +193,12 @@ export class EscrowService {
     })
 
     if (!escrow) {
-      console.log(`[EscrowService] No escrow found for deployment ${akashDeploymentId}`)
+      log.info({ deploymentId: akashDeploymentId }, 'No escrow found for deployment')
       return 0
     }
 
     if (escrow.status === 'REFUNDED') {
-      console.log(`[EscrowService] Escrow already refunded for deployment ${akashDeploymentId}`)
+      log.info({ deploymentId: akashDeploymentId }, 'Escrow already refunded for deployment')
       return escrow.refundedCents
     }
 
@@ -210,7 +213,7 @@ export class EscrowService {
           description: `Akash escrow refund — deployment closed ($${(remaining / 100).toFixed(2)})`,
         })
       } catch (error) {
-        console.error(`[EscrowService] Failed to refund escrow for ${akashDeploymentId}:`, error)
+        log.error({ deploymentId: akashDeploymentId, err: error }, 'Failed to refund escrow')
         // Still mark as refunded to prevent double-refund attempts
       }
     }
@@ -223,9 +226,7 @@ export class EscrowService {
       },
     })
 
-    console.log(
-      `[EscrowService] Refunded $${(remaining / 100).toFixed(2)} for deployment ${akashDeploymentId}`
-    )
+    log.info({ deploymentId: akashDeploymentId, refundedCents: remaining }, 'Refunded escrow for deployment')
 
     return remaining
   }

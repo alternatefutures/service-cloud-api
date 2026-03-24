@@ -17,6 +17,9 @@ import {
   type PhalaPollStatusPayload,
   type PhalaHandleFailurePayload,
 } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('phala-steps')
 
 const PHALA_TERMINAL_STATES = new Set<string>([
   'ACTIVE', 'FAILED', 'STOPPED', 'DELETED', 'PERMANENTLY_FAILED',
@@ -30,7 +33,7 @@ function getPhalaEnv(): Record<string, string> {
 
 async function runPhalaAsync(args: string[], timeout = 120_000): Promise<string> {
   const env = getPhalaEnv()
-  console.log(`[PhalaSteps] Running: npx phala ${args.join(' ')}`)
+  log.info(`Running: npx phala ${args.join(' ')}`)
   return execAsync('npx', ['phala', ...args], { env, timeout })
 }
 
@@ -86,9 +89,9 @@ async function failDirectly(prisma: PrismaClient, deploymentId: string, errorMes
       where: { id: deploymentId },
       data: { status: 'FAILED', errorMessage: `[Queue failure] ${errorMessage}` },
     })
-    console.error(`[PhalaSteps] Wrote FAILED directly for ${deploymentId} (enqueue failed)`)
+    log.error(`Wrote FAILED directly for ${deploymentId} (enqueue failed)`)
   } catch (dbErr) {
-    console.error(`[PhalaSteps] CRITICAL: Could not even write FAILED for ${deploymentId}:`, dbErr)
+    log.error({ err: dbErr }, `CRITICAL: Could not even write FAILED for ${deploymentId}`)
   }
 }
 
@@ -133,7 +136,7 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
         for (const { key, value } of resolved) envVars[key] = value
       }
     } catch (err) {
-      console.warn('[PhalaSteps] Failed to resolve persisted env vars:', err)
+      log.warn(err as Error, 'Failed to resolve persisted env vars')
     }
 
     const envLines = Object.entries(envVars).map(([k, v]) => `${k}=${v}`).join('\n')
@@ -210,7 +213,7 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
 
       emitProgress(deploymentId, 'POLL_STATUS', PHALA_STEP_NUMBERS.POLL_STATUS, deployment.retryCount, 'CVM is now active!')
       deploymentEvents.emitStatus({ deploymentId, status: 'ACTIVE', timestamp: new Date() })
-      console.log(`[PhalaSteps] Deployment ${deploymentId} is ACTIVE: ${appUrl}`)
+      log.info(`Deployment ${deploymentId} is ACTIVE: ${appUrl}`)
       return
     }
 
@@ -260,7 +263,7 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
 
   // Guard: don't demote terminal states (stale/duplicate messages)
   if (PHALA_TERMINAL_STATES.has(deployment.status)) {
-    console.warn(`[PhalaSteps] Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`)
+    log.warn(`Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`)
     return
   }
 
@@ -274,13 +277,13 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
   emitProgress(deploymentId, 'HANDLE_FAILURE', PHALA_STEP_NUMBERS.HANDLE_FAILURE, retryCount, `Deployment failed: ${errorMessage}`, errorMessage)
 
   if (retryCount < MAX_RETRY_COUNT) {
-    console.log(`[PhalaSteps] Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for Phala deployment ${deploymentId}`)
+    log.info(`Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for Phala deployment ${deploymentId}`)
 
     if (deployment.appId && deployment.appId !== 'pending') {
       try {
         await runPhalaAsync(['cvms', 'delete', deployment.appId, '--force'], 30_000)
       } catch (delErr) {
-        console.warn(`[PhalaSteps] Failed to delete CVM for retry:`, delErr instanceof Error ? delErr.message : delErr)
+        log.warn({ detail: delErr instanceof Error ? delErr.message : delErr }, 'Failed to delete CVM for retry')
       }
     }
 
@@ -312,14 +315,14 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
       await failDirectly(prisma, newDeployment.id, 'Failed to enqueue retry step')
     }
   } else {
-    console.error(`[PhalaSteps] Phala deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`)
+    log.error(`Phala deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`)
 
     // Clean up the CVM on Phala Cloud
     if (deployment.appId && deployment.appId !== 'pending') {
       try {
         await runPhalaAsync(['cvms', 'delete', deployment.appId, '--force'], 30_000)
       } catch (delErr) {
-        console.warn(`[PhalaSteps] Failed to delete CVM on permanent failure:`, delErr instanceof Error ? delErr.message : delErr)
+        log.warn({ detail: delErr instanceof Error ? delErr.message : delErr }, 'Failed to delete CVM on permanent failure')
       }
     }
 

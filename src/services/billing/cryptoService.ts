@@ -7,6 +7,9 @@
 import { ethers } from 'ethers'
 import { Connection, PublicKey } from '@solana/web3.js'
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('crypto-service')
 
 export class CryptoService {
   private ethProvider: ethers.JsonRpcProvider
@@ -88,7 +91,7 @@ export class CryptoService {
       // Add support for Arweave, Filecoin as needed
       return false
     } catch (error) {
-      console.error('Transaction verification failed:', error)
+      log.error(error, 'Transaction verification failed')
       return false
     }
   }
@@ -241,7 +244,7 @@ export class CryptoService {
         }
       }
     } catch (error) {
-      console.error('Payment verification failed:', error)
+      log.error(error, 'Payment verification failed')
       await this.prisma.payment.update({
         where: { id: paymentId },
         data: {

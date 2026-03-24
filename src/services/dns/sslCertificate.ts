@@ -1,7 +1,9 @@
 import acme from 'acme-client'
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
 
 const prisma = new PrismaClient()
+const log = createLogger('ssl-certificate')
 
 export interface SslCertificate {
   certificateId: string
@@ -201,14 +203,11 @@ export async function autoRenewCertificates(email: string): Promise<void> {
   for (const domain of domains) {
     if (domain.sslExpiresAt && shouldRenewCertificate(domain.sslExpiresAt)) {
       try {
-        console.log(`Auto-renewing certificate for ${domain.hostname}`)
+        log.info(`Auto-renewing certificate for ${domain.hostname}`)
         await renewSslCertificate(domain.id, email)
-        console.log(`Successfully renewed certificate for ${domain.hostname}`)
+        log.info(`Successfully renewed certificate for ${domain.hostname}`)
       } catch (error) {
-        console.error(
-          `Failed to renew certificate for ${domain.hostname}:`,
-          error
-        )
+        log.error(error, `Failed to renew certificate for ${domain.hostname}`)
         await prisma.domain.update({
           where: { id: domain.id },
           data: { sslStatus: 'FAILED' },
@@ -227,7 +226,7 @@ async function storeHttpChallenge(
   keyAuth: string
 ): Promise<void> {
   // Store in Redis or database for /.well-known/acme-challenge/{token} endpoint
-  console.log(`Store HTTP challenge for ${domain}: ${token} = ${keyAuth}`)
+  log.info(`Store HTTP challenge for ${domain}: ${token} = ${keyAuth}`)
   // TODO: Implement challenge storage
 }
 
@@ -235,7 +234,7 @@ async function removeHttpChallenge(
   domain: string,
   token: string
 ): Promise<void> {
-  console.log(`Remove HTTP challenge for ${domain}: ${token}`)
+  log.info(`Remove HTTP challenge for ${domain}: ${token}`)
   // TODO: Implement challenge removal
 }
 
@@ -244,7 +243,7 @@ async function storeDnsChallenge(
   token: string,
   dnsRecord: string
 ): Promise<void> {
-  console.log(`Store DNS challenge for ${domain}: ${token} = ${dnsRecord}`)
+  log.info(`Store DNS challenge for ${domain}: ${token} = ${dnsRecord}`)
   // TODO: Implement DNS challenge storage (requires DNS management API)
 }
 
@@ -252,6 +251,6 @@ async function removeDnsChallenge(
   domain: string,
   token: string
 ): Promise<void> {
-  console.log(`Remove DNS challenge for ${domain}: ${token}`)
+  log.info(`Remove DNS challenge for ${domain}: ${token}`)
   // TODO: Implement DNS challenge removal
 }

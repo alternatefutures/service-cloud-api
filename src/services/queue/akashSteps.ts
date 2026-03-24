@@ -27,6 +27,9 @@ import {
   type AkashPollUrlsPayload,
   type AkashHandleFailurePayload,
 } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('akash-steps')
 
 const AKASH_CLI_TIMEOUT_MS = 120_000
 
@@ -64,7 +67,7 @@ async function runAkashAsync(
   timeout = AKASH_CLI_TIMEOUT_MS
 ): Promise<string> {
   const env = getAkashEnv()
-  console.log(`[AkashSteps] Running: akash ${args.join(' ')}`)
+  log.info(`Running: akash ${args.join(' ')}`)
   return execAsync('akash', args, { env, timeout })
 }
 
@@ -73,7 +76,7 @@ async function runProviderServicesAsync(
   timeout = AKASH_CLI_TIMEOUT_MS
 ): Promise<string> {
   const env = getAkashEnv()
-  console.log(`[AkashSteps] Running: provider-services ${args.join(' ')}`)
+  log.info(`Running: provider-services ${args.join(' ')}`)
   return execAsync('provider-services', args, { env, timeout })
 }
 
@@ -193,14 +196,9 @@ async function failDirectly(
         errorMessage: `[Queue failure] ${errorMessage}`,
       },
     })
-    console.error(
-      `[AkashSteps] Wrote FAILED directly for ${deploymentId} (enqueue failed)`
-    )
+    log.error(`Wrote FAILED directly for ${deploymentId} (enqueue failed)`)
   } catch (dbErr) {
-    console.error(
-      `[AkashSteps] CRITICAL: Could not even write FAILED for ${deploymentId}:`,
-      dbErr
-    )
+    log.error({ err: dbErr }, `CRITICAL: Could not even write FAILED for ${deploymentId}`)
   }
 }
 
@@ -277,8 +275,8 @@ export async function handleSubmitTx(
         }>
       | undefined
     if (logs) {
-      for (const log of logs) {
-        for (const event of log.events || []) {
+      for (const entry of logs) {
+        for (const event of entry.events || []) {
           const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
           if (dseqAttr) {
             dseq = parseInt(dseqAttr.value, 10)
@@ -309,8 +307,8 @@ export async function handleSubmitTx(
               }>
             | undefined
           if (txLogs) {
-            for (const log of txLogs) {
-              for (const event of log.events || []) {
+            for (const entry of txLogs) {
+              for (const event of entry.events || []) {
                 const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
                 if (dseqAttr) {
                   dseq = parseInt(dseqAttr.value, 10)
@@ -331,10 +329,7 @@ export async function handleSubmitTx(
 
           if (dseq) break
         } catch (err) {
-          console.warn(
-            `[AkashSteps] tx query attempt failed, retrying...`,
-            (err as Error).message?.slice(0, 120)
-          )
+          log.warn({ detail: (err as Error).message?.slice(0, 120) }, 'tx query attempt failed, retrying...')
         }
       }
     }
@@ -501,9 +496,7 @@ export async function handleCheckBids(
     // polling attempts, wait for more bids before settling on unverified
     const hasPreferred = safeBids.some(b => providerSelector.isPreferredProvider(b.bidId.provider))
     if (!hasPreferred && attempt < BID_POLL_MAX_ATTEMPTS) {
-      console.log(
-        `[ProviderSelector] ${safeBids.length} bid(s) but none preferred — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`
-      )
+      log.info(`${safeBids.length} bid(s) but none preferred — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`)
       await enqueueNext(
         '/queue/akash/step',
         {
@@ -607,10 +600,7 @@ async function resolveProviderGpuModel(
       if (gpuMatch?.[2]) return `${gpuMatch[1]}-${gpuMatch[2]}`
     }
   } catch (err) {
-    console.warn(
-      `[AkashSteps] Could not resolve GPU model for provider ${providerAddr}:`,
-      err instanceof Error ? err.message : err
-    )
+    log.warn({ detail: err instanceof Error ? err.message : err }, `Could not resolve GPU model for provider ${providerAddr}`)
   }
   return null
 }
@@ -948,10 +938,7 @@ async function finalizeDeployment(
       })
     }
   } catch (escrowErr) {
-    console.warn(
-      `[AkashSteps] Escrow creation failed for ${deployment.id}:`,
-      escrowErr instanceof Error ? escrowErr.message : escrowErr
-    )
+    log.warn({ detail: escrowErr instanceof Error ? escrowErr.message : escrowErr }, `Escrow creation failed for ${deployment.id}`)
   }
 
   let gpuModelUpdate: string | undefined
@@ -1003,9 +990,7 @@ async function finalizeDeployment(
     timestamp: new Date(),
   })
 
-  console.log(
-    `[AkashSteps] Deployment ${deployment.id} is ACTIVE: ${invokeUrl}`
-  )
+  log.info(`Deployment ${deployment.id} is ACTIVE: ${invokeUrl}`)
 }
 
 // ── FAILURE handler ───────────────────────────────────────────────────
@@ -1023,9 +1008,7 @@ export async function handleFailure(
 
   // Guard: don't demote terminal states (stale/duplicate messages)
   if (AKASH_TERMINAL_STATES.has(deployment.status)) {
-    console.warn(
-      `[AkashSteps] Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`
-    )
+    log.warn(`Ignoring HANDLE_FAILURE for ${deploymentId} — already in terminal state ${deployment.status}`)
     return
   }
 
@@ -1046,9 +1029,7 @@ export async function handleFailure(
   )
 
   if (retryCount < MAX_RETRY_COUNT) {
-    console.log(
-      `[AkashSteps] Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`
-    )
+    log.info(`Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`)
 
     if (deployment.dseq && Number(deployment.dseq) > 0) {
       try {
@@ -1063,10 +1044,7 @@ export async function handleFailure(
           '-y',
         ])
       } catch (closeErr) {
-        console.warn(
-          `[AkashSteps] Failed to close on-chain deployment for retry:`,
-          closeErr instanceof Error ? closeErr.message : closeErr
-        )
+        log.warn({ detail: closeErr instanceof Error ? closeErr.message : closeErr }, 'Failed to close on-chain deployment for retry')
       }
     }
 
@@ -1108,9 +1086,7 @@ export async function handleFailure(
       )
     }
   } else {
-    console.error(
-      `[AkashSteps] Deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`
-    )
+    log.error(`Deployment ${deploymentId} permanently failed after ${MAX_RETRY_COUNT} retries`)
 
     // Close on-chain deployment to stop leaking AKT
     if (deployment.dseq && Number(deployment.dseq) > 0) {
@@ -1126,10 +1102,7 @@ export async function handleFailure(
           '-y',
         ])
       } catch (closeErr) {
-        console.warn(
-          `[AkashSteps] Failed to close on-chain deployment on permanent failure:`,
-          closeErr instanceof Error ? closeErr.message : closeErr
-        )
+        log.warn({ detail: closeErr instanceof Error ? closeErr.message : closeErr }, 'Failed to close on-chain deployment on permanent failure')
       }
     }
 

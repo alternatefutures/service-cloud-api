@@ -14,6 +14,9 @@
 import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
 import { UsageBuffer } from './usageBuffer.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('usage-aggregator')
 
 export class UsageAggregator {
   private cronJob: cron.ScheduledTask | null = null
@@ -34,7 +37,7 @@ export class UsageAggregator {
    */
   start() {
     if (this.cronJob) {
-      console.log('[UsageAggregator] Already running')
+      log.info('Already running')
       return
     }
 
@@ -43,9 +46,7 @@ export class UsageAggregator {
       await this.flush()
     })
 
-    console.log(
-      '[UsageAggregator] Started - flushes buffered usage every minute'
-    )
+    log.info('Started — flushes buffered usage every minute')
   }
 
   /**
@@ -55,7 +56,7 @@ export class UsageAggregator {
     if (this.cronJob) {
       this.cronJob.stop()
       this.cronJob = null
-      console.log('[UsageAggregator] Stopped')
+      log.info('Stopped')
     }
   }
 
@@ -65,9 +66,7 @@ export class UsageAggregator {
    */
   private async flush() {
     if (this.isProcessing) {
-      console.log(
-        '[UsageAggregator] Previous flush still processing, skipping...'
-      )
+      log.info('Previous flush still processing, skipping')
       return
     }
 
@@ -79,14 +78,12 @@ export class UsageAggregator {
       const bufferedUsage = await this.usageBuffer.getAllBufferedUsage()
 
       if (bufferedUsage.size === 0) {
-        console.log('[UsageAggregator] No buffered usage to flush')
+        log.info('No buffered usage to flush')
         this.isProcessing = false
         return
       }
 
-      console.log(
-        `[UsageAggregator] Flushing usage for ${bufferedUsage.size} users...`
-      )
+      log.info({ userCount: bufferedUsage.size }, 'Flushing buffered usage')
 
       let successCount = 0
       let errorCount = 0
@@ -108,9 +105,7 @@ export class UsageAggregator {
           })
 
           if (!customer) {
-            console.warn(
-              `[UsageAggregator] Customer not found for user ${userId}`
-            )
+            log.warn({ userId }, 'Customer not found')
             errorCount++
             continue
           }
@@ -208,28 +203,21 @@ export class UsageAggregator {
 
           successCount++
         } catch (error) {
-          console.error(
-            `[UsageAggregator] Failed to flush usage for user ${userId}:`,
-            error
-          )
+          log.error({ userId, err: error }, 'Failed to flush usage for user')
           errorCount++
           // Continue processing other users even if one fails
         }
       }
 
       const duration = Date.now() - startTime
-      console.log(
-        `[UsageAggregator] Completed: ${successCount} users flushed, ${errorCount} failed (${duration}ms)`
-      )
+      log.info({ successCount, errorCount, durationMs: duration }, 'Flush completed')
 
       // Log stats for monitoring
       if (duration > 5000) {
-        console.warn(
-          `[UsageAggregator] Flush took ${duration}ms - consider optimizing or scaling`
-        )
+        log.warn({ durationMs: duration }, 'Flush took too long — consider optimizing or scaling')
       }
     } catch (error) {
-      console.error('[UsageAggregator] Error during flush:', error)
+      log.error(error, 'Error during flush')
     } finally {
       this.isProcessing = false
     }
@@ -239,7 +227,7 @@ export class UsageAggregator {
    * Manual flush trigger (for testing or maintenance)
    */
   async runNow() {
-    console.log('[UsageAggregator] Manual flush triggered')
+    log.info('Manual flush triggered')
     await this.flush()
   }
 
@@ -260,7 +248,7 @@ export class UsageAggregator {
    * Graceful shutdown
    */
   async shutdown() {
-    console.log('[UsageAggregator] Shutting down...')
+    log.info('Shutting down')
 
     // Stop accepting new flush jobs
     this.stop()
@@ -278,14 +266,12 @@ export class UsageAggregator {
     }
 
     if (this.isProcessing) {
-      console.warn(
-        '[UsageAggregator] Shutdown timeout - flush may be incomplete'
-      )
+      log.warn('Shutdown timeout — flush may be incomplete')
     }
 
     // Disconnect from database
     await this.usageBuffer.disconnect()
 
-    console.log('[UsageAggregator] Shutdown complete')
+    log.info('Shutdown complete')
   }
 }

@@ -7,6 +7,9 @@
 
 import { GraphQLError } from 'graphql'
 import { getBillingApiClient } from '../services/billing/billingApiClient.js'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('subscription-check')
 
 export async function assertSubscriptionActive(organizationId?: string): Promise<void> {
   if (!organizationId) return
@@ -24,6 +27,6 @@ export async function assertSubscriptionActive(organizationId?: string): Promise
   } catch (error) {
     if (error instanceof GraphQLError) throw error
     // If the billing API is unreachable, allow the deploy (fail-open)
-    console.warn('[subscriptionCheck] Failed to check subscription status:', error)
+    log.warn(error as Error, 'failed to check subscription status — allowing deploy (fail-open)')
   }
 }

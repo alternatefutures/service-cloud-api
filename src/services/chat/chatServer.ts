@@ -19,6 +19,9 @@ import {
   type WSSendMessagePayload,
   type WSErrorPayload,
 } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('chat-server')
 
 export class ChatServer {
   private wss: WebSocketServer
@@ -47,25 +50,25 @@ export class ChatServer {
    */
   private setupWebSocketServer(): void {
     this.wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
-      console.log('📡 New WebSocket connection')
+      log.info('New WebSocket connection')
 
       ws.on('message', async (data: Buffer) => {
         try {
           const message: WSMessage = JSON.parse(data.toString())
           await this.handleMessage(ws, message)
         } catch (error) {
-          console.error('Error handling message:', error)
+          log.error(error, 'Error handling message')
           this.sendError(ws, 'INVALID_MESSAGE', 'Invalid message format')
         }
       })
 
       ws.on('close', () => {
         this.connectionManager.removeConnection(ws)
-        console.log('❌ WebSocket connection closed')
+        log.info('WebSocket connection closed')
       })
 
       ws.on('error', error => {
-        console.error('WebSocket error:', error)
+        log.error(error, 'WebSocket error')
       })
 
       ws.on('pong', () => {
@@ -145,7 +148,7 @@ export class ChatServer {
         },
       })
 
-      console.log(`✅ User ${decoded.userId} authenticated`)
+      log.info(`User ${decoded.userId} authenticated`)
     } catch (error) {
       this.sendError(ws, 'AUTH_FAILED', 'Authentication failed')
       ws.close()
@@ -247,7 +250,7 @@ export class ChatServer {
         },
       })
     } catch (error) {
-      console.error('Error handling send message:', error)
+      log.error(error, 'Error handling send message')
       this.sendError(ws, 'MESSAGE_FAILED', 'Failed to send message')
     }
   }
@@ -324,7 +327,7 @@ export class ChatServer {
    * Graceful shutdown
    */
   async shutdown(): Promise<void> {
-    console.log('Shutting down chat server...')
+    log.info('Shutting down chat server...')
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer)
       this.cleanupTimer = null

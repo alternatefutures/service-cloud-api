@@ -71,8 +71,47 @@ jobs:
           kubectl exec deployment/service-cloud-api -n af-production -- prisma migrate deploy
 
       - name: Verify deployment
+        id: verify
         run: |
           kubectl get pods -n af-production -l app=service-cloud-api
           echo "---"
           sleep 10
-          curl -sf --max-time 10 https://api.alternatefutures.ai/health && echo "API healthy" || echo "::warning::Health check did not pass yet"
+          if curl -sf --max-time 15 https://api.alternatefutures.ai/health; then
+            echo "API healthy"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::Health check did not pass"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Discord notification (success)
+        if: success()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK_URL" ] && exit 0
+          curl -sf -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"✅ service-cloud-api deployed\",
+              \"description\": \"Commit: \`${GITHUB_SHA::7}\`\nHealth: ${{ steps.verify.outputs.healthy == 'true' && 'passing' || 'pending' }}\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
+              \"color\": 3066993,
+              \"footer\": {\"text\": \"AlternateFutures Deploy\"},
+              \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+            }]
+          }" "$DISCORD_WEBHOOK_URL"
+
+      - name: Discord notification (failure)
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          [ -z "$DISCORD_WEBHOOK_URL" ] && exit 0
+          curl -sf -H "Content-Type: application/json" -d "{
+            \"embeds\": [{
+              \"title\": \"❌ service-cloud-api deploy FAILED\",
+              \"description\": \"Commit: \`${GITHUB_SHA::7}\`\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
+              \"color\": 15548997,
+              \"footer\": {\"text\": \"AlternateFutures Deploy\"},
+              \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+            }]
+          }" "$DISCORD_WEBHOOK_URL"

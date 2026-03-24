@@ -16,6 +16,9 @@ import { verifyWebhookSignature, isQStashEnabled } from './qstashClient.js'
 import { handleSubmitTx, handleCheckBids, handleCreateLease, handleSendManifest, handlePollUrls, handleFailure } from './akashSteps.js'
 import { handleDeployCvm, handlePollStatus, handlePhalaFailure } from './phalaSteps.js'
 import type { AkashJobPayload, PhalaJobPayload } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('webhook-handler')
 
 let _prisma: PrismaClient
 
@@ -113,7 +116,7 @@ export async function handleAkashWebhook(req: IncomingMessage, res: ServerRespon
     await handleAkashStep(payload)
     sendJson(res, 200, { ok: true, step: payload.step })
   } catch (err) {
-    console.error(`[QueueHandler] Akash step ${payload.step} failed:`, err)
+    log.error(err as Error, `Akash step ${payload.step} failed`)
     sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
   }
 }
@@ -156,7 +159,7 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
     await handlePhalaStep(payload)
     sendJson(res, 200, { ok: true, step: payload.step })
   } catch (err) {
-    console.error(`[QueueHandler] Phala step ${payload.step} failed:`, err)
+    log.error(err as Error, `Phala step ${payload.step} failed`)
     sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
   }
 }

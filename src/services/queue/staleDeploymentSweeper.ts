@@ -10,6 +10,9 @@
  */
 
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('stale-sweeper')
 
 const STALE_THRESHOLD_MS = 15 * 60 * 1000 // 15 minutes
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000   // 5 minutes
@@ -38,7 +41,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
     })
 
     for (const dep of staleAkash) {
-      console.warn(`[StaleSweeper] Akash deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+      log.warn(`Akash deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
       await prisma.akashDeployment.update({
         where: { id: dep.id },
         data: {
@@ -49,10 +52,10 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
     }
 
     if (staleAkash.length > 0) {
-      console.log(`[StaleSweeper] Marked ${staleAkash.length} stale Akash deployment(s) as FAILED`)
+      log.info(`Marked ${staleAkash.length} stale Akash deployment(s) as FAILED`)
     }
   } catch (err) {
-    console.error('[StaleSweeper] Error sweeping Akash deployments:', err)
+    log.error(err as Error, 'Error sweeping Akash deployments')
   }
 
   // Phala: find deployments stuck in intermediate states for >15 min
@@ -66,7 +69,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
     })
 
     for (const dep of stalePhala) {
-      console.warn(`[StaleSweeper] Phala deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+      log.warn(`Phala deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
       await prisma.phalaDeployment.update({
         where: { id: dep.id },
         data: {
@@ -77,27 +80,27 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
     }
 
     if (stalePhala.length > 0) {
-      console.log(`[StaleSweeper] Marked ${stalePhala.length} stale Phala deployment(s) as FAILED`)
+      log.info(`Marked ${stalePhala.length} stale Phala deployment(s) as FAILED`)
     }
   } catch (err) {
-    console.error('[StaleSweeper] Error sweeping Phala deployments:', err)
+    log.error(err as Error, 'Error sweeping Phala deployments')
   }
 }
 
 export function startStaleDeploymentSweeper(prisma: PrismaClient): void {
   // Run immediately on startup
   sweepStaleDeployments(prisma).catch(err => {
-    console.error('[StaleSweeper] Initial sweep failed:', err)
+    log.error(err as Error, 'Initial sweep failed')
   })
 
   // Then run periodically
   sweepInterval = setInterval(() => {
     sweepStaleDeployments(prisma).catch(err => {
-      console.error('[StaleSweeper] Periodic sweep failed:', err)
+      log.error(err as Error, 'Periodic sweep failed')
     })
   }, SWEEP_INTERVAL_MS)
 
-  console.log(`🧹 Stale deployment sweeper started (every ${SWEEP_INTERVAL_MS / 1000}s, threshold ${STALE_THRESHOLD_MS / 1000}s)`)
+  log.info(`Stale deployment sweeper started (every ${SWEEP_INTERVAL_MS / 1000}s, threshold ${STALE_THRESHOLD_MS / 1000}s)`)
 }
 
 export function stopStaleDeploymentSweeper(): void {

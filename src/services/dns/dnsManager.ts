@@ -3,7 +3,6 @@
  * High-level DNS operations for Akash deployments
  */
 
-/* eslint-disable no-console */
 /* global fetch, setTimeout */
 import { OpenProviderClient } from './openProviderClient.js'
 import type {
@@ -12,6 +11,9 @@ import type {
   DNSHealthCheck,
   OpenProviderConfig,
 } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('dns-manager')
 
 export class DNSManager {
   private client: OpenProviderClient
@@ -48,13 +50,13 @@ export class DNSManager {
       }
       // Update existing record
       if (existing.value !== ip) {
-        console.log(`Updating DNS: ${subdomain}.${this.domain} -> ${ip}`)
+        log.info(`Updating DNS: ${subdomain}.${this.domain} -> ${ip}`)
         return this.client.updateDNSRecord(this.domain, existing.id, {
           value: ip,
           ttl: ttl || this.defaultTTL,
         })
       } else {
-        console.log(`DNS already correct: ${subdomain}.${this.domain} -> ${ip}`)
+        log.info(`DNS already correct: ${subdomain}.${this.domain} -> ${ip}`)
         return {
           success: true,
           recordId: existing.id,
@@ -62,7 +64,7 @@ export class DNSManager {
       }
     } else {
       // Create new record
-      console.log(`Creating DNS: ${subdomain}.${this.domain} -> ${ip}`)
+      log.info(`Creating DNS: ${subdomain}.${this.domain} -> ${ip}`)
       return this.client.createDNSRecord(this.domain, {
         name: subdomain,
         type: 'A',
@@ -101,7 +103,7 @@ export class DNSManager {
     subdomain: string,
     previousIP: string
   ): Promise<DNSUpdateResult> {
-    console.log(
+    log.info(
       `Rolling back DNS: ${subdomain}.${this.domain} -> ${previousIP}`
     )
     return this.ensureSubdomain(subdomain, previousIP)
@@ -115,7 +117,7 @@ export class DNSManager {
       const response = await fetch(url, { method: 'GET' })
       return response.ok
     } catch (error) {
-      console.error(`Health check failed for ${url}:`, error)
+      log.error(error, `Health check failed for ${url}`)
       return false
     }
   }
@@ -151,7 +153,7 @@ export class DNSManager {
         checkedAt: new Date(),
       }
     } catch (error) {
-      console.error(`DNS verification failed for ${fqdn}:`, error)
+      log.error(error, `DNS verification failed for ${fqdn}`)
       return {
         subdomain: fqdn,
         expectedIP,
@@ -174,7 +176,7 @@ export class DNSManager {
     while (Date.now() - startTime < timeoutMs) {
       const check = await this.verifyDNSPropagation(subdomain, expectedIP)
       if (check.healthy) {
-        console.log(
+        log.info(
           `DNS propagated successfully for ${subdomain}: ${expectedIP}`
         )
         return true
@@ -184,7 +186,7 @@ export class DNSManager {
       await new Promise(resolve => setTimeout(resolve, 10000))
     }
 
-    console.error(`DNS propagation timeout for ${subdomain}`)
+    log.error(`DNS propagation timeout for ${subdomain}`)
     return false
   }
 

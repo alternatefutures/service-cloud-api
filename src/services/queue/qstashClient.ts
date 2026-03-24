@@ -7,6 +7,9 @@
  */
 
 import { Client, Receiver } from '@upstash/qstash'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('qstash')
 
 let client: Client | null = null
 let receiver: Receiver | null = null
@@ -82,7 +85,7 @@ export async function publishJob(
     headers,
   })
 
-  console.log(`[QStash] Published job to ${path}: messageId=${result.messageId}`)
+  log.info(`Published job to ${path}: messageId=${result.messageId}`)
   return result.messageId
 }
 

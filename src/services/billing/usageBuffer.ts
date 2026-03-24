@@ -11,6 +11,9 @@
  */
 
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('usage-buffer')
 
 export type UsageType = 'BANDWIDTH' | 'COMPUTE' | 'REQUESTS'
 
@@ -20,8 +23,7 @@ export class UsageBuffer {
   private flushInterval: NodeJS.Timeout | null = null
 
   constructor() {
-    // eslint-disable-next-line no-console
-    console.log('[UsageBuffer] Initialized with PostgreSQL buffer table')
+    log.info('Initialized with PostgreSQL buffer table')
   }
 
   /**
@@ -67,9 +69,7 @@ export class UsageBuffer {
         })
       }
     } catch (error) {
-      // Log error but don't throw - we don't want usage tracking to break requests
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Failed to increment usage:', error)
+      log.error(error, 'Failed to increment usage')
     }
   }
 
@@ -102,8 +102,7 @@ export class UsageBuffer {
 
       return result
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Failed to get buffered usage:', error)
+      log.error(error, 'Failed to get buffered usage')
       return new Map()
     }
   }
@@ -129,8 +128,7 @@ export class UsageBuffer {
         },
       })
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Failed to clear user buffer:', error)
+      log.error(error, 'Failed to clear user buffer')
     }
   }
 
@@ -163,8 +161,7 @@ export class UsageBuffer {
         totalRequests,
       }
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Failed to get stats:', error)
+      log.error(error, 'Failed to get stats')
       return {
         activeUsers: 0,
         totalBandwidth: 0,
@@ -182,8 +179,7 @@ export class UsageBuffer {
       await prisma.$queryRaw`SELECT 1`
       return true
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Health check failed:', error)
+      log.error(error, 'Health check failed')
       return false
     }
   }
@@ -198,11 +194,9 @@ export class UsageBuffer {
         clearInterval(this.flushInterval)
       }
       await prisma.$disconnect()
-      // eslint-disable-next-line no-console
-      console.log('[UsageBuffer] Disconnected from database')
+      log.info('Disconnected from database')
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('[UsageBuffer] Error disconnecting:', error)
+      log.error(error, 'Error disconnecting')
     }
   }
 }

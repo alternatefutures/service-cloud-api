@@ -5,6 +5,9 @@ import { GraphQLError } from 'graphql'
 import { getPhalaOrchestrator } from '../services/phala/index.js'
 import { getBillingApiClient } from '../services/billing/billingApiClient.js'
 import type { Context } from './types.js'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('resolver-phala')
 
 /**
  * Process final billing for a Phala deployment.
@@ -36,9 +39,9 @@ async function processFinalPhalaBilling(deployment: any) {
       description: `Phala TEE final billing: ${billableHours.toFixed(2)}h @ $${(deployment.hourlyRateCents / 100).toFixed(2)}/hr`,
       idempotencyKey: `phala_final:${deployment.id}:${now.getTime()}`,
     })
-    console.log(`[Phala] Final billing for ${deployment.id}: $${(amountCents / 100).toFixed(2)}`)
+    log.info(`Final billing for ${deployment.id}: $${(amountCents / 100).toFixed(2)}`)
   } catch (error) {
-    console.warn(`[Phala] Final billing failed for ${deployment.id}:`, error)
+    log.warn(error, `Final billing failed for ${deployment.id}`)
   }
 }
 

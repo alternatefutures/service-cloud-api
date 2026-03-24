@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
 
 const prisma = new PrismaClient()
+const log = createLogger('arns')
 
 export interface ArnsConfig {
   arweaveNodeUrl?: string
@@ -143,7 +145,7 @@ export async function resolveArnsName(
     // that the ArNS name points to
     return domain.arnsTransactionId
   } catch (error) {
-    console.error('ArNS resolution failed:', error)
+    log.error(error, 'ArNS resolution failed')
     return null
   }
 }
@@ -163,7 +165,7 @@ export async function checkArnsAvailability(
 
     return !existing
   } catch (error) {
-    console.error('ArNS availability check failed:', error)
+    log.error(error, 'ArNS availability check failed')
     return false
   }
 }
@@ -197,7 +199,7 @@ export async function getArnsRecord(
       contentId,
     }
   } catch (error) {
-    console.error('Failed to get ArNS record:', error)
+    log.error(error, 'Failed to get ArNS record')
     return null
   }
 }
@@ -223,9 +225,9 @@ export async function autoUpdateArnsOnDeploy(
     if (domain.arnsName) {
       try {
         await updateArnsRecord(domain.id, newCid, config)
-        console.log(`Updated ArNS record ${domain.arnsName} to CID ${newCid}`)
+        log.info(`Updated ArNS record ${domain.arnsName} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update ArNS record ${domain.arnsName}:`, error)
+        log.error(error, `Failed to update ArNS record ${domain.arnsName}`)
       }
     }
   }

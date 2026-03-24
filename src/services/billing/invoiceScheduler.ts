@@ -8,6 +8,9 @@
 import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
 import { InvoiceService } from './invoiceService.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('invoice-scheduler')
 
 export class InvoiceScheduler {
   private invoiceService: InvoiceService
@@ -23,7 +26,7 @@ export class InvoiceScheduler {
    */
   start() {
     if (this.cronJob) {
-      console.log('[Invoice Scheduler] Already running')
+      log.info('Already running')
       return
     }
 
@@ -32,7 +35,7 @@ export class InvoiceScheduler {
       await this.generateDueInvoices()
     })
 
-    console.log('[Invoice Scheduler] Started - runs daily at 2 AM')
+    log.info('Started — runs daily at 2 AM')
   }
 
   /**
@@ -42,7 +45,7 @@ export class InvoiceScheduler {
     if (this.cronJob) {
       this.cronJob.stop()
       this.cronJob = null
-      console.log('[Invoice Scheduler] Stopped')
+      log.info('Stopped')
     }
   }
 
@@ -51,9 +54,7 @@ export class InvoiceScheduler {
    */
   private async generateDueInvoices() {
     const startTime = Date.now()
-    console.log(
-      '[Invoice Scheduler] Checking for subscriptions due for invoicing...'
-    )
+    log.info('Checking for subscriptions due for invoicing')
 
     try {
       const now = new Date()
@@ -80,13 +81,11 @@ export class InvoiceScheduler {
       })
 
       if (dueSubscriptions.length === 0) {
-        console.log('[Invoice Scheduler] No subscriptions due for invoicing')
+        log.info('No subscriptions due for invoicing')
         return
       }
 
-      console.log(
-        `[Invoice Scheduler] Found ${dueSubscriptions.length} subscriptions to invoice`
-      )
+      log.info({ count: dueSubscriptions.length }, 'Found subscriptions to invoice')
 
       let successCount = 0
       let errorCount = 0
@@ -97,8 +96,13 @@ export class InvoiceScheduler {
           const invoiceId = await this.invoiceService.generateInvoice(
             subscription.id
           )
-          console.log(
-            `[Invoice Scheduler] Generated invoice ${invoiceId} for subscription ${subscription.id} (user: ${subscription.customer.user.username || subscription.customer.user.email})`
+          log.info(
+            {
+              invoiceId,
+              subscriptionId: subscription.id,
+              user: subscription.customer.user.username || subscription.customer.user.email,
+            },
+            'Generated invoice'
           )
 
           // Update subscription to next billing period
@@ -117,20 +121,15 @@ export class InvoiceScheduler {
 
           successCount++
         } catch (error) {
-          console.error(
-            `[Invoice Scheduler] Failed to generate invoice for subscription ${subscription.id}:`,
-            error
-          )
+          log.error({ subscriptionId: subscription.id, err: error }, 'Failed to generate invoice')
           errorCount++
         }
       }
 
       const duration = Date.now() - startTime
-      console.log(
-        `[Invoice Scheduler] Completed: ${successCount} invoices generated, ${errorCount} failed (${duration}ms)`
-      )
+      log.info({ successCount, errorCount, durationMs: duration }, 'Invoice generation completed')
     } catch (error) {
-      console.error('[Invoice Scheduler] Error generating invoices:', error)
+      log.error(error, 'Error generating invoices')
     }
   }
 
@@ -148,7 +147,7 @@ export class InvoiceScheduler {
    * Run invoice generation immediately (for testing/manual triggering)
    */
   async runNow() {
-    console.log('[Invoice Scheduler] Manual trigger - generating invoices now')
+    log.info('Manual trigger — generating invoices now')
     await this.generateDueInvoices()
   }
 }

@@ -13,10 +13,12 @@
  *   User -> Cloudflare (wildcard DNS) -> Traefik (K3s) -> this proxy -> Akash/Phala provider
  */
 
-/* eslint-disable no-console */
 import httpProxy from 'http-proxy'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('subdomain-proxy')
 
 // ---------------------------------------------------------------------------
 // Config
@@ -128,7 +130,7 @@ export class SubdomainProxy {
     })
 
     this.proxy.on('error', (err, req, res) => {
-      console.error('[SubdomainProxy] Backend error:', err.message)
+      log.error({ err }, 'Backend error')
       if (res && 'writeHead' in res && !res.headersSent) {
         ;(res as ServerResponse).writeHead(502, {
           'Content-Type': 'application/json',
@@ -389,7 +391,7 @@ export class SubdomainProxy {
         tier,
       }
     } catch (err) {
-      console.error('[SubdomainProxy] DB lookup error:', err)
+      log.error({ err }, 'DB lookup error')
       return { target: null, status: 'INTERNAL_ERROR', tier }
     }
   }

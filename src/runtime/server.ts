@@ -14,8 +14,11 @@
 import 'dotenv/config'
 import { createServer } from 'node:http'
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../lib/logger.js'
 import { RuntimeRouter } from '../services/routing/runtimeRouter.js'
 import type { ProxyRequest } from '../services/routing/requestProxy.js'
+
+const log = createLogger('runtime')
 
 const prisma = new PrismaClient()
 
@@ -92,8 +95,8 @@ async function handleRequest(req: any, res: any) {
     // For now, use subdomain as function identifier
     const functionSlug = subdomain
 
-    console.log(
-      `📨 Request: ${req.method} ${req.url} [Function: ${functionSlug}]`
+    log.info(
+      `Request: ${req.method} ${req.url} [Function: ${functionSlug}]`
     )
 
     // Parse request
@@ -132,13 +135,13 @@ async function handleRequest(req: any, res: any) {
       return
     }
 
-    console.log(`🔍 Function found: ${afFunction.name} (${afFunction.id})`)
+    log.info(`Function found: ${afFunction.name} (${afFunction.id})`)
 
     // Check routes count
     const routesCount = afFunction.routes
       ? Object.keys(afFunction.routes as any).length
       : 0
-    console.log(`📋 Routes configured: ${routesCount}`)
+    log.info(`Routes configured: ${routesCount}`)
 
     // Try routing first
     const routedResponse = await router.handleRequest(
@@ -148,7 +151,7 @@ async function handleRequest(req: any, res: any) {
 
     if (routedResponse) {
       // Route matched - return proxied response
-      console.log(`✅ Route matched - proxied to target`)
+      log.info('Route matched - proxied to target')
 
       res.writeHead(routedResponse.status, routedResponse.headers)
 
@@ -161,7 +164,7 @@ async function handleRequest(req: any, res: any) {
     }
 
     // No route matched - execute user's function code
-    console.log(`⚙️  No route matched - executing function code`)
+    log.info('No route matched - executing function code')
 
     const functionResponse = await executeUserFunction(
       afFunction.id,
@@ -176,7 +179,7 @@ async function handleRequest(req: any, res: any) {
       res.end(JSON.stringify(functionResponse.body))
     }
   } catch (error) {
-    console.error('❌ Error handling request:', error)
+    log.error(error, 'Error handling request')
 
     res.writeHead(500, { 'Content-Type': 'application/json' })
     res.end(
@@ -194,19 +197,19 @@ const server = createServer(handleRequest)
 const PORT = process.env.RUNTIME_PORT || 3000
 
 server.listen(PORT, () => {
-  console.log('🚀 Alternate Futures Function Runtime')
-  console.log(`   Listening on http://localhost:${PORT}`)
-  console.log(`   RouterCache TTL: 5 minutes`)
-  console.log(`   Proxy Timeout: 30 seconds`)
-  console.log('')
-  console.log('📝 Usage:')
-  console.log(`   curl http://function-slug.localhost:${PORT}/api/test`)
-  console.log('')
+  log.info('Alternate Futures Function Runtime')
+  log.info(`Listening on http://localhost:${PORT}`)
+  log.info('RouterCache TTL: 5 minutes')
+  log.info('Proxy Timeout: 30 seconds')
+  log.info('')
+  log.info('Usage:')
+  log.info(`curl http://function-slug.localhost:${PORT}/api/test`)
+  log.info('')
 })
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM signal received: closing HTTP server')
+  log.info('SIGTERM signal received: closing HTTP server')
   server.close(async () => {
     await prisma.$disconnect()
     process.exit(0)
@@ -214,7 +217,7 @@ process.on('SIGTERM', async () => {
 })
 
 process.on('SIGINT', async () => {
-  console.log('\nSIGINT signal received: closing HTTP server')
+  log.info('SIGINT signal received: closing HTTP server')
   server.close(async () => {
     await prisma.$disconnect()
     process.exit(0)

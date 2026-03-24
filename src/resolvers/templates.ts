@@ -36,6 +36,9 @@ import type {
 } from '../templates/schema.js'
 import type { Context } from './types.js'
 import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('resolver-templates')
 
 // ─── Queries ─────────────────────────────────────────────────────
 
@@ -68,9 +71,7 @@ async function createCompanionServices(
   for (const companion of companions) {
     const companionTemplate = getTemplateById(companion.templateId)
     if (!companionTemplate) {
-      console.warn(
-        `[Templates] Companion template not found: ${companion.templateId}`
-      )
+      log.warn(`Companion template not found: ${companion.templateId}`)
       continue
     }
 
@@ -175,8 +176,8 @@ async function createCompanionServices(
       }
     }
 
-    console.log(
-      `[Templates] Created companion service '${companionName}' (${companion.templateId}) linked to '${primaryService.slug}'`
+    log.info(
+      `Created companion service '${companionName}' (${companion.templateId}) linked to '${primaryService.slug}'`
     )
   }
 }
@@ -822,10 +823,9 @@ export const templateMutations = {
     // ── Deploy Akash groups ─────────────────────────────────────
     for (const [groupName, groupComponents] of akashGroups) {
       const sdlContent = generateCompositeSDL(groupComponents)
-      console.log(
-        `[CompositeTemplate] Group '${groupName}' SDL (${groupComponents.length} services):`
+      log.info(
+        `Group '${groupName}' SDL (${groupComponents.length} services):\n${sdlContent}`
       )
-      console.log(sdlContent)
       const { getAkashOrchestrator } =
         await import('../services/akash/orchestrator.js')
       const orchestrator = getAkashOrchestrator(context.prisma)

@@ -17,15 +17,18 @@
  */
 
 import type { DeploymentProvider } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('provider-registry')
 
 const providers = new Map<string, DeploymentProvider>()
 
 export function registerProvider(provider: DeploymentProvider): void {
   if (providers.has(provider.name)) {
-    console.warn(`[ProviderRegistry] Overwriting existing provider: ${provider.name}`)
+    log.warn(`Overwriting existing provider: ${provider.name}`)
   }
   providers.set(provider.name, provider)
-  console.log(`[ProviderRegistry] Registered provider: ${provider.name} (${provider.displayName})`)
+  log.info(`Registered provider: ${provider.name} (${provider.displayName})`)
 }
 
 export function getProvider(name: string): DeploymentProvider {

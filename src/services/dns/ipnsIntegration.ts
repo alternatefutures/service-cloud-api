@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
 
 const prisma = new PrismaClient()
+const log = createLogger('ipns')
 
 export interface IpnsConfig {
   ipfsApiUrl?: string
@@ -116,7 +118,7 @@ export async function resolveIpnsHash(
 
     return record?.hash || null
   } catch (error) {
-    console.error('IPNS resolution failed:', error)
+    log.error(error, 'IPNS resolution failed')
     return null
   }
 }
@@ -167,7 +169,7 @@ export async function getIpnsRecord(
       ttl: '1h',
     }
   } catch (error) {
-    console.error('Failed to get IPNS record:', error)
+    log.error(error, 'Failed to get IPNS record')
     return null
   }
 }
@@ -193,9 +195,9 @@ export async function autoUpdateIpnsOnDeploy(
     if (domain.ipnsHash) {
       try {
         await updateIpnsRecord(domain.id, newCid, config)
-        console.log(`Updated IPNS record ${domain.ipnsHash} to CID ${newCid}`)
+        log.info(`Updated IPNS record ${domain.ipnsHash} to CID ${newCid}`)
       } catch (error) {
-        console.error(`Failed to update IPNS record ${domain.ipnsHash}:`, error)
+        log.error(error, `Failed to update IPNS record ${domain.ipnsHash}`)
       }
     }
   }
@@ -241,7 +243,7 @@ export async function listIpnsKeys(
     const records = await prisma.iPNSRecord.findMany()
     return records.map(r => ({ name: r.name, id: r.name }))
   } catch (error) {
-    console.error('Failed to list IPNS keys:', error)
+    log.error(error, 'Failed to list IPNS keys')
     return []
   }
 }
@@ -264,7 +266,7 @@ export async function deleteIpnsKey(
 
     return true
   } catch (error) {
-    console.error('Failed to delete IPNS key:', error)
+    log.error(error, 'Failed to delete IPNS key')
     return false
   }
 }

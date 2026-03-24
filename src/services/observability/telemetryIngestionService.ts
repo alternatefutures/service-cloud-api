@@ -9,6 +9,9 @@
 
 import { setInterval, clearInterval } from 'node:timers'
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('telemetry-ingestion')
 
 export interface IngestionEvent {
   projectId: string
@@ -38,7 +41,7 @@ export class TelemetryIngestionService {
 
   constructor(prisma: PrismaClient) {
     this.prisma = prisma
-    console.log('[TelemetryIngestion] Service initialized')
+    log.info('Service initialized')
   }
 
   /**
@@ -53,11 +56,11 @@ export class TelemetryIngestionService {
       try {
         await this.flush()
       } catch (error) {
-        console.error('[TelemetryIngestion] Flush error:', error)
+        log.error(error, 'Flush error')
       }
     }, this.flushIntervalMs)
 
-    console.log('[TelemetryIngestion] Started with 1-minute flush interval')
+    log.info('Started with 1-minute flush interval')
   }
 
   /**
@@ -71,7 +74,7 @@ export class TelemetryIngestionService {
 
     // Final flush before shutdown
     await this.flush()
-    console.log('[TelemetryIngestion] Stopped and flushed remaining data')
+    log.info('Stopped and flushed remaining data')
   }
 
   /**
@@ -117,10 +120,7 @@ export class TelemetryIngestionService {
     if (currentHour > entry.periodStart) {
       // We've moved to a new hour, flush the old entry
       this.flushEntry(entry).catch(err => {
-        console.error(
-          '[TelemetryIngestion] Failed to flush on hour rollover:',
-          err
-        )
+        log.error(err, 'Failed to flush on hour rollover')
       })
 
       const hourEnd = new Date(currentHour)
@@ -192,16 +192,13 @@ export class TelemetryIngestionService {
         },
       })
 
-      console.log(
-        `[TelemetryIngestion] Flushed project ${entry.projectId}: ` +
+      log.info(
+        `Flushed project ${entry.projectId}: ` +
           `spans=${entry.spansCount}, metrics=${entry.metricsCount}, ` +
           `logs=${entry.logsCount}, bytes=${entry.bytesIngested}`
       )
     } catch (error) {
-      console.error(
-        `[TelemetryIngestion] Failed to flush project ${entry.projectId}:`,
-        error
-      )
+      log.error(error, `Failed to flush project ${entry.projectId}`)
       throw error
     }
   }
@@ -216,8 +213,8 @@ export class TelemetryIngestionService {
       return
     }
 
-    console.log(
-      `[TelemetryIngestion] Flushing ${entries.length} project buffers`
+    log.info(
+      `Flushing ${entries.length} project buffers`
     )
 
     const errors: Error[] = []
@@ -235,8 +232,8 @@ export class TelemetryIngestionService {
     }
 
     if (errors.length > 0) {
-      console.error(
-        `[TelemetryIngestion] ${errors.length} flush errors occurred`
+      log.error(
+        `${errors.length} flush errors occurred`
       )
     }
   }

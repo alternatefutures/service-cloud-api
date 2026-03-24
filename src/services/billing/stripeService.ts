@@ -10,6 +10,9 @@
 
 import Stripe from 'stripe'
 import type { PrismaClient } from '@prisma/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('stripe-service')
 
 // Lazy-load Stripe client only if API key is available
 let stripe: Stripe | null = null
@@ -483,7 +486,7 @@ export class StripeService {
         break
 
       default:
-        console.log(`Unhandled event type: ${event.type}`)
+        log.info({ eventType: event.type }, 'Unhandled event type')
     }
   }
 
@@ -498,7 +501,7 @@ export class StripeService {
     })
 
     if (!sub) {
-      console.error('Subscription not found:', subscription.id)
+      log.error({ stripeSubscriptionId: subscription.id }, 'Subscription not found')
       return
     }
 
@@ -527,7 +530,7 @@ export class StripeService {
     })
 
     if (!inv) {
-      console.error('Invoice not found:', invoice.id)
+      log.error({ stripeInvoiceId: invoice.id }, 'Invoice not found')
       return
     }
 
@@ -557,7 +560,7 @@ export class StripeService {
     })
 
     if (!payment) {
-      console.error('Payment not found:', paymentIntent.id)
+      log.error({ stripePaymentIntentId: paymentIntent.id }, 'Payment not found')
       return
     }
 

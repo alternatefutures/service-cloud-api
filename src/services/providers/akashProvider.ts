@@ -24,6 +24,9 @@ import type {
   ProviderStatus,
 } from './types.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('akash-provider')
 
 const AKASH_STATUS_MAP: Record<string, ProviderStatus> = {
   CREATING: 'creating',
@@ -118,7 +121,7 @@ export class AkashProvider implements DeploymentProvider {
     try {
       await orchestrator.closeDeployment(Number(deployment.dseq))
     } catch (err) {
-      console.warn(`[AkashProvider] On-chain close failed for dseq=${deployment.dseq}, force-closing DB:`, err)
+      log.warn(err as Error, `on-chain close failed for dseq=${deployment.dseq}, force-closing DB`)
     }
 
     await this.prisma.akashDeployment.update({

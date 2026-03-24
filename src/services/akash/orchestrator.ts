@@ -18,6 +18,9 @@ import type { PrismaClient, ServiceType } from '@prisma/client'
 import { providerSelector } from './providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('akash-orchestrator')
 
 const AKASH_CLI_TIMEOUT_MS = 120_000
 const BID_POLL_INTERVAL_MS = 5000
@@ -49,7 +52,7 @@ function getAkashEnv(): Record<string, string> {
 // Fixed by audit 2026-03: use execFileSync to prevent shell injection (was execSync with string concat)
 function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
   const env = getAkashEnv()
-  console.log(`[AkashOrchestrator] Running: akash ${args.join(' ')}`)
+  log.info(`Running: akash ${args.join(' ')}`)
   return execFileSync('akash', args, {
     encoding: 'utf-8',
     env,
@@ -68,7 +71,7 @@ function runProviderServices(
   timeout = AKASH_CLI_TIMEOUT_MS
 ): string {
   const env = getAkashEnv()
-  console.log(`[AkashOrchestrator] Running: provider-services ${args.join(' ')}`)
+  log.info(`Running: provider-services ${args.join(' ')}`)
   return execFileSync('provider-services', args, {
     encoding: 'utf-8',
     env,
@@ -195,7 +198,7 @@ export class AkashOrchestrator {
     sdlPath: string,
     deposit: number
   ): Promise<{ dseq: number; owner: string }> {
-    console.log('[AkashOrchestrator] Creating deployment...')
+    log.info('Creating deployment...')
     const output = runAkash([
       'tx',
       'deployment',
@@ -209,8 +212,8 @@ export class AkashOrchestrator {
     ])
 
     const result = extractJson(output) as Record<string, unknown>
-    console.log(
-      `[AkashOrchestrator] createDeployment broadcast result: code=${result.code}, txhash=${result.txhash}, has_logs=${!!(result.logs as unknown[])?.length}`
+    log.info(
+      `createDeployment broadcast result: code=${result.code}, txhash=${result.txhash}, has_logs=${!!(result.logs as unknown[])?.length}`
     )
 
     // Tx was broadcast but rejected by the mempool (e.g. account sequence mismatch from rapid re-deploys)
@@ -268,9 +271,8 @@ export class AkashOrchestrator {
           txResult = extractJson(txOutput) as Record<string, unknown>
           break
         } catch (err) {
-          console.warn(
-            `[AkashOrchestrator] tx query attempt failed, retrying...`,
-            (err as Error).message?.slice(0, 120)
+          log.warn(
+            `tx query attempt failed, retrying: ${(err as Error).message?.slice(0, 120)}`
           )
         }
       }
@@ -310,8 +312,8 @@ export class AkashOrchestrator {
         const msgDseq = tx?.body?.messages?.[0]?.id?.dseq
         if (msgDseq) {
           dseq = parseInt(msgDseq, 10)
-          console.log(
-            `[AkashOrchestrator] Parsed dseq from tx.body.messages: ${dseq}`
+          log.info(
+            `Parsed dseq from tx.body.messages: ${dseq}`
           )
         }
       }
@@ -327,8 +329,8 @@ export class AkashOrchestrator {
     }
 
     const owner = await this.getAccountAddress()
-    console.log(
-      `[AkashOrchestrator] Deployment created: dseq=${dseq}, owner=${owner}`
+    log.info(
+      `Deployment created: dseq=${dseq}, owner=${owner}`
     )
     return { dseq, owner }
   }
@@ -447,9 +449,8 @@ export class AkashOrchestrator {
       ])
     } catch (err) {
       // Fallback: retry once after a short delay (provider may not have lease ready)
-      console.warn(
-        '[AkashOrchestrator] Manifest send failed, retrying in 5s...',
-        err instanceof Error ? err.message : err
+      log.warn(
+        `Manifest send failed, retrying in 5s: ${err instanceof Error ? err.message : err}`
       )
       await new Promise(r => setTimeout(r, 5000))
       runProviderServices([
@@ -518,16 +519,16 @@ export class AkashOrchestrator {
         select: { status: true, serviceUrls: true },
       })
       if (!dep || dep.status !== 'ACTIVE') {
-        console.log(
-          `[AkashOrchestrator] Backfill: deployment ${deploymentId} no longer active, stopping.`
+        log.info(
+          `Backfill: deployment ${deploymentId} no longer active, stopping.`
         )
         return
       }
 
       // If serviceUrls got populated by another path, stop
       if (hasAnyServiceUris(dep.serviceUrls)) {
-        console.log(
-          `[AkashOrchestrator] Backfill: URIs already populated for ${deploymentId}, done.`
+        log.info(
+          `Backfill: URIs already populated for ${deploymentId}, done.`
         )
         return
       }
@@ -540,21 +541,20 @@ export class AkashOrchestrator {
             where: { id: deploymentId },
             data: { serviceUrls: services },
           })
-          console.log(
-            `[AkashOrchestrator] Backfill: URIs populated for ${deploymentId} after ${(i + 1) * 10}s`
+          log.info(
+            `Backfill: URIs populated for ${deploymentId} after ${(i + 1) * 10}s`
           )
           return
         }
       } catch (err) {
-        console.warn(
-          `[AkashOrchestrator] Backfill getServices attempt ${i + 1} failed for ${deploymentId}:`,
-          err instanceof Error ? err.message : err
+        log.warn(
+          `Backfill getServices attempt ${i + 1} failed for ${deploymentId}: ${err instanceof Error ? err.message : err}`
         )
       }
     }
 
-    console.warn(
-      `[AkashOrchestrator] Backfill: gave up waiting for URIs on ${deploymentId} after 3 minutes`
+    log.warn(
+      `Backfill: gave up waiting for URIs on ${deploymentId} after 3 minutes`
     )
   }
 
@@ -576,28 +576,28 @@ export class AkashOrchestrator {
       )
 
       if (stale.length === 0) {
-        console.log(
-          '[AkashOrchestrator] No ACTIVE deployments with missing URIs.'
+        log.info(
+          'No ACTIVE deployments with missing URIs.'
         )
         return
       }
 
-      console.log(
-        `[AkashOrchestrator] Found ${stale.length} ACTIVE deployment(s) with missing URIs. Starting backfills...`
+      log.info(
+        `Found ${stale.length} ACTIVE deployment(s) with missing URIs. Starting backfills...`
       )
 
       for (const dep of stale) {
         const dseq = Number(dep.dseq)
         if (!dep.provider) continue
         this.backfillServiceUrls(dep.id, dseq, dep.provider).catch(err =>
-          console.error(
-            `[AkashOrchestrator] Startup backfill failed for ${dep.id}:`,
-            err instanceof Error ? err.message : err
+          log.error(
+            { err },
+            `Startup backfill failed for ${dep.id}`
           )
         )
       }
     } catch (err) {
-      console.error('[AkashOrchestrator] resumePendingBackfills error:', err)
+      log.error({ err }, 'resumePendingBackfills error')
     }
   }
 
@@ -637,7 +637,7 @@ export class AkashOrchestrator {
       return await runProviderServicesAsync(args, 45_000)
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 300) ?? 'unknown error'
-      console.warn(`[AkashOrchestrator] getLogs failed for dseq=${dseq}:`, msg)
+      log.warn(`getLogs failed for dseq=${dseq}: ${msg}`)
       throw new Error(`Failed to fetch logs for dseq=${dseq}: ${msg}`)
     }
   }
@@ -688,15 +688,15 @@ export class AkashOrchestrator {
     })
 
     if (existingDeployments.length > 0) {
-      console.log(
-        `[AkashOrchestrator] Closing ${existingDeployments.length} existing deployment(s) for service ${service.name}...`
+      log.info(
+        `Closing ${existingDeployments.length} existing deployment(s) for service ${service.name}...`
       )
 
       for (const existing of existingDeployments) {
         try {
           const existingDseq = Number(existing.dseq)
-          console.log(
-            `[AkashOrchestrator] Closing previous deployment dseq=${existingDseq}...`
+          log.info(
+            `Closing previous deployment dseq=${existingDseq}...`
           )
           await this.closeDeployment(existingDseq)
 
@@ -704,12 +704,12 @@ export class AkashOrchestrator {
             where: { id: existing.id },
             data: { status: 'CLOSED', closedAt: new Date() },
           })
-          console.log(
-            `[AkashOrchestrator] Closed deployment dseq=${existingDseq}`
+          log.info(
+            `Closed deployment dseq=${existingDseq}`
           )
         } catch (err: any) {
-          console.warn(
-            `[AkashOrchestrator] Failed to close deployment dseq=${existing.dseq}: ${err.message}`
+          log.warn(
+            `Failed to close deployment dseq=${existing.dseq}: ${err.message}`
           )
           await this.prisma.akashDeployment.update({
             where: { id: existing.id },
@@ -750,8 +750,8 @@ export class AkashOrchestrator {
       },
     })
 
-    console.log(
-      `[AkashOrchestrator] Created deployment record ${deployment.id}, enqueuing SUBMIT_TX step...`
+    log.info(
+      `Created deployment record ${deployment.id}, enqueuing SUBMIT_TX step...`
     )
 
     // Enqueue the first step — QStash or in-process depending on environment
@@ -768,9 +768,9 @@ export class AkashOrchestrator {
       // Local dev: run step pipeline in-process (non-blocking — fire and forget)
       handleAkashStep({ step: 'SUBMIT_TX', deploymentId: deployment.id }).catch(
         err => {
-          console.error(
-            '[AkashOrchestrator] In-process step pipeline failed:',
-            err
+          log.error(
+            { err },
+            'In-process step pipeline failed'
           )
         }
       )
@@ -832,21 +832,21 @@ export class AkashOrchestrator {
     if (service.templateId) {
       const template = getTemplateById(service.templateId)
       if (template) {
-        console.log(
-          `[AkashOrchestrator] Generating SDL from template '${service.templateId}' for service '${service.slug}'`
+        log.info(
+          `Generating SDL from template '${service.templateId}' for service '${service.slug}'`
         )
         return generateSDLFromTemplate(template, { serviceName: service.slug })
       }
-      console.warn(
-        `[AkashOrchestrator] Service '${service.slug}' has templateId '${service.templateId}' but template not found. Falling back.`
+      log.warn(
+        `Service '${service.slug}' has templateId '${service.templateId}' but template not found. Falling back.`
       )
     }
 
     // Priority 2: Custom Docker image with explicit containerPort
     if (service.dockerImage) {
       const port = service.containerPort || 80
-      console.log(
-        `[AkashOrchestrator] Generating SDL for custom Docker image '${service.dockerImage}' (port ${port}) for service '${service.slug}'`
+      log.info(
+        `Generating SDL for custom Docker image '${service.dockerImage}' (port ${port}) for service '${service.slug}'`
       )
       return this.generateCustomDockerSDL(
         service.slug,

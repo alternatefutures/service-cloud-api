@@ -8,6 +8,9 @@
 import { GraphQLError } from 'graphql'
 import jwt from 'jsonwebtoken'
 import type { Context } from './types.js'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('resolver-auth')
 
 /**
  * Get auth service URL from environment
@@ -236,7 +239,7 @@ async function validateTokenViaAuthService(
       organizationId: data.organizationId,
     }
   } catch (error) {
-    console.error('Token validation error:', error)
+    log.error(error, 'Token validation error')
     return null
   }
 }

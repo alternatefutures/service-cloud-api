@@ -8,6 +8,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import Stripe from 'stripe'
 import type { PrismaClient } from '@prisma/client'
 import { StripeService } from './stripeService.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('webhook-handler')
 
 // Get Stripe webhook secret from environment
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
@@ -35,14 +38,14 @@ export async function handleStripeWebhook(
     const signature = req.headers['stripe-signature']
 
     if (!signature || typeof signature !== 'string') {
-      console.error('Missing Stripe signature')
+      log.error('Missing Stripe signature')
       res.writeHead(400, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Missing signature' }))
       return
     }
 
     if (!webhookSecret) {
-      console.error('STRIPE_WEBHOOK_SECRET not configured')
+      log.error('STRIPE_WEBHOOK_SECRET not configured')
       res.writeHead(500, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Webhook secret not configured' }))
       return
@@ -58,13 +61,13 @@ export async function handleStripeWebhook(
     try {
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
     } catch (err) {
-      console.error('Webhook signature verification failed:', err)
+      log.error(err, 'Webhook signature verification failed')
       res.writeHead(400, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Invalid signature' }))
       return
     }
 
-    console.log(`Received Stripe webhook: ${event.type}`)
+    log.info({ eventType: event.type }, 'Received Stripe webhook')
 
     // Handle the event with StripeService
     try {
@@ -75,14 +78,14 @@ export async function handleStripeWebhook(
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ received: true }))
     } catch (err) {
-      console.error('Error processing webhook:', err)
+      log.error(err, 'Error processing webhook')
       // Still return 200 to prevent Stripe from retrying
       // Log the error for investigation
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ received: true, error: 'Processing failed' }))
     }
   } catch (err) {
-    console.error('Webhook handler error:', err)
+    log.error(err, 'Webhook handler error')
     res.writeHead(500, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Internal server error' }))
   }

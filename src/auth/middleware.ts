@@ -1,5 +1,8 @@
 import type { PrismaClient } from '@prisma/client'
 import jwt from 'jsonwebtoken'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('auth-middleware')
 
 export interface AuthContext {
   userId?: string
@@ -106,7 +109,7 @@ async function validateAuthAccessTokenViaAuthService(
     if (!userId) return null
     return { userId }
   } catch (error) {
-    console.error('Auth service /auth/me validation error:', error)
+    log.error(error, 'Auth service /auth/me validation error')
     throw error
   }
 }
@@ -233,7 +236,7 @@ async function validateTokenViaAuthService(
     })
     return value
   } catch (error) {
-    console.error('Auth service validation error:', error)
+    log.error(error, 'Auth service validation error')
     throw error
     } finally {
       patValidationInflight.delete(token)
@@ -429,7 +432,7 @@ export async function getAuthContext(
       projectId,
     }
   } catch (error) {
-    console.error('Auth error:', error)
+    log.error(error, 'Auth error')
     return {}
   }
 }

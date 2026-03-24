@@ -3,6 +3,9 @@ import type { StorageService, UploadResult } from './types.js'
 import * as fs from 'fs'
 import * as path from 'path'
 import { globSource } from 'ipfs-http-client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('ipfs')
 
 /**
  * Self-Hosted IPFS Storage Service
@@ -140,7 +143,7 @@ export class SelfHostedIPFSStorageService implements StorageService {
   async testConnection(): Promise<boolean> {
     try {
       const id = await this.client.id()
-      console.log(`Connected to IPFS node: ${id.id}`)
+      log.info(`Connected to IPFS node: ${id.id}`)
       return true
     } catch {
       return false

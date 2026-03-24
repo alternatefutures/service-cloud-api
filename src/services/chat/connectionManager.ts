@@ -6,6 +6,9 @@
 
 import type { WebSocket } from 'ws'
 import type { ConnectionMetadata, WSMessage } from './types.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('chat-connections')
 
 export class ConnectionManager {
   private connections: Map<WebSocket, ConnectionMetadata>
@@ -45,8 +48,8 @@ export class ConnectionManager {
       this.chatConnections.get(chatId)!.add(ws)
     }
 
-    console.log(
-      `✅ Connection added for user ${userId} in chat ${chatId || 'none'}`
+    log.info(
+      `Connection added for user ${userId} in chat ${chatId || 'none'}`
     )
   }
 
@@ -78,7 +81,7 @@ export class ConnectionManager {
     }
 
     this.connections.delete(ws)
-    console.log(`❌ Connection removed for user ${metadata.userId}`)
+    log.info(`Connection removed for user ${metadata.userId}`)
   }
 
   /**
@@ -205,7 +208,7 @@ export class ConnectionManager {
     })
 
     if (cleaned > 0) {
-      console.log(`🧹 Cleaned up ${cleaned} stale connections`)
+      log.info(`Cleaned up ${cleaned} stale connections`)
     }
 
     return cleaned

@@ -1,3 +1,4 @@
+import './instrumentation.js'
 import { createYoga } from 'graphql-yoga'
 import type { Plugin } from 'graphql-yoga'
 import { createServer } from 'node:http'
@@ -39,6 +40,10 @@ import {
   handlePhalaWebhook,
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
+import { createLogger } from './lib/logger.js'
+import { requestContext, getRequestId } from './lib/requestContext.js'
+
+const log = createLogger('server')
 
 // Initialize Infisical (or dotenv fallback) before anything else
 await initInfisical()
@@ -54,10 +59,10 @@ const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
   if (process.env.NODE_ENV === 'production') {
-    console.error('FATAL: JWT_SECRET is not set. Refusing to start in production without a proper secret.')
+    log.fatal('JWT_SECRET is not set — refusing to start in production without a proper secret')
     process.exit(1)
   }
-  console.warn('⚠️  JWT_SECRET not set — using insecure development default. Do NOT use in production.')
+  log.warn('JWT_SECRET not set — using insecure development default')
 }
 const effectiveJwtSecret = jwtSecret || 'development-secret-change-in-production'
 
@@ -88,18 +93,18 @@ const useValidationRules = (): Plugin => {
   }
 }
 
-// Plugin to log GraphQL operations
+const gqlLog = createLogger('graphql')
+
 const useLogging = (): Plugin => {
   return {
     onExecute({ args }) {
       const operationName = args.operationName || 'anonymous'
       const query = args.document?.loc?.source?.body?.substring(0, 300) || 'unknown'
-      console.log(`[GraphQL] Executing: ${operationName}`)
-      console.log(`[GraphQL] Query: ${query}`)
+      gqlLog.info({ operationName, query }, 'executing operation')
     },
     onResultProcess({ result }) {
       if ('errors' in result && result.errors) {
-        console.log('[GraphQL] Errors:', JSON.stringify(result.errors))
+        gqlLog.error({ errors: result.errors }, 'operation returned errors')
       }
     },
   }
@@ -146,69 +151,62 @@ const helmetMiddleware = helmet({
 // Subdomain reverse proxy for *.apps.alternatefutures.ai / *.agents.alternatefutures.ai
 const subdomainProxy = new SubdomainProxy(prisma)
 
-// Custom request handler to intercept webhook requests
 async function requestHandler(req: IncomingMessage, res: ServerResponse) {
-  const url = new URL(req.url || '/', `http://${req.headers.host}`)
+  const requestId = getRequestId(req)
+  res.setHeader('x-request-id', requestId)
 
-  // ── Subdomain proxy (must run FIRST, before helmet/yoga) ──────────────
-  // Requests arriving on *.apps.alternatefutures.ai or *.agents.alternatefutures.ai
-  // are reverse-proxied directly to the Akash/Phala backend.
-  const proxied = await subdomainProxy.handleRequest(req, res)
-  if (proxied) return
+  return requestContext.run({ requestId }, async () => {
+    const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
-  // Log all incoming requests (API traffic only — proxied requests logged by proxy)
-  console.log(`<-- ${req.method} ${url.pathname}`)
+    // Subdomain proxy runs FIRST, before helmet/yoga
+    const proxied = await subdomainProxy.handleRequest(req, res)
+    if (proxied) return
 
-  // Apply security headers
-  await new Promise<void>(resolve => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    helmetMiddleware(req as any, res as any, resolve as any)
+    log.info({ method: req.method, path: url.pathname }, 'incoming request')
+
+    await new Promise<void>(resolve => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      helmetMiddleware(req as any, res as any, resolve as any)
+    })
+
+    if (url.pathname === '/webhooks/stripe') {
+      await handleStripeWebhook(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/telemetry/ingestion-webhook') {
+      await handleTelemetryWebhook(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/telemetry/stats') {
+      await handleTelemetryStats(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/compute/check-resume' && req.method === 'POST') {
+      await handleComputeResumeCheck(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
+      subdomainProxy.flushCache()
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+
+    if (url.pathname === '/queue/akash/step' && req.method === 'POST') {
+      await handleAkashWebhook(req, res)
+      return
+    }
+    if (url.pathname === '/queue/phala/step' && req.method === 'POST') {
+      await handlePhalaWebhook(req, res)
+      return
+    }
+
+    return yoga(req, res)
   })
-
-  // Handle Stripe webhooks
-  if (url.pathname === '/webhooks/stripe') {
-    await handleStripeWebhook(req, res, prisma)
-    return
-  }
-
-  // Handle telemetry ingestion webhook (internal - from OTEL Collector)
-  if (url.pathname === '/internal/telemetry/ingestion-webhook') {
-    await handleTelemetryWebhook(req, res, prisma)
-    return
-  }
-
-  // Handle telemetry stats endpoint (internal - for monitoring)
-  if (url.pathname === '/internal/telemetry/stats') {
-    await handleTelemetryStats(req, res, prisma)
-    return
-  }
-
-  // Handle compute resume check (internal - called by auth service after topup)
-  if (url.pathname === '/internal/compute/check-resume' && req.method === 'POST') {
-    await handleComputeResumeCheck(req, res, prisma)
-    return
-  }
-
-  // Handle proxy cache flush (internal - for deployment updates)
-  if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
-    subdomainProxy.flushCache()
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
-    return
-  }
-
-  // QStash webhook endpoints for background deployment processing
-  if (url.pathname === '/queue/akash/step' && req.method === 'POST') {
-    await handleAkashWebhook(req, res)
-    return
-  }
-  if (url.pathname === '/queue/phala/step' && req.method === 'POST') {
-    await handlePhalaWebhook(req, res)
-    return
-  }
-
-  // Pass all other requests to Yoga
-  return yoga(req, res)
 }
 
 const server = createServer(requestHandler)
@@ -237,44 +235,33 @@ server.on('upgrade', async (request, socket, head) => {
 const port = process.env.PORT || 1602
 
 server.listen(port, () => {
-  console.log(`🚀 GraphQL server running at http://localhost:${port}/graphql`)
-  console.log(`💬 WebSocket chat server running at ws://localhost:${port}/ws`)
+  log.info({ port, graphql: `/graphql`, ws: `/ws` }, 'server started')
 
-  // Start billing schedulers
   storageSnapshotScheduler.start()
   invoiceScheduler.start()
   usageAggregator.start()
   computeBillingScheduler.start()
   telemetryIngestionService.start()
-  console.log(`📊 Billing schedulers started (invoices 2AM, compute 3AM)`)
-  console.log(`⚡ Usage aggregator running (1-minute intervals)`)
-  console.log(`📈 Telemetry ingestion service running`)
+  log.info('billing schedulers started')
 
-  // Start SSL renewal job
   startSslRenewalJob()
-  console.log(`🔒 SSL renewal job started (runs daily at 2 AM)`)
+  log.info('SSL renewal job started')
 
-  // Register deployment providers
   registerProvider(createAkashProvider(prisma))
   registerProvider(createPhalaProvider(prisma))
-  console.log('🔌 Deployment providers registered')
+  log.info('deployment providers registered')
 
-  // Initialize QStash queue handler
   initQueueHandler(prisma)
-  console.log('📬 QStash queue handler initialized')
+  log.info('QStash queue handler initialized')
 
-  // Resume any interrupted URI backfills from previous pod lifecycle
   const orchestrator = new AkashOrchestrator(prisma)
   orchestrator.resumePendingBackfills()
 
-  // Sweep stale deployments stuck in intermediate states (startup + every 5 min)
   startStaleDeploymentSweeper(prisma)
 })
 
-// Graceful shutdown
-// Fixed by audit 2026-03: stop ALL schedulers on shutdown (was missing storage, invoice, compute schedulers)
 async function gracefulShutdown(signal: string) {
-  console.log(`${signal} signal received: closing HTTP server`)
+  log.info({ signal }, 'shutting down')
   stopStaleDeploymentSweeper()
   storageSnapshotScheduler.stop()
   invoiceScheduler.stop()

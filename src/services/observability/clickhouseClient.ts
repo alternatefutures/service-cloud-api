@@ -6,6 +6,9 @@
  */
 
 import { createClient, type ClickHouseClient } from '@clickhouse/client'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('clickhouse')
 
 // ============================================
 // Types
@@ -576,7 +579,7 @@ export class ClickHouseObservabilityClient {
       await this.client.query({ query: 'SELECT 1' })
       return true
     } catch (error) {
-      console.error('[ClickHouse] Health check failed:', error)
+      log.error(error, 'Health check failed')
       return false
     }
   }

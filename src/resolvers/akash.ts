@@ -10,6 +10,9 @@ import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 import { getEscrowService } from '../services/billing/escrowService.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import type { Context } from './types.js'
+import { createLogger } from '../lib/logger.js'
+
+const log = createLogger('resolver-akash')
 
 // Helper to format AkashDeployment for GraphQL (BigInt → String conversion)
 function formatDeployment(deployment: any) {
@@ -139,7 +142,7 @@ export const akashMutations = {
         where: { id: service.afFunction.id },
         data: { sourceCode: input.sourceCode },
       })
-      console.log('[deployToAkash] Updated function source code for:', service.afFunction.id)
+      log.info(`Updated function source code for: ${service.afFunction.id}`)
     }
 
     try {
@@ -269,8 +272,8 @@ export const akashMutations = {
       const orchestrator = getAkashOrchestrator(context.prisma)
       await orchestrator.closeDeployment(Number(deployment.dseq))
     } catch (error) {
-      console.warn(
-        `[closeAkashDeployment] On-chain close failed for dseq=${deployment.dseq}: ${error instanceof Error ? error.message : 'Unknown error'}. Force-closing DB record.`
+      log.warn(
+        `On-chain close failed for dseq=${deployment.dseq}: ${error instanceof Error ? error.message : 'Unknown error'}. Force-closing DB record.`
       )
       // Continue — we still mark as CLOSED in the DB below
     }
@@ -288,10 +291,10 @@ export const akashMutations = {
       const escrowService = getEscrowService(context.prisma)
       const refundCents = await escrowService.refundEscrow(id)
       if (refundCents > 0) {
-        console.log(`[closeAkashDeployment] Refunded $${(refundCents / 100).toFixed(2)} escrow for deployment ${id}`)
+        log.info(`Refunded $${(refundCents / 100).toFixed(2)} escrow for deployment ${id}`)
       }
     } catch (error) {
-      console.warn(`[closeAkashDeployment] Escrow refund failed for ${id}:`, error)
+      log.warn(error, `Escrow refund failed for ${id}`)
     }
 
     // Update the specific resource status based on service type

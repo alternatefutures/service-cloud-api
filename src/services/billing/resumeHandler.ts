@@ -14,6 +14,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { getEscrowService } from './escrowService.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('resume-handler')
 
 interface ResumeRequest {
   orgBillingId: string
@@ -61,9 +64,9 @@ export async function handleComputeResumeCheck(
     return
   }
 
-  console.log(
-    `[ResumeHandler] Checking resume for org ${organizationId} ` +
-    `(balance: $${(newBalanceCents / 100).toFixed(2)})`
+  log.info(
+    { organizationId, balanceCents: newBalanceCents },
+    'Checking resume for org'
   )
 
   const resumed: string[] = []
@@ -99,9 +102,9 @@ export async function handleComputeResumeCheck(
 
     // Only resume if balance covers at least 1 day
     if (newBalanceCents < totalDailyCostCents) {
-      console.log(
-        `[ResumeHandler] Balance $${(newBalanceCents / 100).toFixed(2)} ` +
-        `< 1 day cost $${(totalDailyCostCents / 100).toFixed(2)}. Not resuming.`
+      log.info(
+        { balanceCents: newBalanceCents, dailyCostCents: totalDailyCostCents },
+        'Balance below 1-day cost — not resuming'
       )
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
@@ -187,12 +190,12 @@ export async function handleComputeResumeCheck(
       }
     }
 
-    console.log(`[ResumeHandler] Resumed ${resumed.length} deployments, ${errors.length} errors`)
+    log.info({ resumedCount: resumed.length, errorCount: errors.length }, 'Resume check completed')
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ resumed, errors }))
   } catch (error) {
-    console.error('[ResumeHandler] Fatal error:', error)
+    log.error(error, 'Fatal error')
     res.writeHead(500, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Internal error' }))
   }

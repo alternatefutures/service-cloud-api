@@ -16,6 +16,9 @@ import type { PrismaClient } from '@prisma/client'
 import type { PhalaDeploymentStatus } from '@prisma/client'
 import { getPhalaHourlyRate, applyMargin } from '../../config/pricing.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('phala-orchestrator')
 
 const PHALA_CLI_TIMEOUT_MS = 120_000
 const POLL_INTERVAL_MS = 5000
@@ -160,7 +163,7 @@ export class PhalaOrchestrator {
         const chargedHourlyRate = applyMargin(rawHourlyRate, orgMarkup.marginRate)
         hourlyRateCents = Math.ceil(chargedHourlyRate * 100)
       } catch (err) {
-        console.warn(`[PhalaOrchestrator] Failed to resolve billing context for org ${organizationId}:`, err)
+        log.warn({ err }, `Failed to resolve billing context for org ${organizationId}`)
       }
     }
 
@@ -185,7 +188,7 @@ export class PhalaOrchestrator {
       },
     })
 
-    console.log(`[PhalaOrchestrator] Created deployment record ${deployment.id}, enqueuing DEPLOY_CVM step...`)
+    log.info(`Created deployment record ${deployment.id}, enqueuing DEPLOY_CVM step...`)
 
     const { isQStashEnabled, publishJob } = await import('../queue/qstashClient.js')
     const { handlePhalaStep } = await import('../queue/webhookHandler.js')
@@ -194,7 +197,7 @@ export class PhalaOrchestrator {
       await publishJob('/queue/phala/step', { step: 'DEPLOY_CVM', deploymentId: deployment.id })
     } else {
       handlePhalaStep({ step: 'DEPLOY_CVM', deploymentId: deployment.id }).catch(err => {
-        console.error('[PhalaOrchestrator] In-process step pipeline failed:', err)
+        log.error({ err }, 'In-process step pipeline failed')
       })
     }
 

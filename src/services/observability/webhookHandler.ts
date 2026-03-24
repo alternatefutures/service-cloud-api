@@ -11,6 +11,9 @@ import {
   getTelemetryIngestionService,
   type IngestionEvent,
 } from './telemetryIngestionService.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('telemetry-webhook')
 
 interface OTLPMetric {
   name: string
@@ -83,7 +86,7 @@ export async function handleTelemetryWebhook(
       })
     )
   } catch (error) {
-    console.error('[TelemetryWebhook] Error processing webhook:', error)
+    log.error(error, 'Error processing webhook')
 
     res.statusCode = 500
     res.setHeader('Content-Type', 'application/json')
@@ -222,7 +225,7 @@ export async function handleTelemetryStats(
       })
     )
   } catch (error) {
-    console.error('[TelemetryStats] Error:', error)
+    log.error(error, 'Stats endpoint error')
 
     res.statusCode = 500
     res.setHeader('Content-Type', 'application/json')

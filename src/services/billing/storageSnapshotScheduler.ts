@@ -8,6 +8,9 @@
 import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
 import { StorageTracker } from './storageTracker.js'
+import { createLogger } from '../../lib/logger.js'
+
+const log = createLogger('storage-snapshot-scheduler')
 
 export class StorageSnapshotScheduler {
   private storageTracker: StorageTracker
@@ -23,7 +26,7 @@ export class StorageSnapshotScheduler {
    */
   start() {
     if (this.cronJob) {
-      console.log('[Storage Snapshot Scheduler] Already running')
+      log.info('Already running')
       return
     }
 
@@ -32,7 +35,7 @@ export class StorageSnapshotScheduler {
       await this.createSnapshots()
     })
 
-    console.log('[Storage Snapshot Scheduler] Started - runs daily at midnight')
+    log.info('Started — runs daily at midnight')
   }
 
   /**
@@ -42,7 +45,7 @@ export class StorageSnapshotScheduler {
     if (this.cronJob) {
       this.cronJob.stop()
       this.cronJob = null
-      console.log('[Storage Snapshot Scheduler] Stopped')
+      log.info('Stopped')
     }
   }
 
@@ -51,9 +54,7 @@ export class StorageSnapshotScheduler {
    */
   private async createSnapshots() {
     const startTime = Date.now()
-    console.log(
-      '[Storage Snapshot Scheduler] Starting daily snapshot creation...'
-    )
+    log.info('Starting daily snapshot creation')
 
     try {
       // Get all users
@@ -69,23 +70,15 @@ export class StorageSnapshotScheduler {
           await this.storageTracker.createDailySnapshot(user.id)
           successCount++
         } catch (error) {
-          console.error(
-            `[Storage Snapshot Scheduler] Failed to create snapshot for user ${user.id}:`,
-            error
-          )
+          log.error({ userId: user.id, err: error }, 'Failed to create snapshot for user')
           errorCount++
         }
       }
 
       const duration = Date.now() - startTime
-      console.log(
-        `[Storage Snapshot Scheduler] Completed: ${successCount} successful, ${errorCount} failed (${duration}ms)`
-      )
+      log.info({ successCount, errorCount, durationMs: duration }, 'Snapshot creation completed')
     } catch (error) {
-      console.error(
-        '[Storage Snapshot Scheduler] Error creating snapshots:',
-        error
-      )
+      log.error(error, 'Error creating snapshots')
     }
   }
 
@@ -93,9 +86,7 @@ export class StorageSnapshotScheduler {
    * Run snapshot creation immediately (for testing/manual triggering)
    */
   async runNow() {
-    console.log(
-      '[Storage Snapshot Scheduler] Manual trigger - creating snapshots now'
-    )
+    log.info('Manual trigger — creating snapshots now')
     await this.createSnapshots()
   }
 }
