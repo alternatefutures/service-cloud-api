@@ -307,6 +307,31 @@ export const authMutations = {
       create: { id: validationResult.userId },
     })
 
+    // If a projectId was supplied, verify the user actually has access to it
+    if (projectId) {
+      const project = await context.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { userId: true, organizationId: true },
+      })
+
+      if (!project) {
+        throw new GraphQLError('Project not found', {
+          extensions: { code: 'NOT_FOUND' },
+        })
+      }
+
+      const userOwnsProject = project.userId === validationResult.userId
+      const orgMatchesProject =
+        validationResult.organizationId &&
+        project.organizationId === validationResult.organizationId
+
+      if (!userOwnsProject && !orgMatchesProject) {
+        throw new GraphQLError('Not authorized to access this project', {
+          extensions: { code: 'UNAUTHORIZED' },
+        })
+      }
+    }
+
     // Generate a short-lived access token for subsequent requests
     const accessToken = generateAccessToken(validationResult.userId, projectId)
 

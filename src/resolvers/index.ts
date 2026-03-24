@@ -1388,8 +1388,30 @@ export const resolvers = {
       { data }: { data: { siteId: string; cid: string } },
       context: Context
     ) => {
-      // Create a deployment record for an existing IPFS CID.
-      // Mark as SUCCESS immediately since content already exists.
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
+      const site = await context.prisma.site.findUnique({
+        where: { id: data.siteId },
+        include: { project: { select: { userId: true, organizationId: true } } },
+      })
+
+      if (!site) {
+        throw new GraphQLError('Site not found')
+      }
+
+      const p = (site as any).project
+      if (p) {
+        const isAuthorized = context.organizationId
+          ? p.organizationId === context.organizationId ||
+            (p.userId === context.userId && p.organizationId === null)
+          : p.userId === context.userId
+        if (!isAuthorized) {
+          throw new GraphQLError('Not authorized to deploy to this site')
+        }
+      }
+
       return context.prisma.deployment.create({
         data: {
           siteId: data.siteId,
@@ -1420,13 +1442,28 @@ export const resolvers = {
       },
       context: Context
     ) => {
-      // Verify site exists
+      if (!context.userId) {
+        throw new GraphQLError('Not authenticated')
+      }
+
       const site = await context.prisma.site.findUnique({
         where: { id: siteId },
+        include: { project: { select: { userId: true, organizationId: true } } },
       })
 
       if (!site) {
         throw new GraphQLError('Site not found')
+      }
+
+      const p = (site as any).project
+      if (p) {
+        const isAuthorized = context.organizationId
+          ? p.organizationId === context.organizationId ||
+            (p.userId === context.userId && p.organizationId === null)
+          : p.userId === context.userId
+        if (!isAuthorized) {
+          throw new GraphQLError('Not authorized to deploy to this site')
+        }
       }
 
       const deploymentService = new DeploymentService(context.prisma)

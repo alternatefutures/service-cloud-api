@@ -21,15 +21,26 @@ export const logsQueries = {
     { serviceId, tail, service }: ServiceLogsArgs,
     context: Context,
   ) => {
-    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     if (!context.userId) {
       throw new GraphQLError('Not authenticated')
     }
     const svc = await context.prisma.service.findUnique({
       where: { id: serviceId },
+      include: { project: { select: { userId: true, organizationId: true } } },
     })
     if (!svc) {
       throw new GraphQLError(`Service not found: ${serviceId}`)
+    }
+
+    const p = (svc as any).project
+    if (p) {
+      const isAuthorized = context.organizationId
+        ? p.organizationId === context.organizationId ||
+          (p.userId === context.userId && p.organizationId === null)
+        : p.userId === context.userId
+      if (!isAuthorized) {
+        throw new GraphQLError('Not authorized to view logs for this service')
+      }
     }
 
     const tailLines = tail ?? 200

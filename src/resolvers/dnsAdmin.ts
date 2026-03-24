@@ -322,12 +322,34 @@ export const domainRegistrationQueries = {
       offset?: number
       status?: string
     },
-    { userId }: Context
+    { userId, organizationId, prisma }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
+    if (!organizationId) {
+      throw new GraphQLError(
+        'Organization context required to list registered domains'
+      )
+    }
+
+    await requireOrgMembership(organizationId, userId, prisma)
+
     const client = await getOpenProviderClient()
-    return await client.listRegisteredDomains({ limit, offset, status })
+    const allDomains = await client.listRegisteredDomains({ limit, offset, status })
+
+    // Filter to only domains that belong to the caller's org in our DB
+    const orgDomains = await prisma.domain.findMany({
+      where: { organizationId },
+      select: { hostname: true },
+    })
+    const orgHostnames = new Set(orgDomains.map((d: any) => d.hostname))
+
+    return allDomains.filter((d: any) => {
+      const hostname = d.domain
+        ? `${d.domain.name}.${d.domain.extension}`
+        : d.hostname
+      return hostname && orgHostnames.has(hostname)
+    })
   },
 }
 

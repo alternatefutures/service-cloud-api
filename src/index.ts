@@ -190,6 +190,13 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
     }
 
     if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
+      const expectedToken = process.env.INTERNAL_AUTH_TOKEN
+      const authToken = req.headers['x-internal-auth']
+      if (!expectedToken || authToken !== expectedToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Unauthorized' }))
+        return
+      }
       subdomainProxy.flushCache()
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ ok: true }))

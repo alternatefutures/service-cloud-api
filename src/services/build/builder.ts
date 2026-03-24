@@ -4,6 +4,33 @@ import * as path from 'path';
 import * as os from 'os';
 import type { BuildResult } from '../storage/types.js';
 
+const ALLOWED_COMMAND_PREFIXES = [
+  'npm', 'npx', 'yarn', 'pnpm', 'bun', 'bunx',
+  'node', 'tsc', 'vite', 'next', 'nuxt', 'astro',
+  'esbuild', 'rollup', 'webpack', 'turbo', 'tsx',
+];
+
+function validateCommand(command: string): void {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    throw new Error('Empty command');
+  }
+
+  const binary = trimmed.split(/\s+/)[0];
+  const baseName = binary.split('/').pop() || binary;
+
+  if (!ALLOWED_COMMAND_PREFIXES.includes(baseName)) {
+    throw new Error(
+      `Command "${baseName}" is not allowed. Permitted: ${ALLOWED_COMMAND_PREFIXES.join(', ')}`
+    );
+  }
+
+  const shellMetachars = /[;&|`$(){}<>!\\]/;
+  if (shellMetachars.test(trimmed)) {
+    throw new Error('Shell metacharacters are not allowed in build commands');
+  }
+}
+
 export interface BuildOptions {
   buildCommand: string;
   installCommand?: string;
@@ -49,6 +76,12 @@ export class BuildService {
         const workDir = options.workingDirectory
           ? path.join(buildDir, options.workingDirectory)
           : buildDir;
+
+        // Validate commands against allowlist before execution
+        validateCommand(options.buildCommand);
+        if (options.installCommand) {
+          validateCommand(options.installCommand);
+        }
 
         // Run install command if provided
         if (options.installCommand) {
@@ -132,7 +165,6 @@ export class BuildService {
       const child = spawn(cmd, args, {
         cwd: workingDirectory,
         env,
-        shell: true,
       });
 
       let errorOutput = '';

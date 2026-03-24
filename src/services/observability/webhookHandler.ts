@@ -45,11 +45,11 @@ export async function handleTelemetryWebhook(
   res: ServerResponse,
   prisma: PrismaClient
 ): Promise<void> {
-  // Verify internal auth token
+  // Fail closed: INTERNAL_AUTH_TOKEN must be configured
   const authToken = req.headers['x-internal-auth']
   const expectedToken = process.env.INTERNAL_AUTH_TOKEN
 
-  if (expectedToken && authToken !== expectedToken) {
+  if (!expectedToken || authToken !== expectedToken) {
     res.statusCode = 401
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify({ error: 'Unauthorized' }))
@@ -201,11 +201,11 @@ export async function handleTelemetryStats(
   res: ServerResponse,
   prisma: PrismaClient
 ): Promise<void> {
-  // Verify internal auth token
+  // Fail closed: INTERNAL_AUTH_TOKEN must be configured
   const authToken = req.headers['x-internal-auth']
   const expectedToken = process.env.INTERNAL_AUTH_TOKEN
 
-  if (expectedToken && authToken !== expectedToken) {
+  if (!expectedToken || authToken !== expectedToken) {
     res.statusCode = 401
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify({ error: 'Unauthorized' }))

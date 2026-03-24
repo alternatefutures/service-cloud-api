@@ -229,22 +229,36 @@ export const domainQueries = {
   },
 
   /**
-   * Get SSL certificate status for all domains
+   * Get SSL certificate status for domains the caller owns
    */
   sslCertificateStatus: async (
     _: unknown,
     __: unknown,
-    { userId }: Context
+    { userId, organizationId, prisma }: Context
   ) => {
     if (!userId) throw new GraphQLError('Authentication required')
 
+    // Build the set of hostnames the caller is authorized to see
+    const where = organizationId
+      ? {
+          OR: [
+            { organizationId },
+            { site: { project: { organizationId } } },
+            { site: { project: { userId, organizationId: null } } },
+          ],
+        }
+      : { site: { project: { userId } } }
+
+    const ownedDomains = await prisma.domain.findMany({
+      where,
+      select: { hostname: true },
+    })
+    const ownedHostnames = new Set(ownedDomains.map((d: any) => d.hostname))
+
     const status = await getSslCertificateStatus()
 
-    // Filter to only domains owned by the user
-    // Note: This query should be optimized with a WHERE clause in production
     return status.filter((item: any) => {
-      // Add userId check when we fetch domains with user relationships
-      return true // For now, return all (add proper filtering in production)
+      return item.hostname && ownedHostnames.has(item.hostname)
     })
   },
 }
