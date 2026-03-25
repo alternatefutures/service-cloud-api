@@ -533,6 +533,7 @@ export const templateMutations = {
             gpu?: { units: number; vendor: string; model?: string } | null
           }
         }>
+        enabledComponentIds?: string[]
         serviceName?: string
         envOverrides?: Array<{ key: string; value: string }>
         resourceOverrides?: {
@@ -553,6 +554,29 @@ export const templateMutations = {
     if (!template.components?.length)
       throw new GraphQLError('Template has no components')
 
+    // Filter components by enabledComponentIds (if provided)
+    const enabledSet = input.enabledComponentIds
+      ? new Set(input.enabledComponentIds)
+      : null
+
+    const isComponentRequired = (comp: typeof template.components[0]) =>
+      comp.primary || comp.internalOnly || comp.required !== false
+
+    // Validate that all required components are enabled
+    if (enabledSet) {
+      for (const comp of template.components) {
+        if (isComponentRequired(comp) && !enabledSet.has(comp.id)) {
+          throw new GraphQLError(
+            `Component '${comp.name}' (${comp.id}) is required and cannot be disabled`
+          )
+        }
+      }
+    }
+
+    const enabledComponents = enabledSet
+      ? template.components.filter(c => enabledSet.has(c.id))
+      : template.components
+
     // Build topology from user input
     type Target = {
       componentId: string
@@ -565,7 +589,7 @@ export const templateMutations = {
       const prov = (input.provider === 'phala' ? 'phala' : 'akash') as
         | 'akash'
         | 'phala'
-      for (const comp of template.components) {
+      for (const comp of enabledComponents) {
         targets.push({ componentId: comp.id, provider: prov, group: 'main' })
       }
     } else {
@@ -575,6 +599,7 @@ export const templateMutations = {
       let akashCounter = 0
       let phalaCounter = 0
       for (const ct of input.componentTargets) {
+        if (enabledSet && !enabledSet.has(ct.componentId)) continue
         const prov = (ct.provider === 'phala' ? 'phala' : 'akash') as
           | 'akash'
           | 'phala'
@@ -660,7 +685,21 @@ export const templateMutations = {
       }
     }
 
-    const ctx: CompositeContext = { slugs, groups, providers, password, secret }
+    // Build fallback map for disabled components, merging user overrides
+    const componentFallbacks: Record<string, Record<string, string>> = {}
+    const userFallbackOverrides = input.componentFallbackOverrides as Record<string, Record<string, string>> | undefined
+    if (enabledSet) {
+      for (const comp of template.components) {
+        if (!enabledSet.has(comp.id)) {
+          componentFallbacks[comp.id] = {
+            ...(comp.fallbacks || {}),
+            ...(userFallbackOverrides?.[comp.id] || {}),
+          }
+        }
+      }
+    }
+
+    const ctx: CompositeContext = { slugs, groups, providers, password, secret, componentFallbacks }
 
     const resolved: ResolvedComponent[] = []
     for (const comp of activeComponents) {

@@ -1442,6 +1442,10 @@ export const typeDefs = /* GraphQL */ `
     templateId: String
     internalOnly: Boolean
     sdlServiceName: String
+    """Whether this component must be deployed (default true). Primary and internalOnly are always required."""
+    required: Boolean
+    """JSON-encoded fallback values when this component is disabled."""
+    fallbacks: JSON
     """Resolved default resources for this component (from parent or referenced template)."""
     defaultResources: TemplateResources
   }
@@ -1510,6 +1514,10 @@ export const typeDefs = /* GraphQL */ `
     provider: String
     """Per-component provider assignments for custom mode."""
     componentTargets: [ComponentTargetInput!]
+    """Which components to deploy (omit to deploy all). Required components are validated."""
+    enabledComponentIds: [String!]
+    """Override fallback values for disabled components (JSON: { componentId: { field: value } })."""
+    componentFallbackOverrides: JSON
     serviceName: String
     envOverrides: [EnvOverrideInput!]
     resourceOverrides: ResourceOverrideInput

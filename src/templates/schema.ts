@@ -196,6 +196,15 @@ export interface TemplateComponent {
     pricingUakt?: number
   }
 
+  // ── Availability ────────────────────────────────────────────────
+  /** Whether this component must be deployed (default: true).
+   *  Primary and internalOnly components are always implicitly required. */
+  required?: boolean
+  /** When this component is disabled, these values replace references to it
+   *  in other components' envLinks. Keys map to field names used in placeholders:
+   *  'proxyHttpUrl', 'proxyWsUrl', 'proxyUrl', 'host', 'env.SOME_KEY' */
+  fallbacks?: Record<string, string>
+
   // ── Behavior ──────────────────────────────────────────────────
   /** Don't expose ports globally — internal-only (e.g. databases) */
   internalOnly?: boolean

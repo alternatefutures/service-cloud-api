@@ -312,6 +312,8 @@ export interface CompositeContext {
   /** Shared generated secrets for this deployment */
   password: string
   secret: string
+  /** componentId → fallback values for disabled components (from TemplateComponent.fallbacks) */
+  componentFallbacks?: Record<string, Record<string, string>>
 }
 
 // Deployed containers always connect via the production proxy domain,
@@ -353,7 +355,11 @@ export function resolveEnvLinks(
 
       const [, targetId, field] = compMatch
       const targetSlug = ctx.slugs[targetId]
-      if (!targetSlug) return _match
+      if (!targetSlug) {
+        // Component is disabled — use fallback value if available
+        const fallback = ctx.componentFallbacks?.[targetId]?.[field]
+        return fallback ?? ''
+      }
 
       if (field === 'proxyUrl') {
         return getProxyUrlForSlug(targetSlug)

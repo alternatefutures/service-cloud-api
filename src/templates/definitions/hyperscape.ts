@@ -26,9 +26,10 @@ export const hyperscapeServer: Template = {
   envVars: [
     {
       key: 'PUBLIC_CDN_URL',
-      default: 'https://assets.hyperscape.club',
-      description: 'CDN base URL for game assets (models, textures, audio)',
-      required: true,
+      default: '',
+      description:
+        'CDN base URL for game assets (models, textures, audio). Auto-resolved from the assets component in composite deployments.',
+      required: false,
     },
     {
       key: 'PUBLIC_PRIVY_APP_ID',
@@ -136,15 +137,39 @@ export const hyperscapeServer: Template = {
         USE_LOCAL_POSTGRES: 'false',
         PUBLIC_API_URL: '{{component.server.proxyHttpUrl}}',
         PUBLIC_WS_URL: '{{component.server.proxyWsUrl}}/ws',
-        PUBLIC_CDN_URL: 'https://assets.hyperscape.club',
+        PUBLIC_CDN_URL: '{{component.assets.proxyHttpUrl}}',
         PUBLIC_APP_URL: '{{component.client.proxyHttpUrl}}',
       },
+    },
+    {
+      id: 'assets',
+      name: 'Asset Server',
+      description:
+        'Caddy static file server hosting game assets (models, textures, audio). Disable if you have your own CDN and set PUBLIC_CDN_URL manually.',
+      required: false,
+      fallbacks: {
+        proxyHttpUrl: '',
+      },
+      sdlServiceName: 'assets',
+      inline: {
+        dockerImage: 'ghcr.io/alternatefutures/hyperscape-assets:v1',
+        resources: { cpu: 0.5, memory: '256Mi', storage: '8Gi' },
+        ports: [{ port: 80, as: 80, global: true }],
+        healthCheck: { path: '/', port: 80 },
+        pricingUakt: 1000,
+      },
+      envLinks: {},
     },
     {
       id: 'client',
       name: 'Web Client',
       description:
         'Lightweight static file server for the game client. Uses the same image as the server — no separate build needed.',
+      required: false,
+      fallbacks: {
+        proxyHttpUrl: '',
+        proxyWsUrl: '',
+      },
       sdlServiceName: 'web',
       inline: {
         dockerImage: 'ghcr.io/alternatefutures/hyperscape:v12',
@@ -158,7 +183,7 @@ export const hyperscapeServer: Template = {
       envLinks: {
         PUBLIC_API_URL: '{{component.server.proxyHttpUrl}}',
         PUBLIC_WS_URL: '{{component.server.proxyWsUrl}}/ws',
-        PUBLIC_CDN_URL: 'https://assets.hyperscape.club',
+        PUBLIC_CDN_URL: '{{component.assets.proxyHttpUrl}}',
         PUBLIC_PRIVY_APP_ID: '{{component.server.env.PUBLIC_PRIVY_APP_ID}}',
       },
     },
