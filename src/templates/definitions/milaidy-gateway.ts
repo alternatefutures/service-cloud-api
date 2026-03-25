@@ -8,7 +8,7 @@ export const milaidyGateway: Template = {
   featured: true,
   category: 'AI_ML',
   tags: ['ai', 'assistant', 'agent', 'elizaos', 'gateway', 'websocket'],
-  icon: 'https://raw.githubusercontent.com/milady-ai/milaidy/develop/apps/landing/apple-touch-icon.png',
+  icon: '/templates/milaidy.png',
   repoUrl: 'https://github.com/milady-ai/milaidy',
   dockerImage: 'ghcr.io/alternatefutures/milaidy-akash:v7',
   serviceType: 'VM',
