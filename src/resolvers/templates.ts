@@ -534,6 +534,7 @@ export const templateMutations = {
           }
         }>
         enabledComponentIds?: string[]
+        componentFallbackOverrides?: Record<string, Record<string, string>>
         serviceName?: string
         envOverrides?: Array<{ key: string; value: string }>
         resourceOverrides?: {
