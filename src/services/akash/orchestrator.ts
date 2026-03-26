@@ -205,7 +205,7 @@ export class AkashOrchestrator {
       'create',
       sdlPath,
       '--deposit',
-      `${deposit}uakt`,
+      `${deposit}uact`,
       '-o',
       'json',
       '-y',
@@ -245,6 +245,7 @@ export class AkashOrchestrator {
       for (const log of logs) {
         for (const event of log.events || []) {
           if (
+            event.type === 'akash.deployment.v1.EventDeploymentCreated' ||
             event.type === 'akash.v1beta3.EventDeploymentCreated' ||
             event.type === 'message'
           ) {
@@ -393,7 +394,7 @@ export class AkashOrchestrator {
         },
         price: {
           amount: String(price.amount || '0'),
-          denom: String(price.denom || 'uakt'),
+          denom: String(price.denom || 'uact'),
         },
       }
     })
@@ -1017,7 +1018,7 @@ profiles:
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
         ${name}:
-          denom: uakt
+          denom: uact
           amount: 1000
 
 deployment:
@@ -1102,7 +1103,7 @@ profiles:
     dcloud:
       pricing:
         ${name}:
-          denom: uakt
+          denom: uact
           amount: 1000
 
 deployment:
@@ -1143,7 +1144,7 @@ profiles:
     dcloud:
       pricing:
         ${name}:
-          denom: uakt
+          denom: uact
           amount: 500
 
 deployment:
@@ -1197,7 +1198,7 @@ profiles:
     dcloud:
       pricing:
         ${name}:
-          denom: uakt
+          denom: uact
           amount: 2000
 
 deployment:
@@ -1242,7 +1243,7 @@ profiles:
     dcloud:
       pricing:
         ${name}:
-          denom: uakt
+          denom: uact
           amount: 1500
 
 deployment:

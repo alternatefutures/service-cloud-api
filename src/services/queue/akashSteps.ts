@@ -243,7 +243,7 @@ export async function handleSubmitTx(
       'create',
       sdlPath,
       '--deposit',
-      `${deposit}uakt`,
+      `${deposit}uact`,
       '-o',
       'json',
       '-y',
@@ -470,7 +470,7 @@ export async function handleCheckBids(
         },
         price: {
           amount: String(price.amount || '0'),
-          denom: String(price.denom || 'uakt'),
+          denom: String(price.denom || 'uact'),
         },
       }
     })

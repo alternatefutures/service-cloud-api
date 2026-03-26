@@ -61,8 +61,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Akash CLI (used by AkashOrchestrator for user deployments)
-RUN curl -sSfL -o /tmp/akash.zip https://github.com/akash-network/node/releases/download/v1.1.1/akash_linux_amd64.zip && \
+# Install Akash CLI v2 (BME upgrade, March 2026 — deposits now use uact)
+RUN curl -sSfL -o /tmp/akash.zip https://github.com/akash-network/node/releases/download/v2.0.0-rc18/akash_2.0.0-rc18_linux_amd64.zip && \
     unzip /tmp/akash.zip -d /tmp/akash && \
     mv /tmp/akash/akash /usr/local/bin/akash && \
     chmod +x /usr/local/bin/akash && \

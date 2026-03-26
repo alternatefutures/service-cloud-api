@@ -100,7 +100,7 @@ export function generateSDLFromTemplate(
     dcloud:
       pricing:
         ${serviceName}:
-          denom: uakt
+          denom: uact
           amount: ${pricingUakt}`
     : `  placement:
     dcloud:
@@ -109,7 +109,7 @@ export function generateSDLFromTemplate(
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
         ${serviceName}:
-          denom: uakt
+          denom: uact
           amount: ${pricingUakt}`
 
   // ── Build the SDL ───────────────────────────────────────────
@@ -490,7 +490,7 @@ ${storageLines.join('\n')}`
   const pricingLines = components
     .map(
       c =>
-        `        ${c.sdlServiceName}:\n          denom: uakt\n          amount: ${c.pricingUakt}`
+        `        ${c.sdlServiceName}:\n          denom: uact\n          amount: ${c.pricingUakt}`
     )
     .join('\n')
 
