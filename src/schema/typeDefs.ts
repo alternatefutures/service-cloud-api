@@ -959,8 +959,8 @@ export const typeDefs = /* GraphQL */ `
 
   type WorkspaceMetrics {
     compute: ComputeMetrics!
-    storage: StorageMetrics!
-    traffic: TrafficMetrics!
+    deployments: DeploymentMetrics!
+    spend: SpendMetrics!
   }
 
   type ComputeMetrics {
@@ -968,21 +968,17 @@ export const typeDefs = /* GraphQL */ `
     totalCpuMillicores: Int!
     totalMemoryMb: Int!
     formatted: String!
-    trend: Float
   }
 
-  type StorageMetrics {
-    totalBytes: Float!
+  type DeploymentMetrics {
+    active: Int!
+    total: Int!
     formatted: String!
-    pinCount: Int!
-    trend: Float
   }
 
-  type TrafficMetrics {
-    totalRequests: Int!
-    totalBandwidthBytes: Float!
+  type SpendMetrics {
+    currentMonthCents: Int!
     formatted: String!
-    trend: Float
   }
 
   # ============================================

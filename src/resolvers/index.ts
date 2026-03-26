@@ -653,7 +653,7 @@ export const resolvers = {
       return trend
     },
 
-    // Workspace Metrics (aggregated compute, storage, traffic)
+    // Workspace Metrics (compute, deployments, spend)
     workspaceMetrics: async (
       _: unknown,
       { projectId }: { projectId?: string },
@@ -663,30 +663,37 @@ export const resolvers = {
         throw new GraphQLError('Not authenticated')
       }
 
-      const now = new Date()
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-      const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
+      // Scope projects by org or user
+      const projectWhere = projectId
+        ? { id: projectId }
+        : context.organizationId
+          ? {
+              OR: [
+                { organizationId: context.organizationId },
+                { userId: context.userId, organizationId: null },
+              ],
+            }
+          : { userId: context.userId }
+
+      const projectIds = (
+        await context.prisma.project.findMany({
+          where: projectWhere,
+          select: { id: true },
+        })
+      ).map((p) => p.id)
 
       // ── Compute Metrics ──────────────────────────────────────────
-      // Find all active Akash deployments, optionally scoped to a project
-      const akashWhere: any = { status: 'ACTIVE' as const }
-      if (projectId) {
-        akashWhere.service = { projectId }
-      } else {
-        // Scope to all projects owned by this user
-        akashWhere.service = {
-          project: { userId: context.userId },
-        }
-      }
-
-      const activeDeployments = await context.prisma.akashDeployment.findMany({
-        where: akashWhere,
+      const activeAkash = await context.prisma.akashDeployment.findMany({
+        where: {
+          status: 'ACTIVE',
+          service: { projectId: { in: projectIds } },
+        },
         select: { sdlContent: true },
       })
 
       let totalCpuMillicores = 0
       let totalMemoryMb = 0
-      for (const dep of activeDeployments) {
+      for (const dep of activeAkash) {
         const { cpu, memory } = parseSdlResources(dep.sdlContent)
         totalCpuMillicores += cpu
         totalMemoryMb += memory
@@ -696,128 +703,70 @@ export const resolvers = {
       const memFormatted = totalMemoryMb >= 1024
         ? `${(totalMemoryMb / 1024).toFixed(1)} GB`
         : `${totalMemoryMb} MB`
-      const computeFormatted = `${cpuFormatted} vCPU / ${memFormatted}`
+      const computeFormatted = activeAkash.length > 0
+        ? `${cpuFormatted} vCPU / ${memFormatted}`
+        : '--'
 
-      // ── Storage Metrics ──────────────────────────────────────────
-      const activePins = await context.prisma.pinnedContent.findMany({
+      // ── Deployment Metrics ────────────────────────────────────────
+      const activePhalaCount = await context.prisma.phalaDeployment.count({
         where: {
-          userId: context.userId,
-          unpinnedAt: null,
+          status: 'ACTIVE',
+          service: { projectId: { in: projectIds } },
         },
-        select: { sizeBytes: true },
       })
 
-      const totalBytes = activePins.reduce(
-        (sum: number, pin: { sizeBytes: bigint }) => sum + Number(pin.sizeBytes),
-        0
-      )
-      const pinCount = activePins.length
-
-      const storageFormatted = formatBytes(totalBytes)
-
-      // Storage trend: compare current snapshot to 30 days ago
-      const currentSnapshot = await context.prisma.storageSnapshot.findFirst({
-        where: { userId: context.userId },
-        orderBy: { date: 'desc' },
-        select: { totalBytes: true },
+      const totalAkash = await context.prisma.akashDeployment.count({
+        where: { service: { projectId: { in: projectIds } } },
       })
-      const previousSnapshot = await context.prisma.storageSnapshot.findFirst({
-        where: {
-          userId: context.userId,
-          date: { lte: thirtyDaysAgo },
-        },
-        orderBy: { date: 'desc' },
-        select: { totalBytes: true },
+      const totalPhala = await context.prisma.phalaDeployment.count({
+        where: { service: { projectId: { in: projectIds } } },
       })
 
-      let storageTrend: number | null = null
-      if (currentSnapshot && previousSnapshot) {
-        const current = Number(currentSnapshot.totalBytes)
-        const previous = Number(previousSnapshot.totalBytes)
-        if (previous > 0) {
-          storageTrend = ((current - previous) / previous) * 100
-        }
-      }
+      const activeCount = activeAkash.length + activePhalaCount
+      const totalCount = totalAkash + totalPhala
+      const deploymentsFormatted = `${activeCount} active`
 
-      // ── Traffic Metrics ──────────────────────────────────────────
-      // Lookup customer for UsageRecord queries
-      const customer = await context.prisma.customer.findUnique({
-        where: { userId: context.userId },
-        select: { id: true },
-      })
+      // ── Spend Metrics ─────────────────────────────────────────────
+      const orgId = context.organizationId
+      let currentMonthCents = 0
 
-      let totalRequests = 0
-      let totalBandwidthBytes = 0
-      let trafficTrend: number | null = null
+      if (orgId) {
+        const now = new Date()
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 
-      if (customer) {
-        // Current period (last 30 days)
-        const currentRecords = await context.prisma.usageRecord.findMany({
-          where: {
-            customerId: customer.id,
-            type: { in: ['REQUESTS', 'BANDWIDTH'] },
-            periodStart: { gte: thirtyDaysAgo },
-          },
-          select: { type: true, quantity: true },
+        const escrows = await context.prisma.deploymentEscrow.findMany({
+          where: { organizationId: orgId },
+          select: { consumedCents: true, lastBilledAt: true, dailyRateCents: true, createdAt: true },
         })
 
-        for (const rec of currentRecords) {
-          if (rec.type === 'REQUESTS') totalRequests += rec.quantity
-          if (rec.type === 'BANDWIDTH') totalBandwidthBytes += rec.quantity
-        }
-
-        // Previous period (30-60 days ago) for trend
-        const previousRecords = await context.prisma.usageRecord.findMany({
-          where: {
-            customerId: customer.id,
-            type: 'REQUESTS',
-            periodStart: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
-          },
-          select: { quantity: true },
-        })
-
-        const previousRequests = previousRecords.reduce(
-          (sum: number, r: { quantity: number }) => sum + r.quantity,
-          0
-        )
-
-        if (previousRequests > 0) {
-          trafficTrend =
-            ((totalRequests - previousRequests) / previousRequests) * 100
+        for (const e of escrows) {
+          const escrowStart = e.createdAt > monthStart ? e.createdAt : monthStart
+          const escrowEnd = e.lastBilledAt ?? now
+          if (escrowEnd <= monthStart) continue
+          const days = Math.max(0, (escrowEnd.getTime() - escrowStart.getTime()) / 86_400_000)
+          currentMonthCents += Math.round(days * e.dailyRateCents)
         }
       }
 
-      // Also add live counters from UsageBuffer
-      const usageBuffer = await context.prisma.usageBuffer.findUnique({
-        where: { userId: context.userId },
-      })
-
-      if (usageBuffer) {
-        totalRequests += usageBuffer.requests
-        totalBandwidthBytes += usageBuffer.bandwidth
-      }
-
-      const trafficFormatted = formatCount(totalRequests) + ' requests'
+      const spendFormatted = currentMonthCents > 0
+        ? `$${(currentMonthCents / 100).toFixed(2)}`
+        : '$0.00'
 
       return {
         compute: {
-          activeDeploys: activeDeployments.length,
+          activeDeploys: activeAkash.length,
           totalCpuMillicores,
           totalMemoryMb,
           formatted: computeFormatted,
-          trend: null, // Compute trend requires historical snapshots not yet tracked
         },
-        storage: {
-          totalBytes,
-          formatted: storageFormatted,
-          pinCount,
-          trend: storageTrend,
+        deployments: {
+          active: activeCount,
+          total: totalCount,
+          formatted: deploymentsFormatted,
         },
-        traffic: {
-          totalRequests,
-          totalBandwidthBytes,
-          formatted: trafficFormatted,
-          trend: trafficTrend,
+        spend: {
+          currentMonthCents,
+          formatted: spendFormatted,
         },
       }
     },
