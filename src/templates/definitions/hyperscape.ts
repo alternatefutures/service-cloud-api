@@ -21,7 +21,7 @@ export const hyperscapeServer: Template = {
   ],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v14',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v20',
   serviceType: 'VM',
   envVars: [
     {
@@ -174,7 +174,7 @@ export const hyperscapeServer: Template = {
       },
       sdlServiceName: 'web',
       inline: {
-        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v14',
+        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v20',
         resources: { cpu: 0.5, memory: '256Mi', storage: '1Gi' },
         ports: [{ port: 80, as: 80, global: true }],
         healthCheck: { path: '/', port: 80 },
