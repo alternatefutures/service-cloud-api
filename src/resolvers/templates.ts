@@ -58,6 +58,26 @@ function genPassword(len = 32): string {
   return randomBytes(len).toString('base64url').slice(0, len)
 }
 
+function assertRequiredTemplateEnvVars(
+  template: Template,
+  envOverrides: Record<string, string>
+): void {
+  const missingKeys = template.envVars
+    .filter(envVar => envVar.required)
+    .map(envVar => {
+      const resolvedValue = envOverrides[envVar.key] ?? envVar.default ?? ''
+      return { key: envVar.key, value: resolvedValue }
+    })
+    .filter(({ value }) => value.trim() === '')
+    .map(({ key }) => key)
+
+  if (missingKeys.length > 0) {
+    throw new GraphQLError(
+      `Missing required environment variables: ${missingKeys.join(', ')}`
+    )
+  }
+}
+
 /**
  * Create companion services (e.g. postgres) for a template, auto-link them,
  * and inject connection string env vars on the primary service.
@@ -227,10 +247,22 @@ export const templateMutations = {
       throw new GraphQLError('Project not found')
     }
 
-    // ── Create service in registry ───────────────────────────
     const serviceName =
       input.serviceName || `${template.id}-${Date.now().toString(36)}`
     const slug = generateSlug(serviceName)
+
+    // ── Resolve env vars before persisting/deploying ─────────
+    const envOverrides: Record<string, string> = {}
+    if (input.envOverrides) {
+      for (const { key, value } of input.envOverrides) {
+        envOverrides[key] = value
+      }
+    }
+
+    await injectPlatformEnvVars(template, envOverrides, context, slug)
+    assertRequiredTemplateEnvVars(template, envOverrides)
+
+    // ── Create service in registry ───────────────────────────
 
     const service = await context.prisma.service.create({
       data: {
@@ -251,11 +283,7 @@ export const templateMutations = {
             data: {
               serviceId: service.id,
               key: ev.key,
-              value:
-                (input.envOverrides ?? []).find((o: any) => o.key === ev.key)
-                  ?.value ??
-                ev.default ??
-                '',
+              value: envOverrides[ev.key] ?? ev.default ?? '',
               secret: ev.secret ?? false,
             },
           })
@@ -286,17 +314,6 @@ export const templateMutations = {
         template.companions
       )
     }
-
-    // ── Convert env overrides from array to Record ───────────
-    const envOverrides: Record<string, string> = {}
-    if (input.envOverrides) {
-      for (const { key, value } of input.envOverrides) {
-        envOverrides[key] = value
-      }
-    }
-
-    // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
-    await injectPlatformEnvVars(template, envOverrides, context, slug)
 
     // ── Build resource overrides ─────────────────────────────
     const resourceOverrides = input.resourceOverrides
@@ -390,6 +407,16 @@ export const templateMutations = {
       input.serviceName || `${template.id}-${Date.now().toString(36)}`
     const slug = generateSlug(serviceName)
 
+    const envOverrides: Record<string, string> = {}
+    if (input.envOverrides) {
+      for (const { key, value } of input.envOverrides) {
+        envOverrides[key] = value
+      }
+    }
+
+    await injectPlatformEnvVars(template, envOverrides, context, slug)
+    assertRequiredTemplateEnvVars(template, envOverrides)
+
     const service = await context.prisma.service.create({
       data: {
         name: serviceName,
@@ -409,11 +436,7 @@ export const templateMutations = {
             data: {
               serviceId: service.id,
               key: ev.key,
-              value:
-                (input.envOverrides ?? []).find((o: any) => o.key === ev.key)
-                  ?.value ??
-                ev.default ??
-                '',
+              value: envOverrides[ev.key] ?? ev.default ?? '',
               secret: ev.secret ?? false,
             },
           })
@@ -444,16 +467,6 @@ export const templateMutations = {
         template.companions
       )
     }
-
-    const envOverrides: Record<string, string> = {}
-    if (input.envOverrides) {
-      for (const { key, value } of input.envOverrides) {
-        envOverrides[key] = value
-      }
-    }
-
-    // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
-    await injectPlatformEnvVars(template, envOverrides, context, slug)
 
     const composeContent = generateComposeFromTemplate(template, {
       serviceName: slug,
@@ -625,6 +638,7 @@ export const templateMutations = {
       input.serviceName || `${template.id}-${Date.now().toString(36)}`
     )
     await injectPlatformEnvVars(template, envOverrides, context, primarySlug)
+    assertRequiredTemplateEnvVars(template, envOverrides)
 
     // ── Resolve components ──────────────────────────────────────
     const activeComponentIds = new Set(targets.map(t => t.componentId))

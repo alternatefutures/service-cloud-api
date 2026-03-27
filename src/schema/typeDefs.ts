@@ -424,6 +424,7 @@ export const typeDefs = /* GraphQL */ `
     ACTIVE
     FAILED
     PERMANENTLY_FAILED
+    SUSPENDED
     CLOSED
   }
 

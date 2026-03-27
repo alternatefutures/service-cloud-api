@@ -805,6 +805,7 @@ export class AkashOrchestrator {
    * Generate SDL based on service type.
    */
   private async generateSDLForService(service: {
+    id: string
     type: ServiceType
     name: string
     slug: string
@@ -833,6 +834,33 @@ export class AkashOrchestrator {
     if (service.templateId) {
       const template = getTemplateById(service.templateId)
       if (template) {
+        // Composite templates (with components) produce multi-service SDLs that
+        // cannot be regenerated from generateSDLFromTemplate (which is single-service).
+        // Reuse the SDL from the most recent deployment for this service instead.
+        if (template.components?.length) {
+          const lastDeployment = await this.prisma.akashDeployment.findFirst({
+            where: {
+              serviceId: service.id,
+              sdlContent: { not: '' },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { sdlContent: true, savedSdl: true },
+          })
+          const previousSdl = lastDeployment?.savedSdl ?? lastDeployment?.sdlContent
+          if (previousSdl) {
+            log.info(
+              `Reusing composite SDL from previous deployment for service '${service.slug}' (template '${service.templateId}')`
+            )
+            return previousSdl
+          }
+          log.warn(
+            `Composite template '${service.templateId}' but no previous SDL found for service '${service.slug}'. Cannot regenerate composite SDL from sidebar deploy — use the template deploy flow instead.`
+          )
+          throw new Error(
+            `This service was deployed from the composite template '${template.name}'. Please redeploy from the template catalog to include all components (database, assets, etc).`
+          )
+        }
+
         log.info(
           `Generating SDL from template '${service.templateId}' for service '${service.slug}'`
         )

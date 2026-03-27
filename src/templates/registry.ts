@@ -16,6 +16,7 @@ import {
   openclawGateway,
   nanobotGateway,
   ollamaGpu,
+  gpuInstance,
   jupyterMlWorkspace,
   nextjsServer,
   reactVite,
@@ -38,6 +39,7 @@ const templates: Template[] = [
   milaidyGateway,
   openclawGateway,
   ollamaGpu,
+  gpuInstance,
   jupyterMlWorkspace,
   alternateAgent,
   // AI / ML

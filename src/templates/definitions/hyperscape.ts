@@ -36,14 +36,14 @@ export const hyperscapeServer: Template = {
       default: null,
       description:
         'Privy application ID for wallet-based authentication (must match client)',
-      required: false,
+      required: true,
     },
     {
       key: 'PRIVY_APP_SECRET',
       default: null,
       description:
         'Privy application secret for server-side token verification',
-      required: false,
+      required: true,
       secret: true,
     },
     {
