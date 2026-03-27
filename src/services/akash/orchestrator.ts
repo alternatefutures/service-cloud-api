@@ -500,6 +500,78 @@ export class AkashOrchestrator {
   }
 
   /**
+   * Get per-container health from lease-status. Returns richer data than
+   * getServices, including replica counts and container state.
+   */
+  getLeaseHealth(
+    dseq: number,
+    provider: string
+  ): Array<{
+    name: string
+    ready: boolean
+    total: number
+    available: number
+    readyReplicas: number
+    uris: string[]
+  }> {
+    const output = runProviderServices(
+      ['lease-status', '--dseq', String(dseq), '--provider', provider],
+      15_000
+    )
+
+    const result = extractJson(output) as {
+      services?: Record<
+        string,
+        {
+          name?: string
+          uris?: string[]
+          replicas?: number
+          available_replicas?: number
+          ready_replicas?: number
+          updated_replicas?: number
+        }
+      >
+      forwarded_ports?: Record<
+        string,
+        Array<{ host: string; externalPort: number }>
+      >
+    }
+
+    const services = result.services || {}
+    const forwardedPorts = result.forwarded_ports || {}
+    const containers: Array<{
+      name: string
+      ready: boolean
+      total: number
+      available: number
+      readyReplicas: number
+      uris: string[]
+    }> = []
+
+    for (const [k, v] of Object.entries(services)) {
+      const uris = [...(v.uris || [])]
+      if (uris.length === 0 && forwardedPorts[k]?.length) {
+        for (const fp of forwardedPorts[k]) {
+          uris.push(`${fp.host}:${fp.externalPort}`)
+        }
+      }
+      const total = v.replicas ?? 1
+      const available = v.available_replicas ?? 0
+      const readyReplicas = v.ready_replicas ?? 0
+      containers.push({
+        name: k,
+        ready: readyReplicas >= total && total > 0,
+        total,
+        available,
+        readyReplicas,
+        uris,
+      })
+    }
+
+    return containers
+  }
+
+  /**
    * Background backfill for deployments where URIs weren't available during
    * the initial polling window. Retries every 10s for up to 3 minutes.
    */

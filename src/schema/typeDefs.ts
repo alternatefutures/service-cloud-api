@@ -113,6 +113,7 @@ export const typeDefs = /* GraphQL */ `
     internalHostname: String
     createdByUserId: ID
     parentServiceId: ID
+    sdlServiceName: String
     createdAt: Date!
     updatedAt: Date!
 
@@ -470,6 +471,27 @@ export const typeDefs = /* GraphQL */ `
     STOPPED
     DELETED
     PERMANENTLY_FAILED
+  }
+
+  # ============================================
+  # DEPLOYMENT HEALTH (live container status)
+  # ============================================
+
+  type ContainerHealth {
+    name: String!
+    status: String!
+    ready: Boolean!
+    total: Int!
+    available: Int!
+    uris: [String!]!
+    message: String
+  }
+
+  type DeploymentHealth {
+    provider: String!
+    overall: String!
+    containers: [ContainerHealth!]!
+    lastChecked: Date!
   }
 
   type DeploymentProgress {
@@ -1665,6 +1687,9 @@ export const typeDefs = /* GraphQL */ `
       startDate: Date!
       endDate: Date!
     ): TelemetryUsageSummary!
+
+    # Live container health from provider (Akash lease-status / Phala CVM status)
+    deploymentHealth(serviceId: ID!): DeploymentHealth
 
     # Service container logs (Akash / Phala)
     serviceLogs(serviceId: ID!, tail: Int, service: String): ServiceLogResult!

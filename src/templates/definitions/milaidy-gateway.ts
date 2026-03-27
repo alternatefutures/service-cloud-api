@@ -10,7 +10,7 @@ export const milaidyGateway: Template = {
   tags: ['ai', 'assistant', 'agent', 'elizaos', 'gateway', 'websocket'],
   icon: '/templates/milaidy.png',
   repoUrl: 'https://github.com/milady-ai/milaidy',
-  dockerImage: 'ghcr.io/alternatefutures/milaidy-akash:v7',
+  dockerImage: 'ghcr.io/alternatefutures/milaidy-akash:v8',
   serviceType: 'VM',
   envVars: [
     {

@@ -37,6 +37,7 @@ import {
   serviceConnectivityFieldResolvers,
 } from './serviceConnectivity.js'
 import { logsQueries } from './logs.js'
+import { healthQueries } from './health.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
@@ -1022,6 +1023,9 @@ export const resolvers = {
 
     // Service container logs
     ...logsQueries,
+
+    // Live container health
+    ...healthQueries,
 
     // Service connectivity (env vars, ports, links)
     ...serviceConnectivityQueries,

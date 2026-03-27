@@ -18,6 +18,10 @@ import type {
   DeployOptions,
   DeploymentResult,
   DeploymentStatusResult,
+  DeploymentHealthResult,
+  ContainerHealth,
+  ContainerStatus,
+  OverallHealth,
   LogOptions,
   ProviderCapabilities,
   ProviderStatus,
@@ -137,6 +141,109 @@ export class PhalaProvider implements DeploymentProvider {
       where: { id: deploymentId },
       data: { status: 'DELETED' },
     })
+  }
+
+  async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {
+    const deployment = await this.prisma.phalaDeployment.findUnique({
+      where: { id: deploymentId },
+    })
+    if (!deployment) return null
+
+    const terminalStates = new Set(['DELETED', 'FAILED', 'PERMANENTLY_FAILED'])
+    if (terminalStates.has(deployment.status)) {
+      return {
+        provider: 'phala',
+        overall: deployment.status === 'DELETED' ? 'unknown' : 'unhealthy',
+        containers: [{
+          name: deployment.name,
+          status: 'error' as ContainerStatus,
+          ready: false,
+          total: 1,
+          available: 0,
+          uris: deployment.appUrl ? [deployment.appUrl] : [],
+          message: deployment.errorMessage ?? undefined,
+        }],
+        lastChecked: new Date(),
+      }
+    }
+
+    if (deployment.status === 'CREATING' || deployment.status === 'STARTING') {
+      return {
+        provider: 'phala',
+        overall: 'starting',
+        containers: [{
+          name: deployment.name,
+          status: 'starting' as ContainerStatus,
+          ready: false,
+          total: 1,
+          available: 0,
+          uris: [],
+        }],
+        lastChecked: new Date(),
+      }
+    }
+
+    if (deployment.status === 'STOPPED') {
+      return {
+        provider: 'phala',
+        overall: 'unknown',
+        containers: [{
+          name: deployment.name,
+          status: 'unknown' as ContainerStatus,
+          ready: false,
+          total: 1,
+          available: 0,
+          uris: deployment.appUrl ? [deployment.appUrl] : [],
+        }],
+        lastChecked: new Date(),
+      }
+    }
+
+    try {
+      const orchestrator = getPhalaOrchestrator(this.prisma)
+      const cvmStatus = await orchestrator.getCvmStatus(deployment.appId)
+
+      let status: ContainerStatus = 'unknown'
+      let overall: OverallHealth = 'unknown'
+      const cvmState = (cvmStatus?.status as string) ?? ''
+
+      if (cvmState === 'running') {
+        status = 'running'
+        overall = 'healthy'
+      } else if (cvmState === 'starting' || cvmState === 'provisioning') {
+        status = 'starting'
+        overall = 'starting'
+      } else if (cvmState === 'failed' || cvmState === 'error') {
+        status = 'crashed'
+        overall = 'unhealthy'
+      }
+
+      const container: ContainerHealth = {
+        name: deployment.name,
+        status,
+        ready: status === 'running',
+        total: 1,
+        available: status === 'running' ? 1 : 0,
+        uris: deployment.appUrl ? [deployment.appUrl] : [],
+        message: (cvmStatus?.error as string) ?? (cvmStatus?.message as string) ?? undefined,
+      }
+
+      return { provider: 'phala', overall, containers: [container], lastChecked: new Date() }
+    } catch {
+      return {
+        provider: 'phala',
+        overall: deployment.status === 'ACTIVE' ? 'healthy' : 'unknown',
+        containers: [{
+          name: deployment.name,
+          status: deployment.status === 'ACTIVE' ? 'running' : 'unknown',
+          ready: deployment.status === 'ACTIVE',
+          total: 1,
+          available: deployment.status === 'ACTIVE' ? 1 : 0,
+          uris: deployment.appUrl ? [deployment.appUrl] : [],
+        }],
+        lastChecked: new Date(),
+      }
+    }
   }
 
   async getStatus(deploymentId: string): Promise<DeploymentStatusResult> {

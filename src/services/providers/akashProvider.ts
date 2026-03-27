@@ -19,6 +19,10 @@ import type {
   DeployOptions,
   DeploymentResult,
   DeploymentStatusResult,
+  DeploymentHealthResult,
+  ContainerHealth,
+  ContainerStatus,
+  OverallHealth,
   LogOptions,
   ProviderCapabilities,
   ProviderStatus,
@@ -128,6 +132,80 @@ export class AkashProvider implements DeploymentProvider {
       where: { id: deploymentId },
       data: { status: 'CLOSED', closedAt: new Date() },
     })
+  }
+
+  async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {
+    const deployment = await this.prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+    })
+    if (!deployment || !deployment.provider) return null
+
+    const nonHealthStates = new Set(['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'])
+    if (nonHealthStates.has(deployment.status)) {
+      return {
+        provider: 'akash',
+        overall: deployment.status === 'CLOSED' ? 'unknown' : 'unhealthy',
+        containers: [],
+        lastChecked: new Date(),
+      }
+    }
+
+    const isPreActive = !['ACTIVE', 'SUSPENDED'].includes(deployment.status)
+    if (isPreActive) {
+      return {
+        provider: 'akash',
+        overall: 'starting',
+        containers: [],
+        lastChecked: new Date(),
+      }
+    }
+
+    try {
+      const orchestrator = getAkashOrchestrator(this.prisma)
+      const raw = orchestrator.getLeaseHealth(
+        Number(deployment.dseq),
+        deployment.provider
+      )
+
+      const containers: ContainerHealth[] = raw.map(c => {
+        let status: ContainerStatus = 'unknown'
+        if (c.ready) {
+          status = 'running'
+        } else if (c.available > 0) {
+          status = 'starting'
+        } else if (c.total > 0) {
+          status = 'waiting'
+        }
+
+        return {
+          name: c.name,
+          status,
+          ready: c.ready,
+          total: c.total,
+          available: c.available,
+          uris: c.uris,
+        }
+      })
+
+      const allReady = containers.length > 0 && containers.every(c => c.ready)
+      const anyReady = containers.some(c => c.ready)
+      const anyWaiting = containers.some(c => c.status === 'waiting' || c.status === 'starting')
+      let overall: OverallHealth = 'unknown'
+      if (allReady) overall = 'healthy'
+      else if (anyReady && anyWaiting) overall = 'degraded'
+      else if (anyWaiting) overall = 'starting'
+      else overall = 'unhealthy'
+
+      return { provider: 'akash', overall, containers, lastChecked: new Date() }
+    } catch (err) {
+      log.warn(`getHealth failed for ${deploymentId}: ${(err as Error).message?.slice(0, 200)}`)
+      return {
+        provider: 'akash',
+        overall: 'unknown',
+        containers: [],
+        lastChecked: new Date(),
+      }
+    }
   }
 
   async getStatus(deploymentId: string): Promise<DeploymentStatusResult> {

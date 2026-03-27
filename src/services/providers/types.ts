@@ -77,6 +77,41 @@ export interface DeploymentStatusResult {
   metadata?: Record<string, unknown>
 }
 
+// ─── Container health (per-container within a deployment) ────────
+
+export type ContainerStatus =
+  | 'running'
+  | 'starting'
+  | 'waiting'
+  | 'crashed'
+  | 'image_error'
+  | 'error'
+  | 'unknown'
+
+export interface ContainerHealth {
+  name: string
+  status: ContainerStatus
+  ready: boolean
+  total: number
+  available: number
+  uris: string[]
+  message?: string
+}
+
+export type OverallHealth =
+  | 'healthy'
+  | 'starting'
+  | 'degraded'
+  | 'unhealthy'
+  | 'unknown'
+
+export interface DeploymentHealthResult {
+  provider: string
+  overall: OverallHealth
+  containers: ContainerHealth[]
+  lastChecked: Date
+}
+
 // ─── The interface every provider must implement ─────────────────
 
 export interface DeploymentProvider {
@@ -123,6 +158,12 @@ export interface DeploymentProvider {
    * Get current deployment status from the provider.
    */
   getStatus(deploymentId: string): Promise<DeploymentStatusResult>
+
+  /**
+   * Live per-container health from the provider API.
+   * Returns undefined if the deployment is not in a state that supports health checks.
+   */
+  getHealth?(deploymentId: string): Promise<DeploymentHealthResult | null>
 
   /**
    * Get deployment logs.

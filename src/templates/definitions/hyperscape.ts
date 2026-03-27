@@ -21,7 +21,7 @@ export const hyperscapeServer: Template = {
   ],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v12',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v14',
   serviceType: 'VM',
   envVars: [
     {
@@ -125,7 +125,7 @@ export const hyperscapeServer: Template = {
         '  echo "Waiting for postgres ($i/15)..."',
         '  sleep 2',
         'done',
-        'exec bun --preload /app/packages/server/src/shared/polyfills.ts /app/packages/server/dist/index.js',
+        'exec tsx /app/packages/server/dist/entry.mjs',
       ].join('\n'),
       envLinks: {
         DATABASE_URL:
@@ -158,6 +158,7 @@ export const hyperscapeServer: Template = {
         healthCheck: { path: '/', port: 80 },
         pricingUakt: 1000,
       },
+      envDefaults: { PORT: '80' },
       envLinks: {},
     },
     {
@@ -172,12 +173,15 @@ export const hyperscapeServer: Template = {
       },
       sdlServiceName: 'web',
       inline: {
-        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v12',
+        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v14',
         resources: { cpu: 0.5, memory: '256Mi', storage: '1Gi' },
         ports: [{ port: 80, as: 80, global: true }],
         healthCheck: { path: '/', port: 80 },
-        startCommand:
-          'printf \'if(!globalThis.env)globalThis.env={};globalThis.env={PUBLIC_API_URL:"%s",PUBLIC_WS_URL:"%s",PUBLIC_CDN_URL:"%s",PUBLIC_PRIVY_APP_ID:"%s"};\' "$PUBLIC_API_URL" "$PUBLIC_WS_URL" "$PUBLIC_CDN_URL" "$PUBLIC_PRIVY_APP_ID" > /app/packages/client/dist/env.js && cd /app/packages/client/dist && bun -e \'Bun.serve({port:80,async fetch(r){const u=new URL(r.url).pathname;const f=Bun.file("."+u);if(u!=="/"&&await f.exists())return new Response(f);return new Response(Bun.file("./index.html"),{headers:{"content-type":"text/html"}})}})\' ',
+        startCommand: [
+          'printf \'if(!globalThis.env)globalThis.env={};globalThis.env={PUBLIC_API_URL:"%s",PUBLIC_WS_URL:"%s",PUBLIC_CDN_URL:"%s",PUBLIC_PRIVY_APP_ID:"%s"};\' "$PUBLIC_API_URL" "$PUBLIC_WS_URL" "$PUBLIC_CDN_URL" "$PUBLIC_PRIVY_APP_ID" > /app/packages/client/dist/env.js',
+          'cd /app/packages/client/dist',
+          'exec node -e \'const h=require("http"),f=require("fs"),p=require("path"),d=process.cwd(),m={html:"text/html",js:"application/javascript",css:"text/css",json:"application/json",svg:"image/svg+xml",png:"image/png",ico:"image/x-icon",woff2:"font/woff2",wasm:"application/wasm",webp:"image/webp",jpg:"image/jpeg",mp3:"audio/mpeg",ogg:"audio/ogg",glb:"model/gltf-binary",bin:"application/octet-stream"};h.createServer((q,r)=>{let u=new URL(q.url,"http://l").pathname;if(u==="/")u="/index.html";let fp=p.join(d,u);if(!f.existsSync(fp))fp=p.join(d,"index.html");const ct=m[p.extname(fp).slice(1)]||"application/octet-stream";r.writeHead(200,{"Content-Type":ct,"Cache-Control":"public, max-age=31536000, immutable"});f.createReadStream(fp).pipe(r)}).listen(80,()=>console.log("Static server on :80"))\'',
+        ].join(' && '),
         pricingUakt: 1000,
       },
       envLinks: {
