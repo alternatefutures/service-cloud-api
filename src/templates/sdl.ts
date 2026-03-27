@@ -88,7 +88,8 @@ export function generateSDLFromTemplate(
     ? `    args:
       - sh
       - -c
-      - "${template.startCommand}"\n`
+      - |-
+        ${template.startCommand.replace(/\n/g, '\n        ')}\n`
     : ''
 
   // ── GPU resource block ────────────────────────────────────────

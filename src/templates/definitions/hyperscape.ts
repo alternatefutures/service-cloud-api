@@ -133,6 +133,7 @@ export const hyperscapeServer: Template = {
         JWT_SECRET: '{{generated.secret}}',
         ARENA_EXTERNAL_BET_WRITE_KEY: '{{generated.secret}}',
         PORT: '5555',
+        UWS_ENABLED: 'false',
         NODE_ENV: 'production',
         USE_LOCAL_POSTGRES: 'false',
         PUBLIC_API_URL: '{{component.server.proxyHttpUrl}}',

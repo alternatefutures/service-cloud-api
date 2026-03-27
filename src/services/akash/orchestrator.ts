@@ -489,7 +489,7 @@ export class AkashOrchestrator {
     const out: Record<string, { uris: string[] }> = {}
     for (const [k, v] of Object.entries(services)) {
       const uris = [...(v.uris || [])]
-      if (uris.length === 0 && forwardedPorts[k]?.length) {
+      if (forwardedPorts[k]?.length) {
         for (const fp of forwardedPorts[k]) {
           uris.push(`${fp.host}:${fp.externalPort}`)
         }
@@ -550,7 +550,7 @@ export class AkashOrchestrator {
 
     for (const [k, v] of Object.entries(services)) {
       const uris = [...(v.uris || [])]
-      if (uris.length === 0 && forwardedPorts[k]?.length) {
+      if (forwardedPorts[k]?.length) {
         for (const fp of forwardedPorts[k]) {
           uris.push(`${fp.host}:${fp.externalPort}`)
         }
