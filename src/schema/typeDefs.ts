@@ -1414,6 +1414,11 @@ export const typeDefs = /* GraphQL */ `
     CUSTOM
   }
 
+  enum TemplateReleaseStage {
+    production
+    internal
+  }
+
   type TemplateEnvVar {
     key: String!
     default: String
@@ -1474,6 +1479,7 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     description: String!
     featured: Boolean
+    releaseStage: TemplateReleaseStage!
     category: TemplateCategory!
     tags: [String!]!
     icon: String

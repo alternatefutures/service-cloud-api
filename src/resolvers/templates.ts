@@ -1048,6 +1048,9 @@ function resolveComponent(
 // ─── Field Resolvers ──────────────────────────────────────────────
 
 export const templateFieldResolvers = {
+  Template: {
+    releaseStage: (parent: Template) => parent.releaseStage ?? 'production',
+  },
   TemplateComponent: {
     defaultResources: (
       parent: TemplateComponent & { _parentTemplate?: Template }

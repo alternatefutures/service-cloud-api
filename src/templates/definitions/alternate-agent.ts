@@ -6,6 +6,7 @@ export const alternateAgent: Template = {
   description:
     'Deploy an AI agent with chat UI, persistent memory, and pluggable connectors (Discord, Telegram, Slack). Uses AF integrated inference — no API keys needed.',
   featured: true,
+  releaseStage: 'internal',
   category: 'AI_ML',
   tags: ['ai', 'agent', 'mastra', 'chatbot', 'discord', 'telegram'],
   icon: '🤖',

@@ -13,6 +13,8 @@ export type TemplateCategory =
   | 'DEVTOOLS'
   | 'CUSTOM'
 
+export type TemplateReleaseStage = 'production' | 'internal'
+
 export interface TemplateEnvVar {
   /** Environment variable key (e.g. "PORT") */
   key: string
@@ -87,6 +89,11 @@ export interface Template {
   description: string
   /** Whether this template should be highlighted in the UI */
   featured?: boolean
+  /**
+   * Release stage for catalog visibility.
+   * Omitted templates are treated as production-ready by default.
+   */
+  releaseStage?: TemplateReleaseStage
   /** Template category for filtering */
   category: TemplateCategory
   /** Searchable tags */
