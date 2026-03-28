@@ -23,6 +23,93 @@ function formatDeployment(deployment: any) {
   }
 }
 
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function extractProfilesComputeSection(sdl: string): string {
+  const match = sdl.match(/profiles:\s*\n\s{2}compute:\s*\n([\s\S]*?)(?=\n\s{2}(?:placement|deployment):|$)/)
+  return match?.[1] ?? ''
+}
+
+function parseSizeToBytes(value: string): number | null {
+  const match = value.trim().match(/^([0-9.]+)\s*(Ki|Mi|Gi|Ti|K|M|G|T|B)?$/i)
+  if (!match) return null
+
+  const amount = parseFloat(match[1])
+  if (!Number.isFinite(amount)) return null
+
+  const unit = (match[2] || 'B').toUpperCase()
+  const multipliers: Record<string, number> = {
+    B: 1,
+    K: 1_000,
+    M: 1_000_000,
+    G: 1_000_000_000,
+    T: 1_000_000_000_000,
+    KI: 1024,
+    MI: 1024 ** 2,
+    GI: 1024 ** 3,
+    TI: 1024 ** 4,
+  }
+
+  return amount * (multipliers[unit] ?? 1)
+}
+
+function extractComputeProfileBlock(sdl: string, profileName?: string | null): string {
+  const computeSection = extractProfilesComputeSection(sdl)
+  if (!computeSection) return ''
+
+  if (profileName) {
+    const sectionRegex = new RegExp(
+      `(?:^|\\n)\\s{4}${escapeRegex(profileName)}:\\s*\\n([\\s\\S]*?)(?=\\n\\s{4}[A-Za-z0-9_-]+:\\s*\\n|$)`,
+    )
+    const match = computeSection.match(sectionRegex)
+    if (match?.[1]) return match[1]
+  }
+
+  const firstProfileRegex =
+    /(?:^|\n)\s{4}[A-Za-z0-9_-]+:\s*\n([\s\S]*?)(?=\n\s{4}[A-Za-z0-9_-]+:\s*\n|$)/
+  return computeSection.match(firstProfileRegex)?.[1] ?? ''
+}
+
+async function parseAkashDeploymentResources(parent: any, context: Context) {
+  if (!parent.sdlContent) {
+    return { cpuUnits: null, memoryBytes: null, storageBytes: null, gpuUnits: null }
+  }
+
+  const service = await context.prisma.service.findUnique({
+    where: { id: parent.serviceId },
+    select: { sdlServiceName: true, slug: true },
+  })
+
+  const block = extractComputeProfileBlock(
+    parent.sdlContent,
+    service?.sdlServiceName ?? service?.slug ?? null,
+  )
+  if (!block) {
+    return { cpuUnits: null, memoryBytes: null, storageBytes: null, gpuUnits: null }
+  }
+
+  const cpuMatch = block.match(/cpu:\s*\n\s*units:\s*([0-9.]+)/)
+  const memoryMatch = block.match(/memory:\s*\n\s*size:\s*([0-9.]+\s*[A-Za-z]*)/)
+  const gpuMatch = block.match(/gpu:\s*\n\s*units:\s*([0-9.]+)/)
+
+  const storageSection = block.match(/storage:\s*\n([\s\S]*?)(?=\n\s{6}[A-Za-z][A-Za-z0-9_-]*:\s*\n|$)/)
+  const storageMatches = storageSection?.[1].match(/size:\s*([0-9.]+\s*[A-Za-z]*)/g) ?? []
+  const storageBytes = storageMatches.reduce((sum, entry) => {
+    const sizeMatch = entry.match(/size:\s*([0-9.]+\s*[A-Za-z]*)/)
+    const bytes = sizeMatch ? parseSizeToBytes(sizeMatch[1]) : null
+    return sum + (bytes ?? 0)
+  }, 0)
+
+  return {
+    cpuUnits: cpuMatch ? parseFloat(cpuMatch[1]) : null,
+    memoryBytes: memoryMatch ? parseSizeToBytes(memoryMatch[1]) : null,
+    storageBytes: storageMatches.length > 0 ? storageBytes : null,
+    gpuUnits: gpuMatch ? Math.round(parseFloat(gpuMatch[1])) : null,
+  }
+}
+
 export const akashQueries = {
   akashDeployment: async (
     _: unknown,
@@ -366,6 +453,22 @@ export const akashFieldResolvers = {
       }
       if (parent.dailyRateCentsCharged != null) return (parent.dailyRateCentsCharged / 100) * 30
       return null
+    },
+    cpuUnits: async (parent: any, _: unknown, context: Context) => {
+      const resources = await parseAkashDeploymentResources(parent, context)
+      return resources.cpuUnits
+    },
+    memoryBytes: async (parent: any, _: unknown, context: Context) => {
+      const resources = await parseAkashDeploymentResources(parent, context)
+      return resources.memoryBytes
+    },
+    storageBytes: async (parent: any, _: unknown, context: Context) => {
+      const resources = await parseAkashDeploymentResources(parent, context)
+      return resources.storageBytes
+    },
+    gpuUnits: async (parent: any, _: unknown, context: Context) => {
+      const resources = await parseAkashDeploymentResources(parent, context)
+      return resources.gpuUnits
     },
     service: async (parent: any, _: unknown, context: Context) => {
       return context.prisma.service.findUnique({

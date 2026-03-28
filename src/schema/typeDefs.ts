@@ -402,6 +402,10 @@ export const typeDefs = /* GraphQL */ `
     errorMessage: String
     image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milaidy-akash:main)
     gpuModel: String              # GPU model resolved from provider after lease (e.g. "rtx4090", "a100")
+    cpuUnits: Float               # deployed vCPU count from SDL
+    memoryBytes: Float            # deployed memory bytes from SDL
+    storageBytes: Float           # deployed total storage bytes from SDL (ephemeral + persistent)
+    gpuUnits: Int                 # deployed GPU count from SDL
     retryCount: Int!
     parentDeploymentId: String
     costPerHour: Float
@@ -444,6 +448,11 @@ export const typeDefs = /* GraphQL */ `
     appUrl: String
     teepod: String
     gpuModel: String
+    cvmSize: String
+    cpuUnits: Float               # live vCPU count from provider
+    memoryBytes: Float            # live memory bytes from provider
+    storageBytes: Float           # live disk bytes from provider
+    gpuUnits: Int                 # live GPU count from provider
 
     serviceId: ID!
     service: Service!

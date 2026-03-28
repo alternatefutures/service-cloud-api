@@ -45,6 +45,81 @@ async function processFinalPhalaBilling(deployment: any) {
   }
 }
 
+type PhalaResourceSnapshot = {
+  cpuUnits: number | null
+  memoryBytes: number | null
+  storageBytes: number | null
+  gpuUnits: number | null
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function findResourceInfo(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || depth > 5) return null
+
+  const record = value as Record<string, unknown>
+  const hasResourceShape =
+    'vcpu' in record ||
+    'memory_in_gb' in record ||
+    'memoryInGb' in record ||
+    'disk_in_gb' in record ||
+    'diskInGb' in record ||
+    'gpus' in record
+
+  if (hasResourceShape) return record
+
+  for (const nested of Object.values(record)) {
+    const found = findResourceInfo(nested, depth + 1)
+    if (found) return found
+  }
+
+  return null
+}
+
+async function getPhalaResourceSnapshot(parent: any, context: Context): Promise<PhalaResourceSnapshot> {
+  const cached = parent.__resourceSnapshot as PhalaResourceSnapshot | undefined
+  if (cached) return cached
+
+  let snapshot: PhalaResourceSnapshot = {
+    cpuUnits: null,
+    memoryBytes: null,
+    storageBytes: null,
+    gpuUnits: null,
+  }
+
+  try {
+    const orchestrator = getPhalaOrchestrator(context.prisma)
+    const status = await orchestrator.getCvmStatus(parent.appId)
+    const resourceInfo = findResourceInfo(status)
+
+    if (resourceInfo) {
+      const vcpu = readNumber(resourceInfo.vcpu)
+      const memoryInGb = readNumber(resourceInfo.memory_in_gb ?? resourceInfo.memoryInGb)
+      const diskInGb = readNumber(resourceInfo.disk_in_gb ?? resourceInfo.diskInGb)
+      const gpus = readNumber(resourceInfo.gpus)
+
+      snapshot = {
+        cpuUnits: vcpu,
+        memoryBytes: memoryInGb != null ? memoryInGb * 1_000_000_000 : null,
+        storageBytes: diskInGb != null ? diskInGb * 1_000_000_000 : null,
+        gpuUnits: gpus != null ? Math.round(gpus) : null,
+      }
+    }
+  } catch (error) {
+    log.warn(error, `Failed to resolve live resource snapshot for Phala deployment ${parent.id}`)
+  }
+
+  parent.__resourceSnapshot = snapshot
+  return snapshot
+}
+
 export const phalaQueries = {
   phalaDeployment: async (
     _: unknown,
@@ -99,6 +174,22 @@ export const phalaFieldResolvers = {
     costPerMonth: (parent: any) => {
       if (parent.hourlyRateCents == null) return null
       return (parent.hourlyRateCents / 100) * 24 * 30
+    },
+    cpuUnits: async (parent: any, _: unknown, context: Context) => {
+      const snapshot = await getPhalaResourceSnapshot(parent, context)
+      return snapshot.cpuUnits
+    },
+    memoryBytes: async (parent: any, _: unknown, context: Context) => {
+      const snapshot = await getPhalaResourceSnapshot(parent, context)
+      return snapshot.memoryBytes
+    },
+    storageBytes: async (parent: any, _: unknown, context: Context) => {
+      const snapshot = await getPhalaResourceSnapshot(parent, context)
+      return snapshot.storageBytes
+    },
+    gpuUnits: async (parent: any, _: unknown, context: Context) => {
+      const snapshot = await getPhalaResourceSnapshot(parent, context)
+      return snapshot.gpuUnits
     },
     service: async (parent: any, _: unknown, context: Context) => {
       return context.prisma.service.findUnique({
