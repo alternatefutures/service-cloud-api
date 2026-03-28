@@ -33,10 +33,12 @@ import type {
   Template,
   TemplateCompanion,
   TemplateComponent,
+  TemplateResources,
 } from '../templates/schema.js'
 import type { Context } from './types.js'
 import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
 import { createLogger } from '../lib/logger.js'
+import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
 
 const log = createLogger('resolver-templates')
 
@@ -56,6 +58,48 @@ export const templateQueries = {
 
 function genPassword(len = 32): string {
   return randomBytes(len).toString('base64url').slice(0, len)
+}
+
+type ResourceOverrideInput = {
+  cpu?: number
+  memory?: string
+  storage?: string
+  gpu?: { units: number; vendor: string; model?: string } | null
+}
+
+function normalizeResourceOverrides(input?: ResourceOverrideInput) {
+  if (!input) return undefined
+
+  return {
+    cpu: input.cpu ?? undefined,
+    memory: input.memory ?? undefined,
+    storage: input.storage ?? undefined,
+    gpu:
+      input.gpu === null
+        ? null
+        : input.gpu
+          ? {
+              units: input.gpu.units,
+              vendor: input.gpu.vendor as 'nvidia',
+              model: input.gpu.model ?? undefined,
+            }
+          : undefined,
+  }
+}
+
+function resolveTemplateResources(
+  templateResources: TemplateResources,
+  overrides?: ReturnType<typeof normalizeResourceOverrides>
+): TemplateResources {
+  return {
+    cpu: overrides?.cpu ?? templateResources.cpu,
+    memory: overrides?.memory ?? templateResources.memory,
+    storage: overrides?.storage ?? templateResources.storage,
+    gpu:
+      overrides?.gpu === null
+        ? undefined
+        : overrides?.gpu ?? templateResources.gpu,
+  }
 }
 
 function assertRequiredTemplateEnvVars(
@@ -316,23 +360,7 @@ export const templateMutations = {
     }
 
     // ── Build resource overrides ─────────────────────────────
-    const resourceOverrides = input.resourceOverrides
-      ? {
-          cpu: input.resourceOverrides.cpu ?? undefined,
-          memory: input.resourceOverrides.memory ?? undefined,
-          storage: input.resourceOverrides.storage ?? undefined,
-          gpu:
-            input.resourceOverrides.gpu === null
-              ? null
-              : input.resourceOverrides.gpu
-                ? {
-                    units: input.resourceOverrides.gpu.units,
-                    vendor: input.resourceOverrides.gpu.vendor as 'nvidia',
-                    model: input.resourceOverrides.gpu.model ?? undefined,
-                  }
-                : undefined,
-        }
-      : undefined
+    const resourceOverrides = normalizeResourceOverrides(input.resourceOverrides)
 
     // ── Generate SDL from template ───────────────────────────
     const sdlContent = generateSDLFromTemplate(template, {
@@ -468,16 +496,14 @@ export const templateMutations = {
       )
     }
 
+    const resourceOverrides = normalizeResourceOverrides(input.resourceOverrides)
+    const phalaResources = resolveTemplateResources(template.resources, resourceOverrides)
+    const phalaInstance = await resolvePhalaInstanceType(phalaResources)
+
     const composeContent = generateComposeFromTemplate(template, {
       serviceName: slug,
       envOverrides,
-      resourceOverrides: input.resourceOverrides
-        ? {
-            cpu: input.resourceOverrides.cpu ?? undefined,
-            memory: input.resourceOverrides.memory ?? undefined,
-            storage: input.resourceOverrides.storage ?? undefined,
-          }
-        : undefined,
+      resourceOverrides,
     })
 
     const envKeys = getEnvKeysFromTemplate(template, envOverrides)
@@ -492,18 +518,15 @@ export const templateMutations = {
       await import('../services/phala/orchestrator.js')
     const orchestrator = getPhalaOrchestrator(context.prisma)
 
-    const gpuModel =
-      input.resourceOverrides?.gpu?.model ??
-      template.resources.gpu?.model ??
-      undefined
-
     try {
       const deploymentId = await orchestrator.deployServicePhala(service.id, {
         composeContent,
         env: mergedEnv,
         envKeys,
         name: `af-${slug}-${Date.now().toString(36)}`,
-        gpuModel,
+        cvmSize: phalaInstance.cvmSize,
+        gpuModel: phalaInstance.gpuModel ?? undefined,
+        hourlyRateUsd: phalaInstance.hourlyRateUsd,
       })
 
       const deployment = await context.prisma.phalaDeployment.findUnique({
@@ -911,11 +934,15 @@ export const templateMutations = {
       const svcId = serviceIds[comp.id]
 
       try {
+        const phalaInstance = await resolvePhalaInstanceType(comp.resources)
         await orchestrator.deployServicePhala(svcId, {
           composeContent,
           env: comp.resolvedEnv,
           envKeys,
           name: `af-${slugs[comp.id]}-${Date.now().toString(36)}`,
+          cvmSize: phalaInstance.cvmSize,
+          gpuModel: phalaInstance.gpuModel ?? undefined,
+          hourlyRateUsd: phalaInstance.hourlyRateUsd,
         })
       } catch (error: any) {
         throw new GraphQLError(

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { execSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { EventEmitter } from 'events'
 import { PhalaOrchestrator } from './orchestrator.js'
 import type { PrismaClient } from '@prisma/client'
@@ -16,8 +16,15 @@ function createMockSpawn(stdout: string, exitCode = 0) {
   return proc
 }
 
+function createFailingSpawn() {
+  const proc = new EventEmitter() as any
+  proc.stdout = new EventEmitter()
+  proc.stderr = new EventEmitter()
+  setTimeout(() => proc.emit('close', 1), 0)
+  return proc
+}
+
 vi.mock('child_process', () => ({
-  execSync: vi.fn(),
   spawn: vi.fn(),
 }))
 
@@ -164,8 +171,8 @@ describe('PhalaOrchestrator', () => {
 
   describe('getCvmStatus', () => {
     it('returns parsed JSON from phala cvms get', async () => {
-      vi.mocked(execSync).mockReturnValue(
-        JSON.stringify({ status: 'running', app_id: 'app-1' })
+      vi.mocked(spawn).mockReturnValue(
+        createMockSpawn(JSON.stringify({ status: 'running', app_id: 'app-1' })) as any
       )
 
       const status = await orchestrator.getCvmStatus('app-1')
@@ -173,9 +180,11 @@ describe('PhalaOrchestrator', () => {
     })
 
     it('returns null on error', async () => {
-      vi.mocked(execSync).mockImplementation(() => {
-        throw new Error('CLI error')
-      })
+      const proc = new EventEmitter() as any
+      proc.stdout = new EventEmitter()
+      proc.stderr = new EventEmitter()
+      setTimeout(() => proc.emit('close', 1), 0)
+      vi.mocked(spawn).mockReturnValue(proc as any)
 
       const status = await orchestrator.getCvmStatus('app-1')
       expect(status).toBeNull()
@@ -184,12 +193,13 @@ describe('PhalaOrchestrator', () => {
 
   describe('stopPhalaDeployment', () => {
     it('calls phala cvms stop', async () => {
-      vi.mocked(execSync).mockReturnValue('')
+      vi.mocked(spawn).mockReturnValue(createMockSpawn('') as any)
 
       await orchestrator.stopPhalaDeployment('app-1')
 
-      expect(execSync).toHaveBeenCalledWith(
-        expect.stringContaining('cvms stop app-1'),
+      expect(spawn).toHaveBeenCalledWith(
+        'npx',
+        expect.arrayContaining(['phala', 'cvms', 'stop', 'app-1']),
         expect.any(Object)
       )
     })
@@ -197,16 +207,13 @@ describe('PhalaOrchestrator', () => {
 
   describe('deletePhalaDeployment', () => {
     it('calls phala cvms delete --force', async () => {
-      vi.mocked(execSync).mockReturnValue('')
+      vi.mocked(spawn).mockReturnValue(createMockSpawn('') as any)
 
       await orchestrator.deletePhalaDeployment('app-1')
 
-      expect(execSync).toHaveBeenCalledWith(
-        expect.stringContaining('cvms delete app-1'),
-        expect.any(Object)
-      )
-      expect(execSync).toHaveBeenCalledWith(
-        expect.stringContaining('--force'),
+      expect(spawn).toHaveBeenCalledWith(
+        'npx',
+        expect.arrayContaining(['phala', 'cvms', 'delete', 'app-1', '--force']),
         expect.any(Object)
       )
     })
@@ -235,16 +242,14 @@ describe('PhalaOrchestrator', () => {
   describe('getPhalaAttestation', () => {
     it('returns attestation JSON', async () => {
       const attestation = { verified: true, quote: 'abc' }
-      vi.mocked(execSync).mockReturnValue(JSON.stringify(attestation))
+      vi.mocked(spawn).mockReturnValue(createMockSpawn(JSON.stringify(attestation)) as any)
 
       const result = await orchestrator.getPhalaAttestation('app-1')
       expect(result).toEqual(attestation)
     })
 
     it('returns null on error', async () => {
-      vi.mocked(execSync).mockImplementation(() => {
-        throw new Error('CLI error')
-      })
+      vi.mocked(spawn).mockReturnValue(createFailingSpawn() as any)
 
       const result = await orchestrator.getPhalaAttestation('app-1')
       expect(result).toBeNull()

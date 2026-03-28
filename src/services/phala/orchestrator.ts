@@ -8,7 +8,7 @@
  * Never log the API key.
  */
 
-import { execSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -32,21 +32,6 @@ function getPhalaEnv(): Record<string, string> {
   return { ...process.env, PHALA_CLOUD_API_KEY: key }
 }
 
-function runPhala(args: string[], timeout = PHALA_CLI_TIMEOUT_MS): string {
-  const env = getPhalaEnv()
-  const cmd = `npx phala ${args.join(' ')}`
-  return execSync(cmd, {
-    encoding: 'utf-8',
-    env,
-    timeout,
-    maxBuffer: 10 * 1024 * 1024,
-  })
-}
-
-/**
- * Non-blocking alternative to runPhala using child_process.spawn.
- * Used for log fetching so the event loop isn't blocked during concurrent requests.
- */
 function runPhalaAsync(args: string[], timeout = PHALA_CLI_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     const env = getPhalaEnv()
@@ -129,6 +114,7 @@ export class PhalaOrchestrator {
       name?: string
       cvmSize?: string
       gpuModel?: string
+      hourlyRateUsd?: number
     }
   ): Promise<string> {
     const service = await this.prisma.service.findUnique({
@@ -159,7 +145,7 @@ export class PhalaOrchestrator {
         orgBillingId = orgBilling.orgBillingId
         marginRate = orgMarkup.marginRate
 
-        const rawHourlyRate = getPhalaHourlyRate(cvmSize)
+        const rawHourlyRate = options.hourlyRateUsd ?? getPhalaHourlyRate(cvmSize)
         const chargedHourlyRate = applyMargin(rawHourlyRate, orgMarkup.marginRate)
         hourlyRateCents = Math.ceil(chargedHourlyRate * 100)
       } catch (err) {
@@ -209,7 +195,7 @@ export class PhalaOrchestrator {
    */
   async getCvmStatus(appId: string): Promise<Record<string, unknown> | null> {
     try {
-      const output = runPhala(['cvms', 'get', appId, '--json'], 15_000)
+      const output = await runPhalaAsync(['cvms', 'get', appId, '--json'], 15_000)
       return extractJson(output) as Record<string, unknown>
     } catch {
       return null
@@ -217,15 +203,15 @@ export class PhalaOrchestrator {
   }
 
   async stopPhalaDeployment(appId: string): Promise<void> {
-    runPhala(['cvms', 'stop', appId], 30_000)
+    await runPhalaAsync(['cvms', 'stop', appId], 30_000)
   }
 
   async startPhalaDeployment(appId: string): Promise<void> {
-    runPhala(['cvms', 'start', appId], 30_000)
+    await runPhalaAsync(['cvms', 'start', appId], 30_000)
   }
 
   async deletePhalaDeployment(appId: string): Promise<void> {
-    runPhala(['cvms', 'delete', appId, '--force'], 30_000)
+    await runPhalaAsync(['cvms', 'delete', appId, '--force'], 30_000)
   }
 
   async getPhalaLogs(appId: string, tail?: number): Promise<string | null> {
@@ -240,7 +226,7 @@ export class PhalaOrchestrator {
 
   async getPhalaAttestation(appId: string): Promise<Record<string, unknown> | null> {
     try {
-      const output = runPhala(['cvms', 'attestation', appId, '--json'], 15_000)
+      const output = await runPhalaAsync(['cvms', 'attestation', appId, '--json'], 15_000)
       return extractJson(output) as Record<string, unknown>
     } catch {
       return null

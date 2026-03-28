@@ -94,6 +94,13 @@ async function getPhalaResourceSnapshot(parent: any, context: Context): Promise<
     gpuUnits: null,
   }
 
+  // During provisioning we intentionally avoid live CLI lookups so
+  // project-wide service queries do not stall while the CVM is still coming up.
+  if (parent.status !== 'ACTIVE' || !parent.appId || parent.appId === 'pending') {
+    parent.__resourceSnapshot = snapshot
+    return snapshot
+  }
+
   try {
     const orchestrator = getPhalaOrchestrator(context.prisma)
     const status = await orchestrator.getCvmStatus(parent.appId)
@@ -243,13 +250,16 @@ export const phalaMutations = {
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
 
-    // Final billing for partial period before stopping
     if (deployment.status === 'ACTIVE') {
       await processFinalPhalaBilling(deployment)
     }
 
-    const orchestrator = getPhalaOrchestrator(context.prisma)
-    await orchestrator.stopPhalaDeployment(deployment.appId)
+    // If the CVM hasn't been provisioned yet (appId still 'pending'),
+    // skip the CLI call — there's nothing to stop on Phala's side.
+    if (deployment.appId && deployment.appId !== 'pending') {
+      const orchestrator = getPhalaOrchestrator(context.prisma)
+      await orchestrator.stopPhalaDeployment(deployment.appId)
+    }
 
     return context.prisma.phalaDeployment.update({
       where: { id },
@@ -270,13 +280,14 @@ export const phalaMutations = {
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
 
-    // Final billing for partial period before deleting
     if (deployment.status === 'ACTIVE') {
       await processFinalPhalaBilling(deployment)
     }
 
-    const orchestrator = getPhalaOrchestrator(context.prisma)
-    await orchestrator.deletePhalaDeployment(deployment.appId)
+    if (deployment.appId && deployment.appId !== 'pending') {
+      const orchestrator = getPhalaOrchestrator(context.prisma)
+      await orchestrator.deletePhalaDeployment(deployment.appId)
+    }
 
     return context.prisma.phalaDeployment.update({
       where: { id },

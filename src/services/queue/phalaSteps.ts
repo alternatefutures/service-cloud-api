@@ -143,6 +143,7 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
     writeFileSync(envPath, envLines)
 
     const deployArgs = ['deploy', '-n', deployment.name, '-c', composePath]
+    if (deployment.cvmSize) deployArgs.push('--instance-type', deployment.cvmSize)
     if (Object.keys(envVars).length > 0) deployArgs.push('-e', envPath)
     deployArgs.push('--json')
 

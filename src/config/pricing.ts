@@ -71,10 +71,16 @@ export const COMPUTE_PRICING = {
 // ============================================
 
 export const PHALA_RATES: Record<string, number> = {
-  'tdx.small': 0.07,
-  'tdx.medium': 0.10,
-  'tdx.large': 0.14,
-  'tdx.xlarge': 0.28,
+  // CPU TEE instances (updated 2026-03-28 from phala instance-types)
+  'tdx.small': 0.058,
+  'tdx.medium': 0.116,
+  'tdx.large': 0.232,
+  'tdx.xlarge': 0.464,
+  // GPU TEE instances
+  'h100.small': 2.80,
+  'h200.small': 3.50,
+  'h200.8x.large': 23.04,
+  'b200.small': 4.20,
 }
 
 // ============================================
