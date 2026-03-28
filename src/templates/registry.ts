@@ -35,11 +35,11 @@ import {
 
 const templates: Template[] = [
   // Featured — display order
+  gpuInstance,
   hyperscapeServer,
   milaidyGateway,
   openclawGateway,
   ollamaGpu,
-  gpuInstance,
   jupyterMlWorkspace,
   alternateAgent,
   // AI / ML
