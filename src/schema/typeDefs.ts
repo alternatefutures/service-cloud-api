@@ -400,7 +400,7 @@ export const typeDefs = /* GraphQL */ `
     depositUakt: String
     pricePerBlock: String
     errorMessage: String
-    image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milaidy-akash:main)
+    image: String                 # container image from SDL (e.g. ghcr.io/alternatefutures/milady:v1)
     gpuModel: String              # GPU model resolved from provider after lease (e.g. "rtx4090", "a100")
     cpuUnits: Float               # deployed vCPU count from SDL
     memoryBytes: Float            # deployed memory bytes from SDL

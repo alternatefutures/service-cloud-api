@@ -12,7 +12,7 @@ import {
   bunWsGameserver,
   postgres,
   redis,
-  milaidyGateway,
+  miladyGateway,
   openclawGateway,
   nanobotGateway,
   ollamaGpu,
@@ -37,7 +37,7 @@ const templates: Template[] = [
   // Featured — display order
   gpuInstance,
   hyperscapeServer,
-  milaidyGateway,
+  miladyGateway,
   openclawGateway,
   ollamaGpu,
   jupyterMlWorkspace,

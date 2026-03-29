@@ -8,7 +8,7 @@
       "testedAt": "2026-03-15T20:57:35.646Z",
       "templatesPassed": 9,
       "templatesTested": 9,
-      "notes": "Passed: hyperscape, milaidy-gateway, openclaw-gateway, nanobot-gateway, postgres, redis, n8n, gitea, minecraft-server"
+      "notes": "Passed: hyperscape, milady-gateway, openclaw-gateway, nanobot-gateway, postgres, redis, n8n, gitea, minecraft-server"
     },
     {
       "address": "akash1k94uya5rhrtj9rfw850az9aq2d6vdpjmtnlgd0",

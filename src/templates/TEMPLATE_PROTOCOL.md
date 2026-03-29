@@ -192,7 +192,7 @@ Can you deploy the upstream image directly on Akash?
 
 ### Wrapper image pattern
 
-All wrapper images live in `service-cloud-api/docker/<name>-akash/` and follow the same structure. Reference implementation: `docker/milaidy-akash/`.
+Most wrapper images live in `service-cloud-api/docker/<name>-akash/` (e.g. OpenClaw). Milady uses `docker/milady-runtime/` (same pattern: chown + UI proxy + API; works on Akash and Phala). Reference implementation: `docker/milady-runtime/`.
 
 ```
 docker/<name>-akash/
@@ -279,7 +279,7 @@ These rules come from real production incidents. Violating any of them **will** 
 
 ### Serving a UI alongside an API (single-port pattern)
 
-Many apps (Milaidy, OpenClaw) have a React/Vite dashboard that the API server doesn't serve in production mode. On Akash you typically expose **one port** per service. The solution:
+Many apps (Milady, OpenClaw) have a React/Vite dashboard that the API server doesn't serve in production mode. On Akash you typically expose **one port** per service. The solution:
 
 - The API listens on an **internal port** (e.g. `31337`) — not exposed.
 - A lightweight Node.js server (`serve-with-ui.mjs`) listens on the **public port** (e.g. `2138`):
@@ -287,13 +287,13 @@ Many apps (Milaidy, OpenClaw) have a React/Vite dashboard that the API server do
   - Proxies `/api/*` requests to `127.0.0.1:INTERNAL_PORT`
   - Proxies WebSocket upgrades on `/ws` to `127.0.0.1:INTERNAL_PORT`
 
-Reference: `docker/milaidy-akash/serve-with-ui.mjs`
+Reference: `docker/milady-runtime/serve-with-ui.mjs`
 
 Key env vars for this pattern:
 ```
-MILAIDY_INTERNAL_API_PORT=31337   # internal, not exposed
-MILAIDY_PORT=2138                 # public, exposed in SDL
-MILAIDY_API_BIND=0.0.0.0         # MUST be 0.0.0.0, not 127.0.0.1
+MILADY_INTERNAL_API_PORT=31337   # internal, not exposed
+MILADY_PORT=2138                 # public, exposed in SDL
+MILADY_API_BIND=0.0.0.0          # MUST be 0.0.0.0, not 127.0.0.1
 ```
 
 ### Image tagging for Akash
@@ -328,7 +328,7 @@ Before building a wrapper, verify these things about the base image:
 - [ ] Pushed with a **versioned tag** (`:v1`, not `:latest`)
 - [ ] Template definition: `dockerImage` points to the versioned tag
 - [ ] Template definition: **no** `startCommand` (entrypoint handles everything)
-- [ ] Template definition: `MILAIDY_API_BIND=0.0.0.0` (or equivalent) in `envVars`
+- [ ] Template definition: `MILADY_API_BIND=0.0.0.0` (or equivalent) in `envVars`
 - [ ] Template definition: port matches the public port from the entrypoint
 
 ## Composable Templates
@@ -510,7 +510,7 @@ In Kubernetes/Akash:
 - `command:` overrides the Docker **ENTRYPOINT**
 - `args:` overrides the Docker **CMD**
 
-Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have a custom ENTRYPOINT that must run at boot (chown + privilege drop). If we used `command:`, the wrapper entrypoint would be bypassed entirely.
+Templates that use wrapper images (e.g. `milady-runtime`, `openclaw-akash`) have a custom ENTRYPOINT that must run at boot (chown + privilege drop). If we used `command:`, the wrapper entrypoint would be bypassed entirely.
 
 **Rules:**
 - If your image has a custom ENTRYPOINT (wrapper images), do **not** set `startCommand` — let the Dockerfile CMD handle it.
@@ -520,7 +520,7 @@ Templates that use wrapper images (e.g. `milaidy-akash`, `openclaw-akash`) have 
 
 | ID                    | Category     | Image                          | Featured |
 |-----------------------|-------------|--------------------------------|----------|
-| `milaidy-gateway`     | AI_ML       | ghcr.io/alternatefutures/milaidy-akash:v6 | Yes |
+| `milady-gateway`      | AI_ML       | ghcr.io/alternatefutures/milady:v1 | Yes |
 | `openclaw-gateway`    | AI_ML       | ghcr.io/alternatefutures/openclaw-akash:main | Yes |
 | `nanobot-gateway`     | AI_ML       | ghcr.io/alternatefutures/nanobot-akash:v1 | Yes |
 | `node-ws-gameserver`  | GAME_SERVER | ghcr.io/mavisakalyan/node-ws-gameserver:latest | Yes |

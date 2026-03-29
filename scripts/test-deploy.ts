@@ -366,7 +366,7 @@ async function cmdDeploy(templateId: string, opts: { close: boolean; envOverride
     for (let txAttempt = 1; txAttempt <= TX_RETRIES; txAttempt++) {
       txResult = await execCli('akash', [
         'tx', 'deployment', 'create', sdlPath,
-        '--deposit', `${deposit}uakt`,
+        '--deposit', `${deposit}uact`,
         '-o', 'json', '-y',
       ])
       logCmd(txResult)

@@ -83,7 +83,7 @@ export function generateSDLFromTemplate(
   //   `command:` overrides the Docker ENTRYPOINT
   //   `args:`    overrides the Docker CMD
   // Using `command:` would bypass custom ENTRYPOINT scripts (e.g. the
-  // chown/privilege-drop wrappers used by milaidy-akash, openclaw-akash).
+  // chown/privilege-drop wrappers used by milady-runtime, openclaw-akash).
   const commandBlock = template.startCommand
     ? `    args:
       - sh

@@ -1,19 +1,10 @@
 #!/usr/bin/env node
 /**
- * Lightweight production server for Milaidy on Akash.
+ * Lightweight production server for Milady.
  *
  * Serves the built React dashboard UI as static files and proxies
- * /api/* and /ws requests to the Milaidy API server (running on an
- * internal port).
- *
- * This gives users the "open URL → see dashboard" experience
- * (same pattern as Clawdbot).
- *
- * Architecture:
- *   Browser → :2138 (this server)
- *     ├── /api/*  → proxy to localhost:INTERNAL_API_PORT
- *     ├── /ws     → WebSocket proxy to localhost:INTERNAL_API_PORT
- *     └── /*      → static files from apps/app/dist/ (SPA fallback)
+ * /api/* and /ws requests to the Milady API server running on an
+ * internal port.
  */
 
 import http from "node:http";
@@ -23,42 +14,38 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ── Config ──────────────────────────────────────────────────────────────
-const PUBLIC_PORT = Number(process.env.MILAIDY_PORT || 2138);
-const API_PORT = Number(process.env.MILAIDY_INTERNAL_API_PORT || 31337);
-const BIND = process.env.MILAIDY_API_BIND || "0.0.0.0";
+const PUBLIC_PORT = Number(process.env.MILADY_PORT || process.env.MILADY_PUBLIC_PORT || 2138);
+const API_PORT = Number(process.env.MILADY_INTERNAL_API_PORT || 31337);
+const BIND = process.env.MILADY_API_BIND || "0.0.0.0";
 
-// Locate the built UI. In the Docker image, the app is built at /app/apps/app/dist.
-const UI_DIR = process.env.MILAIDY_UI_DIR
+const UI_DIR = process.env.MILADY_UI_DIR
   || path.resolve("/app/apps/app/dist")
 
-// ── MIME types ──────────────────────────────────────────────────────────
 const MIME = {
   ".html": "text/html; charset=utf-8",
-  ".js":   "application/javascript; charset=utf-8",
-  ".mjs":  "application/javascript; charset=utf-8",
-  ".css":  "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
-  ".png":  "image/png",
-  ".jpg":  "image/jpeg",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
-  ".gif":  "image/gif",
-  ".svg":  "image/svg+xml",
-  ".ico":  "image/x-icon",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
   ".webp": "image/webp",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
-  ".ttf":  "font/ttf",
-  ".otf":  "font/otf",
-  ".mp4":  "video/mp4",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".mp4": "video/mp4",
   ".webm": "video/webm",
-  ".map":  "application/json",
-  ".txt":  "text/plain; charset=utf-8",
-  ".xml":  "application/xml",
+  ".map": "application/json",
+  ".txt": "text/plain; charset=utf-8",
+  ".xml": "application/xml",
   ".wasm": "application/wasm",
 };
 
-// ── Proxy helper ────────────────────────────────────────────────────────
 function proxyRequest(clientReq, clientRes) {
   const opts = {
     hostname: "127.0.0.1",
@@ -87,7 +74,6 @@ function proxyRequest(clientReq, clientRes) {
   clientReq.pipe(proxyReq, { end: true });
 }
 
-// ── Static file serving ─────────────────────────────────────────────────
 const indexHtml = path.join(UI_DIR, "index.html");
 let indexHtmlContent = null;
 
@@ -101,11 +87,9 @@ function loadIndexHtml() {
 }
 
 function serveStatic(req, res) {
-  // Decode URL and strip query string
   const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = decodeURIComponent(parsed.pathname);
 
-  // Resolve file path (prevent directory traversal)
   const filePath = path.join(UI_DIR, pathname);
   if (!filePath.startsWith(UI_DIR)) {
     res.writeHead(403);
@@ -113,7 +97,6 @@ function serveStatic(req, res) {
     return;
   }
 
-  // Try to serve the exact file
   try {
     const stat = fs.statSync(filePath);
     if (stat.isFile()) {
@@ -121,7 +104,6 @@ function serveStatic(req, res) {
       const mime = MIME[ext] || "application/octet-stream";
       const content = fs.readFileSync(filePath);
 
-      // Cache immutable hashed assets aggressively
       const cacheControl = pathname.startsWith("/assets/")
         ? "public, max-age=31536000, immutable"
         : "public, max-age=0, must-revalidate";
@@ -135,10 +117,9 @@ function serveStatic(req, res) {
       return;
     }
   } catch {
-    // File doesn't exist — fall through to SPA fallback
+    // File doesn't exist — fall through to SPA fallback.
   }
 
-  // SPA fallback: serve index.html for all non-file routes
   if (indexHtmlContent) {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
@@ -147,13 +128,12 @@ function serveStatic(req, res) {
     });
     res.end(indexHtmlContent);
   } else {
-    // UI not built — return a helpful message
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!DOCTYPE html>
 <html>
-<head><title>Milaidy</title></head>
+<head><title>Milady</title></head>
 <body style="font-family:system-ui;max-width:600px;margin:2rem auto;padding:0 1rem">
-  <h1>Milaidy API is running</h1>
+  <h1>Milady API is running</h1>
   <p>The dashboard UI is not available in this build.</p>
   <p>API endpoints:</p>
   <ul>
@@ -166,7 +146,6 @@ function serveStatic(req, res) {
   }
 }
 
-// ── HTTP Server ─────────────────────────────────────────────────────────
 const uiAvailable = loadIndexHtml();
 if (uiAvailable) {
   console.log(`[serve-ui] Dashboard UI loaded from ${UI_DIR}`);
@@ -177,17 +156,14 @@ if (uiAvailable) {
 const server = http.createServer((req, res) => {
   const url = req.url || "/";
 
-  // Proxy /api/* and /ws to the internal Milaidy API server
   if (url.startsWith("/api/") || url.startsWith("/api?") || url === "/api") {
     proxyRequest(req, res);
     return;
   }
 
-  // Everything else: serve static UI files
   serveStatic(req, res);
 });
 
-// WebSocket upgrade: proxy /ws to the internal API server
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || "/";
   if (url === "/ws" || url.startsWith("/ws?")) {
