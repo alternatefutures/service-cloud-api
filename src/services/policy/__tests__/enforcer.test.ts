@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect } from 'vitest'
 
 // The enforcer functions interact with Prisma + orchestrators, so we test
 // the policy limit checking logic conceptually here. Full integration tests

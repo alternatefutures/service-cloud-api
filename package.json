@@ -111,7 +111,8 @@
       "preact": ">=10.28.2",
       "h3": ">=1.15.5",
       "qs": ">=6.14.2",
-      "minimatch": ">=9.0.7"
+      "minimatch": ">=9.0.7",
+      "jsrsasign": ">=11.1.1"
     }
   },
   "packageManager": "pnpm@10.22.0+sha512.bf049efe995b28f527fd2b41ae0474ce29186f7edcb3bf545087bd61fbbebb2bf75362d1307fda09c2d288e1e499787ac12d4fcb617a974718a6051f2eee741c"
