@@ -138,7 +138,7 @@ describe('resolvePhalaInstanceType', () => {
         storage: '20Gi',
         gpu: { units: 16, vendor: 'nvidia', model: 'h200' },
       })
-    ).rejects.toThrow('not currently available')
+    ).rejects.toThrow('No Phala GPU instance matches')
   })
 
   it('throws when the requested GPU model is unavailable', async () => {
@@ -153,7 +153,7 @@ describe('resolvePhalaInstanceType', () => {
         storage: '20Gi',
         gpu: { units: 1, vendor: 'nvidia', model: 'b200' },
       })
-    ).rejects.toThrow('not currently available')
+    ).rejects.toThrow('No Phala GPU instance matches')
   })
 
   it('falls back to hardcoded catalog when CLI fails', async () => {

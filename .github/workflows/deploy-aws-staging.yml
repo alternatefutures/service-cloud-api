@@ -1,0 +1,87 @@
+name: Deploy to AWS Staging (K3s)
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "src/**"
+      - "prisma/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "Dockerfile"
+      - "docker-entrypoint.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aws-staging
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}
+  NAMESPACE: af-staging
+
+jobs:
+  build-and-deploy:
+    name: Build, Push & Deploy (Staging)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout into service-cloud-api subdirectory
+        uses: actions/checkout@v4
+        with:
+          path: service-cloud-api
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: service-cloud-api/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:staging
+            ${{ env.IMAGE }}:staging-${{ github.sha }}
+
+      - name: Set up kubectl (staging)
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy to K3s staging
+        run: |
+          kubectl set image deployment/service-cloud-api \
+            service-cloud-api=${{ env.IMAGE }}:staging-${{ github.sha }} \
+            -n ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/service-cloud-api \
+            -n ${{ env.NAMESPACE }} --timeout=180s
+
+      - name: Run Prisma migrations (staging)
+        run: |
+          kubectl exec deployment/service-cloud-api -n ${{ env.NAMESPACE }} -- prisma migrate deploy
+
+      - name: Verify deployment (staging)
+        id: verify
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=service-cloud-api
+          echo "---"
+          sleep 10
+          if curl -sf --max-time 15 https://api.staging.alternatefutures.ai/health; then
+            echo "API healthy"
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Post-deploy health check failed for service-cloud-api staging"
+            echo "healthy=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi

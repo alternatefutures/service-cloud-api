@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PrismaClient } from '@prisma/client'
 import {
   handlePolicyExpiry,
+  reconcileActivePolicyExpirySchedules,
   scheduleOrEnforcePolicyExpiry,
 } from './runtimeScheduler.js'
 
@@ -98,5 +99,41 @@ describe('runtimeScheduler', () => {
     })
 
     expect(stopForPolicyMock).not.toHaveBeenCalled()
+  })
+
+  it('enforces overdue active policies during startup reconciliation', async () => {
+    const now = Date.now()
+    const prisma = {
+      deploymentPolicy: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'policy-overdue',
+            expiresAt: new Date(now - 60_000),
+            akashDeployment: { id: 'akash-overdue', dseq: '9', status: 'ACTIVE' },
+            phalaDeployment: null,
+          },
+          {
+            id: 'policy-future',
+            expiresAt: new Date(now + 60_000),
+            akashDeployment: { id: 'akash-future', dseq: '10', status: 'ACTIVE' },
+            phalaDeployment: null,
+          },
+        ]),
+      },
+    } as unknown as PrismaClient
+
+    await reconcileActivePolicyExpirySchedules(prisma)
+
+    expect(stopForPolicyMock).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({ id: 'policy-overdue' }),
+      'RUNTIME_EXPIRED'
+    )
+    expect(publishJobMock).toHaveBeenCalledTimes(1)
+    expect(publishJobMock).toHaveBeenCalledWith(
+      '/queue/policy/expire',
+      expect.objectContaining({ policyId: 'policy-future' }),
+      expect.objectContaining({ delaySec: expect.any(Number) })
+    )
   })
 })

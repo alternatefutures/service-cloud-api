@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, test, expect } from 'vitest'
 import { filterAkashBidsByPolicy, filterPhalaInstancesByPolicy } from '../resolver.js'
 import type { DeploymentPolicyRecord } from '../types.js'
 
