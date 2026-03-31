@@ -18,6 +18,7 @@ import {
 } from './services/billing/index.js'
 import { handleComputeResumeCheck } from './services/billing/resumeHandler.js'
 import { handleSuspendOrg } from './services/billing/suspendOrgHandler.js'
+import { handleMockDeployment, handleMockCleanup } from './services/testing/mockDeploymentHandler.js'
 import {
   getTelemetryIngestionService,
   handleTelemetryWebhook,
@@ -194,6 +195,16 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/compute/suspend-org' && req.method === 'POST') {
       await handleSuspendOrg(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/test/mock-deployment' && req.method === 'POST') {
+      await handleMockDeployment(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/test/cleanup' && req.method === 'POST') {
+      await handleMockCleanup(req, res, prisma)
       return
     }
 

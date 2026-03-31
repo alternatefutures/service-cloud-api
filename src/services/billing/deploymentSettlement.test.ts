@@ -8,11 +8,21 @@ import {
 } from './deploymentSettlement.js'
 
 const computeDebitMock = vi.fn()
+const getOrgBillingMock = vi.fn()
+const getOrgMarkupMock = vi.fn()
 
 vi.mock('./billingApiClient.js', () => ({
   getBillingApiClient: vi.fn(() => ({
     computeDebit: computeDebitMock,
+    getOrgBilling: getOrgBillingMock,
+    getOrgMarkup: getOrgMarkupMock,
   })),
+}))
+
+vi.mock('../../config/pricing.js', () => ({
+  getAktUsdPrice: vi.fn(async () => 1),
+  akashPricePerBlockToUsdPerDay: vi.fn(() => 1.44),
+  applyMargin: vi.fn((raw: number, margin: number) => raw * (1 + margin)),
 }))
 
 describe('deploymentSettlement', () => {
@@ -23,6 +33,8 @@ describe('deploymentSettlement', () => {
       balanceCents: 0,
       alreadyProcessed: false,
     })
+    getOrgBillingMock.mockResolvedValue({ orgBillingId: 'org-billing-fallback' })
+    getOrgMarkupMock.mockResolvedValue({ marginRate: 0.2 })
   })
 
   it('settles pre-funded Akash escrow by updating consumedCents (no wallet debit)', async () => {
@@ -121,6 +133,56 @@ describe('deploymentSettlement', () => {
         idempotencyKey: `akash_final:akash-payg:${settledAt.toISOString()}`,
       })
     )
+  })
+
+  it('settles Akash shutdown with compute debit even when escrow record is missing', async () => {
+    const settledAt = new Date('2026-03-31T01:00:00.000Z')
+    const prisma = {
+      deploymentEscrow: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      akashDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'akash-missing-escrow',
+          dseq: BigInt(26152298),
+          deployedAt: new Date('2026-03-31T00:00:00.000Z'),
+          createdAt: new Date('2026-03-30T23:50:00.000Z'),
+          policyId: 'policy-fallback',
+          pricePerBlock: '100',
+          dailyRateCentsCharged: 144,
+          service: {
+            slug: 'milady-gateway-vlxk',
+            project: { organizationId: 'org-1' },
+          },
+        }),
+      },
+      deploymentPolicy: {
+        update: vi.fn(),
+      },
+    } as unknown as PrismaClient
+
+    const additionalCents = await settleAkashEscrowToTime(
+      prisma,
+      'akash-missing-escrow',
+      settledAt
+    )
+
+    expect(additionalCents).toBe(6)
+    expect(computeDebitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgBillingId: 'org-billing-fallback',
+        amountCents: 6,
+        serviceType: 'akash_compute',
+        provider: 'akash',
+        resource: 'milady-gateway-vlxk',
+        idempotencyKey:
+          'akash_final_no_escrow:akash-missing-escrow:2026-03-31T01:00:00.000Z',
+      })
+    )
+    expect(prisma.deploymentPolicy.update).toHaveBeenCalledWith({
+      where: { id: 'policy-fallback' },
+      data: { totalSpentUsd: { increment: 0.06 } },
+    })
   })
 
   it('charges Phala shutdown usage to the nearest minute and updates totals', async () => {

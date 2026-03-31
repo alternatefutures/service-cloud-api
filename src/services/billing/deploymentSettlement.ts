@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
+import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('deployment-settlement')
@@ -43,6 +44,7 @@ export async function settleAkashEscrowToTime(
   akashDeploymentId: string,
   settledAt = new Date()
 ): Promise<number> {
+  const billingApi = getBillingApiClient()
   const escrow = await prisma.deploymentEscrow.findUnique({
     where: { akashDeploymentId },
     include: {
@@ -67,7 +69,11 @@ export async function settleAkashEscrowToTime(
     },
   })
 
-  if (!escrow || escrow.status === 'REFUNDED') {
+  if (!escrow) {
+    return settleAkashWithoutEscrow(prisma, billingApi, akashDeploymentId, settledAt)
+  }
+
+  if (escrow.status === 'REFUNDED') {
     return 0
   }
 
@@ -114,7 +120,6 @@ export async function settleAkashEscrowToTime(
   // Pay-as-you-go: debit wallet for the final prorated amount
   if (escrow.depositCents === 0 && additionalCents > 0) {
     try {
-      const billingApi = getBillingApiClient()
       await billingApi.computeDebit({
         orgBillingId: escrow.orgBillingId,
         amountCents: additionalCents,
@@ -148,6 +153,127 @@ export async function settleAkashEscrowToTime(
   )
 
   return additionalCents
+}
+
+async function settleAkashWithoutEscrow(
+  prisma: PrismaClient,
+  billingApi: ReturnType<typeof getBillingApiClient>,
+  akashDeploymentId: string,
+  settledAt: Date
+): Promise<number> {
+  const deployment = await prisma.akashDeployment.findUnique({
+    where: { id: akashDeploymentId },
+    select: {
+      id: true,
+      dseq: true,
+      deployedAt: true,
+      createdAt: true,
+      closedAt: true,
+      policyId: true,
+      pricePerBlock: true,
+      dailyRateCentsCharged: true,
+      service: {
+        select: {
+          slug: true,
+          project: {
+            select: {
+              organizationId: true,
+            },
+          },
+        },
+      },
+    },
+  })
+
+  const organizationId = deployment?.service?.project?.organizationId
+  if (!organizationId) {
+    return 0
+  }
+
+  const dailyRateCents = await resolveAkashDailyRateCentsWithoutEscrow(
+    { ...deployment, service: { ...deployment.service, project: { organizationId } } },
+    billingApi
+  )
+  if (dailyRateCents <= 0) {
+    return 0
+  }
+
+  const billedFrom = deployment.deployedAt || deployment.createdAt
+  const elapsedMs = Math.max(0, settledAt.getTime() - billedFrom.getTime())
+  const additionalCents = calculateProratedAkashCents(dailyRateCents, elapsedMs)
+  if (additionalCents <= 0) {
+    return 0
+  }
+
+  try {
+    const orgBilling = await billingApi.getOrgBilling(organizationId)
+    const result = await billingApi.computeDebit({
+      orgBillingId: orgBilling.orgBillingId,
+      amountCents: additionalCents,
+      serviceType: 'akash_compute',
+      provider: 'akash',
+      resource: deployment.service.slug || akashDeploymentId,
+      description: `Akash compute final settlement (escrow-missing): $${(additionalCents / 100).toFixed(2)}`,
+      idempotencyKey: `akash_final_no_escrow:${akashDeploymentId}:${settledAt.toISOString()}`,
+      metadata: {
+        deploymentId: akashDeploymentId,
+        dseq: deployment.dseq?.toString(),
+        source: 'akash_final_settlement_no_escrow',
+      },
+    })
+
+    if (!result.alreadyProcessed && deployment.policyId) {
+      await prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: {
+          totalSpentUsd: { increment: additionalCents / 100 },
+        },
+      })
+    }
+
+    log.warn(
+      { akashDeploymentId, additionalCents },
+      'Settled Akash billing without escrow fallback'
+    )
+
+    return additionalCents
+  } catch (error) {
+    log.warn(
+      { akashDeploymentId, err: error },
+      'Failed to settle Akash billing without escrow fallback'
+    )
+    return 0
+  }
+}
+
+async function resolveAkashDailyRateCentsWithoutEscrow(
+  deployment: {
+    service: { project: { organizationId: string } }
+    pricePerBlock: string | null
+    dailyRateCentsCharged: number | null
+  },
+  billingApi: ReturnType<typeof getBillingApiClient>
+): Promise<number> {
+  if (deployment.dailyRateCentsCharged && deployment.dailyRateCentsCharged > 0) {
+    return deployment.dailyRateCentsCharged
+  }
+
+  if (!deployment.pricePerBlock) return 0
+
+  try {
+    const [orgBilling, aktPrice] = await Promise.all([
+      billingApi.getOrgBilling(deployment.service.project.organizationId),
+      getAktUsdPrice(),
+    ])
+    const orgMarkup = await billingApi.getOrgMarkup(orgBilling.orgBillingId)
+    const rawDailyUsd = akashPricePerBlockToUsdPerDay(
+      deployment.pricePerBlock,
+      aktPrice
+    )
+    return Math.ceil(applyMargin(rawDailyUsd, orgMarkup.marginRate) * 100)
+  } catch {
+    return 0
+  }
 }
 
 /**

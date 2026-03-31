@@ -148,7 +148,6 @@ export async function reconcileActivePolicyExpirySchedules(
   const policies = await prisma.deploymentPolicy.findMany({
     where: {
       stopReason: null,
-      expiresAt: { gt: now },
       OR: [
         { akashDeployment: { is: { status: 'ACTIVE' } } },
         { phalaDeployment: { is: { status: 'ACTIVE' } } },
@@ -157,16 +156,32 @@ export async function reconcileActivePolicyExpirySchedules(
     select: {
       id: true,
       expiresAt: true,
+      akashDeployment: {
+        select: { id: true, dseq: true, status: true },
+      },
+      phalaDeployment: {
+        select: { id: true, appId: true, status: true, name: true },
+      },
     },
   })
 
+  let scheduledCount = 0
+  let enforcedCount = 0
   for (const policy of policies) {
-    if (!policy.expiresAt) continue
+    if (!policy.expiresAt || !isDeploymentActive(policy)) continue
+
+    if (policy.expiresAt <= now) {
+      await stopForPolicy(prisma, policy, 'RUNTIME_EXPIRED')
+      enforcedCount++
+      continue
+    }
+
     await schedulePolicyExpiry(policy.id, policy.expiresAt)
+    scheduledCount++
   }
 
   log.info(
-    { scheduledCount: policies.length },
+    { scheduledCount, enforcedCount },
     'Reconciled active deployment policy expiry schedules'
   )
 }
