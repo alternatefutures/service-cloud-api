@@ -1039,6 +1039,10 @@ model AkashDeployment {
   dailyRateCentsRaw     Int?          // Raw provider cost per day in cents
   dailyRateCentsCharged Int?          // Cost after margin per day in cents
 
+  // Deployment policy (budget, GPU, runtime constraints)
+  policyId        String?             @unique @map("policy_id")
+  policy          DeploymentPolicy?   @relation(fields: [policyId], references: [id], onDelete: SetNull)
+
   // Timestamps
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
@@ -1165,10 +1169,58 @@ model PhalaDeployment {
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
 
+  // Deployment policy (budget, GPU, runtime constraints)
+  policyId        String?                 @unique @map("policy_id")
+  policy          DeploymentPolicy?       @relation(fields: [policyId], references: [id], onDelete: SetNull)
+
   @@index([serviceId])
   @@index([siteId])
   @@index([afFunctionId])
   @@index([status])
   @@index([appId])
   @@index([orgBillingId])
+}
+
+// ============================================
+// DEPLOYMENT POLICY (budget, GPU, runtime constraints)
+// ============================================
+
+enum PolicyStopReason {
+  BUDGET_EXCEEDED
+  RUNTIME_EXPIRED
+  MANUAL_STOP
+  BALANCE_LOW
+}
+
+model DeploymentPolicy {
+  id                    String            @id @default(cuid())
+
+  // GPU constraints
+  acceptableGpuModels   String[]          // ["h100", "h200", "a100"] — empty = any
+  gpuUnits              Int?              // number of GPU units requested
+  gpuVendor             String?           // "nvidia" | "amd" | null
+
+  // Budget constraints
+  maxBudgetUsd          Float?            @map("max_budget_usd")
+  maxMonthlyUsd         Float?            @map("max_monthly_usd")
+
+  // Duration constraints
+  runtimeMinutes        Int?              @map("runtime_minutes")
+  expiresAt             DateTime?         @map("expires_at")
+
+  // Enforcement state
+  stopReason            PolicyStopReason? @map("stop_reason")
+  stoppedAt             DateTime?         @map("stopped_at")
+  totalSpentUsd         Float             @default(0) @map("total_spent_usd")
+
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  // Relations (1:1 back-references)
+  akashDeployment       AkashDeployment?
+  phalaDeployment       PhalaDeployment?
+
+  @@index([expiresAt])
+  @@index([stopReason])
+  @@map("deployment_policy")
 }

@@ -14,6 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { getEscrowService } from './escrowService.js'
+import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('resume-handler')
@@ -107,12 +108,14 @@ export async function handleComputeResumeCheck(
         'Balance below 1-day cost — not resuming'
       )
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        resumed: [],
-        reason: 'insufficient_balance',
-        balanceCents: newBalanceCents,
-        dailyCostCents: totalDailyCostCents,
-      }))
+      res.end(
+        JSON.stringify({
+          resumed: [],
+          reason: 'insufficient_balance',
+          balanceCents: newBalanceCents,
+          dailyCostCents: totalDailyCostCents,
+        })
+      )
       return
     }
 
@@ -127,12 +130,43 @@ export async function handleComputeResumeCheck(
 
       try {
         // Re-deploy from saved SDL
-        const { getAkashOrchestrator } = await import('../akash/orchestrator.js')
+        const { getAkashOrchestrator } =
+          await import('../akash/orchestrator.js')
         const orchestrator = getAkashOrchestrator(prisma)
 
-        const newDeploymentId = await orchestrator.deployService(deployment.serviceId, {
-          sdlContent: deployment.savedSdl,
-        })
+        const newDeploymentId = await orchestrator.deployService(
+          deployment.serviceId,
+          {
+            sdlContent: deployment.savedSdl,
+          }
+        )
+
+        // Preserve policy: create a new policy for the resumed deployment inheriting original constraints
+        if (deployment.policyId) {
+          const oldPolicy = await prisma.deploymentPolicy.findUnique({
+            where: { id: deployment.policyId },
+          })
+          if (oldPolicy) {
+            const newPolicy = await prisma.deploymentPolicy.create({
+              data: {
+                acceptableGpuModels: oldPolicy.acceptableGpuModels,
+                gpuUnits: oldPolicy.gpuUnits,
+                gpuVendor: oldPolicy.gpuVendor,
+                maxBudgetUsd: oldPolicy.maxBudgetUsd,
+                maxMonthlyUsd: oldPolicy.maxMonthlyUsd,
+                runtimeMinutes: oldPolicy.runtimeMinutes,
+                expiresAt: oldPolicy.runtimeMinutes
+                  ? new Date(Date.now() + oldPolicy.runtimeMinutes * 60_000)
+                  : null,
+                totalSpentUsd: oldPolicy.totalSpentUsd,
+              },
+            })
+            await prisma.akashDeployment.update({
+              where: { id: newDeploymentId },
+              data: { policyId: newPolicy.id },
+            })
+          }
+        }
 
         // Create new escrow for the new deployment
         const billingApi = getBillingApiClient()
@@ -162,16 +196,21 @@ export async function handleComputeResumeCheck(
           data: { status: 'CLOSED', closedAt: new Date() },
         })
 
-        resumed.push(`Akash: dseq=${deployment.dseq} → new deployment ${newDeploymentId}`)
+        resumed.push(
+          `Akash: dseq=${deployment.dseq} → new deployment ${newDeploymentId}`
+        )
       } catch (error) {
-        errors.push(`Akash ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        errors.push(
+          `Akash ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        )
       }
     }
 
     // Resume Phala deployments
     for (const deployment of pausedPhala) {
       try {
-        const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
+        const { getPhalaOrchestrator } =
+          await import('../phala/orchestrator.js')
         const orchestrator = getPhalaOrchestrator(prisma)
         await orchestrator.startPhalaDeployment(deployment.appId)
 
@@ -184,13 +223,35 @@ export async function handleComputeResumeCheck(
           },
         })
 
+        // Clear BALANCE_LOW stopReason on policy if resuming
+        if (deployment.policyId) {
+          await prisma.deploymentPolicy
+            .update({
+              where: { id: deployment.policyId },
+              data: { stopReason: null, stoppedAt: null },
+            })
+            .catch(err =>
+              log.warn(
+                { policyId: deployment.policyId, err },
+                'Failed to clear policy stopReason on resume'
+              )
+            )
+
+          await scheduleOrEnforcePolicyExpiry(prisma, deployment.policyId)
+        }
+
         resumed.push(`Phala: ${deployment.name}`)
       } catch (error) {
-        errors.push(`Phala ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        errors.push(
+          `Phala ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        )
       }
     }
 
-    log.info({ resumedCount: resumed.length, errorCount: errors.length }, 'Resume check completed')
+    log.info(
+      { resumedCount: resumed.length, errorCount: errors.length },
+      'Resume check completed'
+    )
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ resumed, errors }))

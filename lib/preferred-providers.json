@@ -1,5 +1,6 @@
 {
-  "generatedAt": "2026-03-15T20:57:35.646Z",
+  "_run": "cd service-cloud-api && bun scripts/test-deploy.ts test-all",
+  "generatedAt": "2026-03-31T10:26:52.750Z",
   "providers": [
     {
       "address": "akash175llqyjvxfle9qwt740vm46772dzaznpzgm576",
@@ -32,10 +33,64 @@
       "address": "akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr",
       "name": "Provider 15pk",
       "verified": true,
-      "testedAt": "2026-03-15T20:57:35.646Z",
-      "templatesPassed": 3,
-      "templatesTested": 3,
-      "notes": "Passed: ollama-gpu, jupyter-ml-workspace, comfyui"
+      "testedAt": "2026-03-30T19:05:57.903Z",
+      "templatesPassed": 1,
+      "templatesTested": 1,
+      "notes": "Passed: comfyui"
+    },
+    {
+      "address": "akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z",
+      "name": "Provider 1aau",
+      "verified": true,
+      "testedAt": "2026-03-30T17:03:36.537Z",
+      "templatesPassed": 1,
+      "templatesTested": 1,
+      "notes": "Passed: hyperscape"
+    },
+    {
+      "address": "akash1kjwufzvatm44f8ssqfvju2m5jcx7thlftewrrc",
+      "name": "Provider 1kjw",
+      "verified": true,
+      "testedAt": "2026-03-30T19:44:56.501Z",
+      "templatesPassed": 4,
+      "templatesTested": 4,
+      "notes": "Passed: hyperscape, milady-gateway, openclaw-gateway, minecraft-server"
+    },
+    {
+      "address": "akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe",
+      "name": "Provider 1ut3",
+      "verified": true,
+      "testedAt": "2026-03-31T10:26:52.750Z",
+      "templatesPassed": 4,
+      "templatesTested": 4,
+      "notes": "Passed: gpu-instance, ollama-gpu, jupyter-ml-workspace, comfyui"
+    },
+    {
+      "address": "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc",
+      "name": "Provider 18ga",
+      "verified": true,
+      "testedAt": "2026-03-31T10:26:52.750Z",
+      "templatesPassed": 7,
+      "templatesTested": 7,
+      "notes": "Passed: milady-gateway, openclaw-gateway, nanobot-gateway, redis, n8n, gitea, minecraft-server"
+    },
+    {
+      "address": "akash14w36hwrtuqqa3j92fa8ctcxlhjgvr3a0zpp7cj",
+      "name": "Provider 14w3",
+      "verified": true,
+      "testedAt": "2026-03-30T19:05:57.903Z",
+      "templatesPassed": 5,
+      "templatesTested": 6,
+      "notes": "Passed: react-vite, nuxt-server, hugo-server, node-ws-gameserver, bun-ws-gameserver. Failed: astro-server"
+    },
+    {
+      "address": "akash1st7fqtuqk6hj06fkkavq0fxtw0w9sm4zzt3r5g",
+      "name": "Provider 1st7",
+      "verified": true,
+      "testedAt": "2026-03-31T10:26:52.750Z",
+      "templatesPassed": 6,
+      "templatesTested": 10,
+      "notes": "Passed: hyperscape, postgres, react-vite, hugo-server, node-ws-gameserver, bun-ws-gameserver. Failed: alternate-agent, nextjs-server, astro-server, nuxt-server"
     }
   ]
 }

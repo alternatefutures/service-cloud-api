@@ -1,20 +1,24 @@
 /**
  * Compute Billing Scheduler
  *
- * Daily cron job (3 AM) that processes:
- *   1. Akash escrow daily consumption
+ * Daily cron job that processes:
+ *   1. Akash deployments — direct wallet debit (pay-as-you-go) or escrow consumption (pre-funded)
  *   2. Phala per-hour debits
  *   3. Balance threshold checks → pause if < 1 day burn
- *
- * Follows the same pattern as InvoiceScheduler and StorageSnapshotScheduler.
+ *   4. Policy spend tracking and enforcement
  */
 
 import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
 import { getEscrowService } from './escrowService.js'
 import { getBillingApiClient } from './billingApiClient.js'
-import { getPhalaHourlyRate, applyMargin } from '../../config/pricing.js'
+import { BILLING_CONFIG } from '../../config/billing.js'
+import {
+  processFinalPhalaBilling,
+  settleAkashEscrowToTime,
+} from './deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
+import { checkPolicyLimits } from '../policy/enforcer.js'
 
 const log = createLogger('compute-billing')
 
@@ -22,28 +26,25 @@ export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
   private forceMode = false
   private noPauseMode = false
+  private readonly prisma: PrismaClient
 
-  constructor(private prisma: PrismaClient) {}
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma
+  }
 
-  /**
-   * Start the scheduler — runs daily at 3 AM (after InvoiceScheduler at 2 AM)
-   */
   start() {
     if (this.cronJob) {
       log.info('Already running')
       return
     }
 
-    this.cronJob = cron.schedule('0 3 * * *', async () => {
+    this.cronJob = cron.schedule(BILLING_CONFIG.scheduler.cronExpression, async () => {
       await this.runBillingCycle()
     })
 
-    log.info('Started — runs daily at 3 AM')
+    log.info(`Started — runs at ${BILLING_CONFIG.scheduler.cronExpression}`)
   }
 
-  /**
-   * Stop the scheduler
-   */
   stop() {
     if (this.cronJob) {
       this.cronJob.stop()
@@ -52,23 +53,27 @@ export class ComputeBillingScheduler {
     }
   }
 
-  /**
-   * Run billing cycle immediately (for testing / manual trigger)
-   * @param options.force — bypasses the hoursSinceLastBill minimum check
-   * @param options.noPause — skips the threshold check → pause flow (safe for testing)
-   */
-  async runNow(options: { force?: boolean; noPause?: boolean } | boolean = false) {
-    // Back-compat: accept bare boolean for force
-    const opts = typeof options === 'boolean' ? { force: options, noPause: false } : options
+  async runNow(
+    options: { force?: boolean; noPause?: boolean } | boolean = false
+  ) {
+    const opts =
+      typeof options === 'boolean'
+        ? { force: options, noPause: false }
+        : options
     this.forceMode = opts.force ?? false
     this.noPauseMode = opts.noPause ?? false
 
     const flags = [
       opts.force ? 'FORCE' : null,
       opts.noPause ? 'NO-PAUSE' : null,
-    ].filter(Boolean).join(', ')
+    ]
+      .filter(Boolean)
+      .join(', ')
 
-    log.info({ flags: flags || undefined }, 'Manual trigger — running billing cycle now')
+    log.info(
+      { flags: flags || undefined },
+      'Manual trigger — running billing cycle now'
+    )
     try {
       await this.runBillingCycle()
     } finally {
@@ -95,17 +100,25 @@ export class ComputeBillingScheduler {
     }
 
     try {
-      // Step 1: Process Akash escrow daily consumption
       await this.processAkashEscrows(stats)
-
-      // Step 2: Process Phala hourly debits
       await this.processPhalaDebits(stats)
 
-      // Step 3: Check balance thresholds and pause if needed
       if (this.noPauseMode) {
         log.info('Skipping threshold/pause check (no-pause mode)')
       } else {
         await this.checkThresholds(stats)
+      }
+
+      await this.updatePolicySpend()
+      const policyStats = await checkPolicyLimits(this.prisma)
+      if (policyStats.budgetStopped > 0 || policyStats.runtimeExpired > 0) {
+        log.info(
+          {
+            budgetStopped: policyStats.budgetStopped,
+            runtimeExpired: policyStats.runtimeExpired,
+          },
+          'Policy enforcement triggered stops'
+        )
       }
 
       const duration = Date.now() - startTime
@@ -117,6 +130,8 @@ export class ComputeBillingScheduler {
           phalaErrors: stats.phalaErrors,
           orgsPaused: stats.orgsPaused,
           totalDebitedCents: stats.totalDebitedCents,
+          policyBudgetStopped: policyStats.budgetStopped,
+          policyRuntimeExpired: policyStats.runtimeExpired,
           durationMs: duration,
         },
         'Cycle complete'
@@ -127,7 +142,7 @@ export class ComputeBillingScheduler {
   }
 
   // ========================================
-  // STEP 1: AKASH ESCROW CONSUMPTION
+  // STEP 1: AKASH BILLING
   // ========================================
 
   private async processAkashEscrows(stats: {
@@ -136,19 +151,49 @@ export class ComputeBillingScheduler {
     totalDebitedCents: number
   }) {
     const escrowService = getEscrowService(this.prisma)
+    const billingApi = getBillingApiClient()
 
     const activeEscrows = await this.prisma.deploymentEscrow.findMany({
       where: { status: 'ACTIVE' },
-      include: { akashDeployment: { select: { id: true, status: true } } },
+      include: {
+        akashDeployment: {
+          select: {
+            id: true,
+            status: true,
+            dseq: true,
+            service: {
+              select: {
+                slug: true,
+                name: true,
+                templateId: true,
+              },
+            },
+          },
+        },
+      },
     })
 
     log.info({ count: activeEscrows.length }, 'Processing active Akash escrows')
 
     for (const escrow of activeEscrows) {
       try {
-        // Skip if deployment is no longer active
         if (escrow.akashDeployment.status !== 'ACTIVE') {
-          log.info({ escrowId: escrow.id, status: escrow.akashDeployment.status }, 'Akash escrow deployment not active — skipping')
+          log.info(
+            { escrowId: escrow.id, status: escrow.akashDeployment.status },
+            'Akash escrow deployment not active — skipping'
+          )
+          continue
+        }
+
+        const now = new Date()
+        const lastBilled = escrow.lastBilledAt || escrow.createdAt
+        const hoursSinceLastBill = (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
+
+        if (hoursSinceLastBill < BILLING_CONFIG.akash.minBillingIntervalHours && !this.forceMode) {
+          log.info(
+            { escrowId: escrow.id },
+            'Akash escrow skipped (too soon since last billing)'
+          )
           continue
         }
 
@@ -157,24 +202,90 @@ export class ComputeBillingScheduler {
             escrowId: escrow.id,
             deploymentId: escrow.akashDeploymentId,
             dailyRateCents: escrow.dailyRateCents,
-            consumedCents: escrow.consumedCents,
             depositCents: escrow.depositCents,
+            mode: escrow.depositCents > 0 ? 'pre-funded' : 'pay-as-you-go',
           },
           'Processing Akash escrow'
         )
 
-        const updated = await escrowService.processDailyConsumption(escrow.id, this.forceMode)
+        if (escrow.depositCents === 0) {
+          // Pay-as-you-go: debit wallet directly (same pattern as Phala)
+          const daysToBill = this.forceMode
+            ? Math.max(1, Math.floor(hoursSinceLastBill / 24))
+            : Math.max(1, Math.floor(hoursSinceLastBill / 24))
+          const amountCents = escrow.dailyRateCents * daysToBill
 
-        if (updated) {
-          stats.akashProcessed++
-          stats.totalDebitedCents += escrow.dailyRateCents
-          log.info({ escrowId: escrow.id, consumedCents: escrow.dailyRateCents }, 'Akash escrow consumed daily rate')
+          if (amountCents <= 0) continue
+
+          const dateKey = now.toISOString().slice(0, 10)
+          const runId = this.forceMode ? `force_${Date.now()}` : dateKey
+          const idempotencyKey = `akash_daily:${escrow.id}:${runId}`
+
+          const result = await billingApi.computeDebit({
+            orgBillingId: escrow.orgBillingId,
+            amountCents,
+            serviceType: 'akash_compute',
+            provider: 'akash',
+            resource: escrow.akashDeployment.service?.slug || escrow.akashDeploymentId,
+            description: `Akash compute: ${daysToBill}d @ $${(escrow.dailyRateCents / 100).toFixed(2)}/day`,
+            idempotencyKey,
+            metadata: {
+              deploymentId: escrow.akashDeploymentId,
+              dseq: escrow.akashDeployment.dseq?.toString(),
+              source: 'akash_daily_billing',
+            },
+          })
+
+          if (!result.alreadyProcessed) {
+            await this.prisma.deploymentEscrow.update({
+              where: { id: escrow.id },
+              data: {
+                consumedCents: escrow.consumedCents + amountCents,
+                lastBilledAt: now,
+              },
+            })
+
+            stats.akashProcessed++
+            stats.totalDebitedCents += amountCents
+            log.info(
+              { escrowId: escrow.id, debitedCents: amountCents },
+              'Akash pay-as-you-go billing complete'
+            )
+          } else {
+            log.info(
+              { escrowId: escrow.id },
+              'Akash billing already processed (idempotency hit)'
+            )
+          }
         } else {
-          log.info({ escrowId: escrow.id }, 'Akash escrow skipped (too soon since last billing or not active)')
+          // Pre-funded mode: consume from escrow pool
+          const updated = await escrowService.processDailyConsumption(
+            escrow.id,
+            this.forceMode
+          )
+
+          if (updated) {
+            const consumedDelta = updated.consumedCents - escrow.consumedCents
+            stats.akashProcessed++
+            stats.totalDebitedCents += consumedDelta
+            log.info(
+              { escrowId: escrow.id, consumedCents: consumedDelta },
+              'Akash pre-funded escrow consumed daily rate'
+            )
+          }
         }
       } catch (error) {
         stats.akashErrors++
-        log.error({ escrowId: escrow.id, err: error }, 'Akash escrow error')
+        const errMsg = error instanceof Error ? error.message : String(error)
+
+        if (errMsg.includes('INSUFFICIENT_BALANCE')) {
+          log.warn(
+            { escrowId: escrow.id },
+            'Akash billing insufficient balance — will pause'
+          )
+        } else {
+          log.error({ escrowId: escrow.id, err: error }, 'Akash escrow error')
+        }
       }
     }
   }
@@ -198,55 +309,44 @@ export class ComputeBillingScheduler {
       },
     })
 
-    log.info({ count: activePhala.length }, 'Processing active Phala deployments')
+    log.info(
+      { count: activePhala.length },
+      'Processing active Phala deployments'
+    )
 
     const now = new Date()
 
     for (const deployment of activePhala) {
       try {
         if (!deployment.orgBillingId || !deployment.hourlyRateCents) {
-          log.info({ deploymentId: deployment.id }, 'Phala deployment missing orgBillingId or hourlyRateCents — skipping')
           continue
         }
 
-        // Calculate billable hours since last billing
-        const lastBilled = deployment.lastBilledAt || deployment.activeStartedAt || deployment.createdAt
-        const hoursSinceLastBill = (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
+        const lastBilled =
+          deployment.lastBilledAt ||
+          deployment.activeStartedAt ||
+          deployment.createdAt
+        const hoursSinceLastBill =
+          (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
 
-        log.info(
-          {
-            deploymentId: deployment.id,
-            lastBilled: lastBilled.toISOString(),
-            hoursSince: Number(hoursSinceLastBill.toFixed(2)),
-            hourlyRateCents: deployment.hourlyRateCents,
-            orgBillingId: deployment.orgBillingId,
-          },
-          'Processing Phala deployment'
-        )
-
-        // Don't bill if less than 1 hour since last billing (skip in force mode)
-        if (hoursSinceLastBill < 1 && !this.forceMode) {
-          log.info({ deploymentId: deployment.id }, 'Phala deployment <1h since last bill — skipping')
+        if (hoursSinceLastBill < BILLING_CONFIG.phala.billingIntervalHours && !this.forceMode) {
+          log.info(
+            { deploymentId: deployment.id },
+            'Phala deployment <1h since last bill — skipping'
+          )
           continue
         }
 
-        // In force mode with <1 hour, bill for at least 1 hour
-        const billableHours = this.forceMode ? Math.max(1, Math.floor(hoursSinceLastBill)) : Math.floor(hoursSinceLastBill)
+        const billableHours = this.forceMode
+          ? Math.max(1, Math.floor(hoursSinceLastBill))
+          : Math.floor(hoursSinceLastBill)
         const amountCents = billableHours * deployment.hourlyRateCents
 
-        if (amountCents <= 0) {
-          log.info({ deploymentId: deployment.id }, 'Phala deployment amountCents=0 — skipping')
-          continue
-        }
+        if (amountCents <= 0) continue
 
         const dateKey = now.toISOString().slice(0, 10)
         const runId = this.forceMode ? `force_${Date.now()}` : dateKey
         const idempotencyKey = `phala_daily:${deployment.id}:${runId}`
-
-        log.info(
-          { deploymentId: deployment.id, billableHours, hourlyRateCents: deployment.hourlyRateCents, amountCents },
-          'Billing Phala deployment'
-        )
 
         const result = await billingApi.computeDebit({
           orgBillingId: deployment.orgBillingId,
@@ -259,9 +359,11 @@ export class ComputeBillingScheduler {
         })
 
         if (result.alreadyProcessed) {
-          log.info({ deploymentId: deployment.id }, 'Phala deployment already processed (idempotency hit)')
+          log.info(
+            { deploymentId: deployment.id },
+            'Phala deployment already processed (idempotency hit)'
+          )
         } else {
-          // Update Phala deployment billing state
           await this.prisma.phalaDeployment.update({
             where: { id: deployment.id },
             data: {
@@ -272,18 +374,27 @@ export class ComputeBillingScheduler {
 
           stats.phalaProcessed++
           stats.totalDebitedCents += amountCents
-          log.info({ deploymentId: deployment.id, debitedCents: amountCents }, 'Phala deployment debited')
+          log.info(
+            { deploymentId: deployment.id, debitedCents: amountCents },
+            'Phala deployment debited'
+          )
         }
       } catch (error) {
         stats.phalaErrors++
         const errMsg = error instanceof Error ? error.message : String(error)
 
-        // If insufficient balance, mark for pausing (handled in threshold check)
         if (errMsg.includes('INSUFFICIENT_BALANCE')) {
-          log.warn({ deploymentId: deployment.id }, 'Phala deployment insufficient balance — will pause')
+          log.warn(
+            { deploymentId: deployment.id },
+            'Phala deployment insufficient balance — will pause'
+          )
         } else {
           log.error(
-            { deploymentId: deployment.id, err: error, body: (error as any).body },
+            {
+              deploymentId: deployment.id,
+              err: error,
+              body: (error as any).body,
+            },
             'Phala deployment error'
           )
         }
@@ -297,49 +408,66 @@ export class ComputeBillingScheduler {
 
   private async checkThresholds(stats: { orgsPaused: number }) {
     const billingApi = getBillingApiClient()
-    const escrowService = getEscrowService(this.prisma)
-
-    // Collect unique orgBillingIds from active deployments
-    const orgBillingIds = new Set<string>()
 
     const activeEscrows = await this.prisma.deploymentEscrow.findMany({
       where: { status: 'ACTIVE' },
-      select: { orgBillingId: true, organizationId: true, dailyRateCents: true },
+      select: {
+        orgBillingId: true,
+        organizationId: true,
+        dailyRateCents: true,
+      },
     })
 
     const activePhala = await this.prisma.phalaDeployment.findMany({
       where: { status: 'ACTIVE', orgBillingId: { not: null } },
-      select: { orgBillingId: true, organizationId: true, hourlyRateCents: true },
+      select: {
+        orgBillingId: true,
+        organizationId: true,
+        hourlyRateCents: true,
+      },
     })
 
-    // Build per-org burn rates
-    const orgBurnRates = new Map<string, { dailyCostCents: number; orgId: string }>()
+    const orgBurnRates = new Map<
+      string,
+      { dailyCostCents: number; orgId: string }
+    >()
 
     for (const e of activeEscrows) {
-      const existing = orgBurnRates.get(e.orgBillingId) || { dailyCostCents: 0, orgId: e.organizationId }
+      const existing = orgBurnRates.get(e.orgBillingId) || {
+        dailyCostCents: 0,
+        orgId: e.organizationId,
+      }
       existing.dailyCostCents += e.dailyRateCents
       orgBurnRates.set(e.orgBillingId, existing)
     }
 
     for (const p of activePhala) {
       if (!p.orgBillingId || !p.hourlyRateCents) continue
-      const existing = orgBurnRates.get(p.orgBillingId) || { dailyCostCents: 0, orgId: p.organizationId || '' }
-      existing.dailyCostCents += p.hourlyRateCents * 24 // Convert hourly to daily
+      const existing = orgBurnRates.get(p.orgBillingId) || {
+        dailyCostCents: 0,
+        orgId: p.organizationId || '',
+      }
+      existing.dailyCostCents += p.hourlyRateCents * 24
       orgBurnRates.set(p.orgBillingId, existing)
     }
 
-    // Check each org's balance against 1-day burn
     for (const [orgBillingId, { dailyCostCents, orgId }] of orgBurnRates) {
       try {
         const balanceInfo = await billingApi.getOrgBalance(orgBillingId)
+        const thresholdCents = dailyCostCents * BILLING_CONFIG.thresholds.lowBalanceDays
 
-        if (balanceInfo.balanceCents < dailyCostCents) {
+        if (balanceInfo.balanceCents < thresholdCents) {
           log.warn(
             { orgId, balanceCents: balanceInfo.balanceCents, dailyCostCents },
-            'Org balance below 1-day burn — pausing deployments'
+            'Org balance below threshold — pausing deployments'
           )
 
-          await this.pauseOrgDeployments(orgBillingId, orgId, balanceInfo.balanceCents, dailyCostCents)
+          await this.pauseOrgDeployments(
+            orgBillingId,
+            orgId,
+            balanceInfo.balanceCents,
+            dailyCostCents
+          )
           stats.orgsPaused++
         }
       } catch (error) {
@@ -352,9 +480,6 @@ export class ComputeBillingScheduler {
   // PAUSE FLOW
   // ========================================
 
-  /**
-   * Pause all deployments for an org due to insufficient balance
-   */
   private async pauseOrgDeployments(
     orgBillingId: string,
     orgId: string,
@@ -365,7 +490,6 @@ export class ComputeBillingScheduler {
     const escrowService = getEscrowService(this.prisma)
     const pausedServices: string[] = []
 
-    // 1. Pause Akash deployments: close on-chain, save SDL, mark SUSPENDED
     const akashDeployments = await this.prisma.akashDeployment.findMany({
       where: {
         status: 'ACTIVE',
@@ -376,36 +500,42 @@ export class ComputeBillingScheduler {
 
     for (const deployment of akashDeployments) {
       try {
-        // Save SDL for later re-deploy
+        const stoppedAt = new Date()
+
         await this.prisma.akashDeployment.update({
           where: { id: deployment.id },
           data: {
             status: 'SUSPENDED',
-            savedSdl: deployment.sdlContent, // Save for resume
+            savedSdl: deployment.sdlContent,
           },
         })
 
-        // Close on-chain (Akash has no native pause)
         try {
-          const { getAkashOrchestrator } = await import('../akash/orchestrator.js')
+          const { getAkashOrchestrator } =
+            await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(this.prisma)
           await orchestrator.closeDeployment(Number(deployment.dseq))
         } catch (err) {
-          log.warn({ dseq: deployment.dseq, err }, 'Failed to close Akash deployment on-chain')
+          log.warn(
+            { dseq: deployment.dseq, err },
+            'Failed to close Akash deployment on-chain'
+          )
         }
 
-        // Pause escrow
         if (deployment.escrow) {
+          await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
           await escrowService.pauseEscrow(deployment.id)
         }
 
         pausedServices.push(`Akash: dseq=${deployment.dseq}`)
       } catch (error) {
-        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Akash deployment')
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Akash deployment'
+        )
       }
     }
 
-    // 2. Pause Phala deployments: stop CVM (Phala supports native stop/start)
     const phalaDeployments = await this.prisma.phalaDeployment.findMany({
       where: {
         status: 'ACTIVE',
@@ -415,7 +545,16 @@ export class ComputeBillingScheduler {
 
     for (const deployment of phalaDeployments) {
       try {
-        const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
+        const stoppedAt = new Date()
+        await processFinalPhalaBilling(
+          this.prisma,
+          deployment.id,
+          stoppedAt,
+          'phala_balance_low_pause'
+        )
+
+        const { getPhalaOrchestrator } =
+          await import('../phala/orchestrator.js')
         const orchestrator = getPhalaOrchestrator(this.prisma)
         await orchestrator.stopPhalaDeployment(deployment.appId)
 
@@ -426,19 +565,19 @@ export class ComputeBillingScheduler {
 
         pausedServices.push(`Phala: ${deployment.name}`)
       } catch (error) {
-        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Phala deployment')
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Phala deployment'
+        )
       }
     }
 
-    // 3. Send notification email
     if (pausedServices.length > 0) {
       try {
-        // TODO: look up org admin email (for now, use a best-effort approach)
-        // This would need an internal API call to get org members
         await billingApi.notify({
           orgId,
           type: 'low_balance_pause',
-          email: '', // Filled by auth service from org admin lookup
+          email: '',
           balanceCents,
           dailyCostCents,
           pausedServices,
@@ -448,12 +587,66 @@ export class ComputeBillingScheduler {
       }
     }
   }
+
+  // ========================================
+  // STEP 4: POLICY SPEND TRACKING
+  // ========================================
+
+  private async updatePolicySpend() {
+    const akashPolicies = await this.prisma.akashDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        policyId: { not: null },
+      },
+      select: {
+        policyId: true,
+        escrow: { select: { consumedCents: true } },
+        dailyRateCentsCharged: true,
+      },
+    })
+
+    for (const dep of akashPolicies) {
+      if (!dep.policyId) continue
+      const spentUsd = dep.escrow
+        ? dep.escrow.consumedCents / 100
+        : dep.dailyRateCentsCharged
+          ? dep.dailyRateCentsCharged / 100
+          : 0
+      if (spentUsd > 0) {
+        await this.prisma.deploymentPolicy.update({
+          where: { id: dep.policyId },
+          data: { totalSpentUsd: spentUsd },
+        })
+      }
+    }
+
+    const phalaPolicies = await this.prisma.phalaDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        policyId: { not: null },
+      },
+      select: {
+        policyId: true,
+        totalBilledCents: true,
+      },
+    })
+
+    for (const dep of phalaPolicies) {
+      if (!dep.policyId) continue
+      const spentUsd = (dep.totalBilledCents ?? 0) / 100
+      await this.prisma.deploymentPolicy.update({
+        where: { id: dep.policyId },
+        data: { totalSpentUsd: spentUsd },
+      })
+    }
+  }
 }
 
-// Singleton
 let instance: ComputeBillingScheduler | null = null
 
-export function getComputeBillingScheduler(prisma: PrismaClient): ComputeBillingScheduler {
+export function getComputeBillingScheduler(
+  prisma: PrismaClient
+): ComputeBillingScheduler {
   if (!instance) {
     instance = new ComputeBillingScheduler(prisma)
   }

@@ -86,6 +86,18 @@ export type PhalaJobPayload =
   | PhalaPollStatusPayload
   | PhalaHandleFailurePayload
 
+// ── Policy runtime jobs ───────────────────────────────────────────────
+
+export type PolicyStep = 'EXPIRE_POLICY'
+
+export interface PolicyExpirePayload {
+  step: 'EXPIRE_POLICY'
+  policyId: string
+  expectedExpiresAt: string
+}
+
+export type PolicyJobPayload = PolicyExpirePayload
+
 // ── Progress event ────────────────────────────────────────────────────
 
 export interface DeploymentProgressEvent {

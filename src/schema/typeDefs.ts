@@ -413,6 +413,7 @@ export const typeDefs = /* GraphQL */ `
     costPerMonth: Float
     dailyRateCentsRaw: Int
     dailyRateCentsCharged: Int
+    policy: DeploymentPolicy
     createdAt: Date!
     updatedAt: Date!
     deployedAt: Date
@@ -467,6 +468,7 @@ export const typeDefs = /* GraphQL */ `
     costPerHour: Float
     costPerDay: Float
     costPerMonth: Float
+    policy: DeploymentPolicy
 
     createdAt: Date!
     updatedAt: Date!
@@ -528,6 +530,8 @@ export const typeDefs = /* GraphQL */ `
     sdlContent: String
     # Optional source code for functions (will be saved before deployment)
     sourceCode: String
+    # Optional deployment policy (budget, GPU, runtime constraints)
+    policy: DeploymentPolicyInput
   }
 
   """
@@ -1411,6 +1415,42 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # DEPLOYMENT POLICY (budget, GPU, runtime constraints)
+  # ============================================
+
+  enum PolicyStopReason {
+    BUDGET_EXCEEDED
+    RUNTIME_EXPIRED
+    MANUAL_STOP
+    BALANCE_LOW
+  }
+
+  type DeploymentPolicy {
+    id: ID!
+    acceptableGpuModels: [String!]!
+    gpuUnits: Int
+    gpuVendor: String
+    maxBudgetUsd: Float
+    maxMonthlyUsd: Float
+    runtimeMinutes: Int
+    expiresAt: Date
+    stopReason: PolicyStopReason
+    stoppedAt: Date
+    totalSpentUsd: Float!
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  input DeploymentPolicyInput {
+    acceptableGpuModels: [String!]
+    gpuUnits: Int
+    gpuVendor: String
+    maxBudgetUsd: Float
+    maxMonthlyUsd: Float
+    runtimeMinutes: Int
+  }
+
+  # ============================================
   # TEMPLATES
   # ============================================
 
@@ -1528,6 +1568,7 @@ export const typeDefs = /* GraphQL */ `
     serviceName: String
     envOverrides: [EnvOverrideInput!]
     resourceOverrides: ResourceOverrideInput
+    policy: DeploymentPolicyInput
   }
 
   input ComponentTargetInput {
@@ -1555,6 +1596,7 @@ export const typeDefs = /* GraphQL */ `
     serviceName: String
     envOverrides: [EnvOverrideInput!]
     resourceOverrides: ResourceOverrideInput
+    policy: DeploymentPolicyInput
   }
 
   type CompositeDeploymentResult {

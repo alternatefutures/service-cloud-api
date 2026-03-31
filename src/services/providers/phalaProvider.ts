@@ -27,6 +27,9 @@ import type {
   ProviderStatus,
 } from './types.js'
 import { getPhalaOrchestrator } from '../phala/orchestrator.js'
+import { processFinalPhalaBilling } from '../billing/deploymentSettlement.js'
+import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
+import { createLogger } from '../../lib/logger.js'
 
 const PHALA_STATUS_MAP: Record<string, ProviderStatus> = {
   CREATING: 'creating',
@@ -40,6 +43,8 @@ const PHALA_STATUS_MAP: Record<string, ProviderStatus> = {
 function mapStatus(nativeStatus: string): ProviderStatus {
   return PHALA_STATUS_MAP[nativeStatus] ?? 'failed'
 }
+
+const log = createLogger('phala-provider')
 
 export class PhalaProvider implements DeploymentProvider {
   readonly name = 'phala'
@@ -103,6 +108,16 @@ export class PhalaProvider implements DeploymentProvider {
     })
     if (!deployment) throw new Error(`Phala deployment not found: ${deploymentId}`)
 
+    const stoppedAt = new Date()
+    if (deployment.status === 'ACTIVE') {
+      await processFinalPhalaBilling(
+        this.prisma,
+        deploymentId,
+        stoppedAt,
+        'phala_provider_stop'
+      )
+    }
+
     const orchestrator = getPhalaOrchestrator(this.prisma)
     await orchestrator.stopPhalaDeployment(deployment.appId)
 
@@ -110,6 +125,13 @@ export class PhalaProvider implements DeploymentProvider {
       where: { id: deploymentId },
       data: { status: 'STOPPED' },
     })
+
+    if (deployment.policyId) {
+      await this.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt },
+      })
+    }
   }
 
   async start(deploymentId: string): Promise<void> {
@@ -123,8 +145,24 @@ export class PhalaProvider implements DeploymentProvider {
 
     await this.prisma.phalaDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'ACTIVE' },
+      data: { status: 'ACTIVE', activeStartedAt: new Date(), lastBilledAt: new Date() },
     })
+
+    if (deployment.policyId) {
+      await this.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: null, stoppedAt: null },
+      })
+
+      await scheduleOrEnforcePolicyExpiry(this.prisma, deployment.policyId).catch(
+        err => {
+          log.warn(
+            { deploymentId, policyId: deployment.policyId, err },
+            'Failed to schedule resumed Phala policy expiry'
+          )
+        }
+      )
+    }
   }
 
   async close(deploymentId: string): Promise<void> {
@@ -134,6 +172,16 @@ export class PhalaProvider implements DeploymentProvider {
     if (!deployment) throw new Error(`Phala deployment not found: ${deploymentId}`)
     if (deployment.status === 'DELETED') return
 
+    const deletedAt = new Date()
+    if (deployment.status === 'ACTIVE') {
+      await processFinalPhalaBilling(
+        this.prisma,
+        deploymentId,
+        deletedAt,
+        'phala_provider_close'
+      )
+    }
+
     const orchestrator = getPhalaOrchestrator(this.prisma)
     await orchestrator.deletePhalaDeployment(deployment.appId)
 
@@ -141,6 +189,13 @@ export class PhalaProvider implements DeploymentProvider {
       where: { id: deploymentId },
       data: { status: 'DELETED' },
     })
+
+    if (deployment.policyId) {
+      await this.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: deletedAt },
+      })
+    }
   }
 
   async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {

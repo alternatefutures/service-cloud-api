@@ -8,9 +8,12 @@
 import { GraphQLError } from 'graphql'
 import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 import { getEscrowService } from '../services/billing/escrowService.js'
+import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import type { Context } from './types.js'
 import { createLogger } from '../lib/logger.js'
+import { validatePolicyInput } from '../services/policy/validator.js'
+import type { DeploymentPolicyInput } from '../services/policy/types.js'
 
 const log = createLogger('resolver-akash')
 
@@ -195,7 +198,7 @@ export const akashMutations = {
    */
   deployToAkash: async (
     _: unknown,
-    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string } },
+    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput } },
     context: Context
   ) => {
     if (!context.userId) {
@@ -232,6 +235,29 @@ export const akashMutations = {
       log.info(`Updated function source code for: ${service.afFunction.id}`)
     }
 
+    // ── Validate and create deployment policy ────────────────
+    let policyId: string | undefined
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+      const policyRecord = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      policyId = policyRecord.id
+    }
+
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
 
@@ -240,9 +266,16 @@ export const akashMutations = {
         sdlContent: input.sdlContent,
       })
 
-      // Fetch the created deployment
+      if (policyId) {
+        await context.prisma.akashDeployment.update({
+          where: { id: deploymentId },
+          data: { policyId },
+        })
+      }
+
       const deployment = await context.prisma.akashDeployment.findUnique({
         where: { id: deploymentId },
+        include: { policy: true },
       })
 
       if (!deployment) {
@@ -353,6 +386,8 @@ export const akashMutations = {
       throw new GraphQLError('Deployment is already closed')
     }
 
+    const closedAt = new Date()
+
     // Try to close on-chain, but force-close the DB record even if it fails
     // (the dseq may not exist on-chain, may already be closed, or may be corrupt)
     try {
@@ -369,12 +404,13 @@ export const akashMutations = {
       where: { id },
       data: {
         status: 'CLOSED',
-        closedAt: new Date(),
+        closedAt,
       },
     })
 
     // Refund remaining escrow to wallet
     try {
+      await settleAkashEscrowToTime(context.prisma, id, closedAt)
       const escrowService = getEscrowService(context.prisma)
       const refundCents = await escrowService.refundEscrow(id)
       if (refundCents > 0) {
@@ -392,6 +428,13 @@ export const akashMutations = {
           status: 'INACTIVE',
           invokeUrl: null,
         },
+      })
+    }
+
+    if (deployment.policyId) {
+      await context.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt },
       })
     }
 
@@ -485,6 +528,13 @@ export const akashFieldResolvers = {
       if (!parent.siteId) return null
       return context.prisma.site.findUnique({
         where: { id: parent.siteId },
+      })
+    },
+    policy: async (parent: any, _: unknown, context: Context) => {
+      if (parent.policy) return parent.policy
+      if (!parent.policyId) return null
+      return context.prisma.deploymentPolicy.findUnique({
+        where: { id: parent.policyId },
       })
     },
   },

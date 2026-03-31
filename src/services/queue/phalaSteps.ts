@@ -17,6 +17,7 @@ import {
   type PhalaPollStatusPayload,
   type PhalaHandleFailurePayload,
 } from './types.js'
+import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('phala-steps')
@@ -211,6 +212,12 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
           lastBilledAt: new Date(),
         },
       })
+
+      const deploymentPolicyId = (deployment as { policyId?: string | null })
+        .policyId
+      if (deploymentPolicyId) {
+        await scheduleOrEnforcePolicyExpiry(prisma, deploymentPolicyId)
+      }
 
       emitProgress(deploymentId, 'POLL_STATUS', PHALA_STEP_NUMBERS.POLL_STATUS, deployment.retryCount, 'CVM is now active!')
       deploymentEvents.emitStatus({ deploymentId, status: 'ACTIVE', timestamp: new Date() })

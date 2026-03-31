@@ -1,24 +1,24 @@
 /**
  * Deployment Escrow Service
  *
- * Manages the platform-level USD escrow for Akash deployments.
- * Mirrors Akash's on-chain escrow pattern:
- *   Deploy  → Debit wallet, create escrow record
- *   Daily   → Consume from escrow (daily rate)
- *   Close   → Refund remaining escrow to wallet
+ * Manages the billing metadata record for Akash deployments.
+ *
+ * Modes (controlled by BILLING_CONFIG.akash.escrowDays):
+ *   escrowDays = 0  → Pay-as-you-go. No upfront wallet debit. Daily scheduler
+ *                      calls computeDebit directly. Escrow record tracks rate only.
+ *   escrowDays > 0  → Pre-funded pool. Wallet debited upfront, daily consumption
+ *                      drawn from pool, remainder refunded on close.
  *
  * All wallet operations go through the BillingApiClient → auth service.
  */
 
-import type { PrismaClient, DeploymentEscrow, EscrowStatus } from '@prisma/client'
+import type { PrismaClient, DeploymentEscrow } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
+import { BILLING_CONFIG } from '../../config/billing.js'
 import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('escrow-service')
-
-/** Default escrow covers 30 days of estimated deployment cost */
-const DEFAULT_ESCROW_DAYS = 30
 
 export class EscrowService {
   private billingApi = getBillingApiClient()
@@ -26,55 +26,55 @@ export class EscrowService {
   constructor(private prisma: PrismaClient) {}
 
   // ========================================
-  // LIFECYCLE: DEPOSIT (on deploy)
+  // LIFECYCLE: CREATE (on deploy activation)
   // ========================================
 
   /**
-   * Create escrow for a new Akash deployment.
-   * Called BEFORE on-chain deployment so we fail fast on insufficient balance.
+   * Create billing record for a new Akash deployment.
+   *
+   * When escrowDays > 0, debits the wallet upfront and creates a pre-funded pool.
+   * When escrowDays === 0, creates a tracking record only (no wallet debit).
    *
    * @returns The created DeploymentEscrow record
-   * @throws Error with message 'INSUFFICIENT_BALANCE' if wallet has insufficient funds
+   * @throws Error with 'INSUFFICIENT_BALANCE' if pre-funded mode and wallet is short
    */
   async createEscrow(args: {
     akashDeploymentId: string
     organizationId: string
-    pricePerBlock: string // uAKT per block from bid
-    marginRate: number // plan markup (e.g. 0.25)
+    pricePerBlock: string
+    marginRate: number
     userId: string
-    escrowDays?: number // how many days to pre-fund (default 30)
+    escrowDays?: number
   }): Promise<DeploymentEscrow> {
-    const escrowDays = args.escrowDays || DEFAULT_ESCROW_DAYS
+    const escrowDays = args.escrowDays ?? BILLING_CONFIG.akash.escrowDays
 
-    // Calculate daily cost in USD with margin (live AKT price)
     const aktPrice = await getAktUsdPrice()
     const rawDailyUsd = akashPricePerBlockToUsdPerDay(args.pricePerBlock, aktPrice)
     const chargedDailyUsd = applyMargin(rawDailyUsd, args.marginRate)
     const dailyRateCents = Math.ceil(chargedDailyUsd * 100)
-    const depositCents = dailyRateCents * escrowDays
 
-    if (depositCents <= 0) {
-      throw new Error('Calculated escrow deposit is zero or negative')
+    if (dailyRateCents <= 0) {
+      throw new Error('Calculated daily rate is zero or negative')
     }
 
-    // Resolve org billing ID
+    const depositCents = dailyRateCents * escrowDays
+
     const orgBilling = await this.billingApi.getOrgBilling(args.organizationId)
-    // Fixed by audit 2026-03: guard against missing billing config
     if (!orgBilling) {
       throw new Error(`Organization billing not configured for org ${args.organizationId}`)
     }
 
-    // Debit wallet (fails if insufficient balance)
-    await this.billingApi.escrowDeposit({
-      orgBillingId: orgBilling.orgBillingId,
-      organizationId: args.organizationId,
-      userId: args.userId,
-      amountCents: depositCents,
-      deploymentId: args.akashDeploymentId,
-      description: `Akash escrow deposit (${escrowDays} days @ $${(dailyRateCents / 100).toFixed(2)}/day)`,
-    })
+    if (depositCents > 0) {
+      await this.billingApi.escrowDeposit({
+        orgBillingId: orgBilling.orgBillingId,
+        organizationId: args.organizationId,
+        userId: args.userId,
+        amountCents: depositCents,
+        deploymentId: args.akashDeploymentId,
+        description: `Akash escrow deposit (${escrowDays} days @ $${(dailyRateCents / 100).toFixed(2)}/day)`,
+      })
+    }
 
-    // Create escrow record
     const escrow = await this.prisma.deploymentEscrow.create({
       data: {
         akashDeploymentId: args.akashDeploymentId,
@@ -89,7 +89,7 @@ export class EscrowService {
     })
 
     log.info(
-      { deploymentId: args.akashDeploymentId, depositCents, dailyRateCents },
+      { deploymentId: args.akashDeploymentId, depositCents, dailyRateCents, mode: depositCents > 0 ? 'pre-funded' : 'pay-as-you-go' },
       'Created escrow for deployment'
     )
 
@@ -97,15 +97,16 @@ export class EscrowService {
   }
 
   // ========================================
-  // LIFECYCLE: DAILY CONSUMPTION
+  // LIFECYCLE: DAILY CONSUMPTION (pre-funded mode only)
   // ========================================
 
   /**
-   * Process daily consumption for an active escrow.
-   * Called by the daily billing scheduler.
+   * Process daily consumption from a pre-funded escrow pool.
+   * Only meaningful when depositCents > 0. For pay-as-you-go mode,
+   * the daily scheduler calls computeDebit directly instead.
    *
-   * @param force — bypass the 20-hour minimum guard (for manual testing)
-   * @returns Updated escrow, or null if already billed today
+   * @param force — bypass the minimum-interval guard (for manual testing)
+   * @returns Updated escrow, or null if skipped
    */
   async processDailyConsumption(escrowId: string, force = false): Promise<DeploymentEscrow | null> {
     const escrow = await this.prisma.deploymentEscrow.findUnique({
@@ -116,59 +117,34 @@ export class EscrowService {
       return null
     }
 
-    // Calculate days since last billing
+    if (escrow.depositCents === 0) {
+      return null
+    }
+
     const now = new Date()
     const lastBilled = escrow.lastBilledAt || escrow.createdAt
     const hoursSinceLastBill = (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
 
-    // Don't bill if less than 20 hours since last billing (prevent double-billing)
-    if (hoursSinceLastBill < 20 && !force) {
+    if (hoursSinceLastBill < BILLING_CONFIG.akash.minBillingIntervalHours && !force) {
       return null
     }
 
-    // Calculate days to bill (can be >1 if scheduler was down)
     const daysToBill = Math.max(1, Math.floor(hoursSinceLastBill / 24))
     const consumptionCents = escrow.dailyRateCents * daysToBill
     const newConsumed = escrow.consumedCents + consumptionCents
     const remaining = escrow.depositCents - newConsumed
 
     if (remaining < 0) {
-      // Escrow depleted — try to auto-top-up from wallet
-      const needed = Math.abs(remaining)
-      try {
-        await this.billingApi.computeDebit({
-          orgBillingId: escrow.orgBillingId,
-          amountCents: needed,
-          serviceType: 'akash_escrow_topup',
-          provider: 'akash',
-          resource: escrow.akashDeploymentId,
-          description: `Akash escrow auto-top-up ($${(needed / 100).toFixed(2)})`,
-          idempotencyKey: `escrow_topup:${escrow.id}:${now.toISOString().slice(0, 10)}`,
-        })
-
-        // Top-up succeeded — increase deposit
-        return this.prisma.deploymentEscrow.update({
-          where: { id: escrowId },
-          data: {
-            consumedCents: newConsumed,
-            depositCents: escrow.depositCents + needed,
-            lastBilledAt: now,
-          },
-        })
-      } catch {
-        // Top-up failed — mark escrow as depleted
-        return this.prisma.deploymentEscrow.update({
-          where: { id: escrowId },
-          data: {
-            consumedCents: escrow.depositCents, // cap at deposit
-            status: 'DEPLETED',
-            lastBilledAt: now,
-          },
-        })
-      }
+      return this.prisma.deploymentEscrow.update({
+        where: { id: escrowId },
+        data: {
+          consumedCents: escrow.depositCents,
+          status: 'DEPLETED',
+          lastBilledAt: now,
+        },
+      })
     }
 
-    // Normal consumption within escrow
     return this.prisma.deploymentEscrow.update({
       where: { id: escrowId },
       data: {
@@ -184,6 +160,12 @@ export class EscrowService {
 
   /**
    * Refund remaining escrow when deployment is closed.
+   *
+   * For pay-as-you-go (depositCents=0), marks REFUNDED with $0 refund.
+   * For pre-funded, refunds the unused portion to wallet.
+   *
+   * If the refund API call fails, the record is NOT marked REFUNDED
+   * so it can be retried.
    *
    * @returns The refund amount in cents, or 0 if nothing to refund
    */
@@ -205,17 +187,12 @@ export class EscrowService {
     const remaining = Math.max(0, escrow.depositCents - escrow.consumedCents)
 
     if (remaining > 0) {
-      try {
-        await this.billingApi.escrowRefund({
-          orgBillingId: escrow.orgBillingId,
-          amountCents: remaining,
-          deploymentId: akashDeploymentId,
-          description: `Akash escrow refund — deployment closed ($${(remaining / 100).toFixed(2)})`,
-        })
-      } catch (error) {
-        log.error({ deploymentId: akashDeploymentId, err: error }, 'Failed to refund escrow')
-        // Still mark as refunded to prevent double-refund attempts
-      }
+      await this.billingApi.escrowRefund({
+        orgBillingId: escrow.orgBillingId,
+        amountCents: remaining,
+        deploymentId: akashDeploymentId,
+        description: `Akash escrow refund — deployment closed ($${(remaining / 100).toFixed(2)})`,
+      })
     }
 
     await this.prisma.deploymentEscrow.update({
@@ -235,9 +212,6 @@ export class EscrowService {
   // LIFECYCLE: PAUSE / RESUME
   // ========================================
 
-  /**
-   * Pause an escrow (deployment suspended due to low balance)
-   */
   async pauseEscrow(akashDeploymentId: string): Promise<void> {
     await this.prisma.deploymentEscrow.updateMany({
       where: {
@@ -248,9 +222,6 @@ export class EscrowService {
     })
   }
 
-  /**
-   * Resume a paused escrow (balance restored after topup)
-   */
   async resumeEscrow(akashDeploymentId: string): Promise<void> {
     await this.prisma.deploymentEscrow.updateMany({
       where: {
@@ -259,7 +230,7 @@ export class EscrowService {
       },
       data: {
         status: 'ACTIVE',
-        lastBilledAt: new Date(), // reset billing clock
+        lastBilledAt: new Date(),
       },
     })
   }
@@ -268,18 +239,12 @@ export class EscrowService {
   // QUERIES
   // ========================================
 
-  /**
-   * Get escrow for a deployment
-   */
   async getEscrow(akashDeploymentId: string): Promise<DeploymentEscrow | null> {
     return this.prisma.deploymentEscrow.findUnique({
       where: { akashDeploymentId },
     })
   }
 
-  /**
-   * Get all active escrows for an org
-   */
   async getActiveEscrowsForOrg(orgBillingId: string): Promise<DeploymentEscrow[]> {
     return this.prisma.deploymentEscrow.findMany({
       where: {
@@ -289,9 +254,6 @@ export class EscrowService {
     })
   }
 
-  /**
-   * Get total daily burn rate for an org (from active escrows)
-   */
   async getOrgDailyBurnCents(orgBillingId: string): Promise<number> {
     const result = await this.prisma.deploymentEscrow.aggregate({
       where: {
@@ -307,7 +269,6 @@ export class EscrowService {
   }
 }
 
-// Singleton
 let instance: EscrowService | null = null
 
 export function getEscrowService(prisma: PrismaClient): EscrowService {

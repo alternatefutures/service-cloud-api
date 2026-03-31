@@ -28,6 +28,8 @@ import type {
   ProviderStatus,
 } from './types.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
+import { getEscrowService } from '../billing/escrowService.js'
+import { settleAkashEscrowToTime } from '../billing/deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('akash-provider')
@@ -120,6 +122,8 @@ export class AkashProvider implements DeploymentProvider {
     if (!deployment) throw new Error(`Akash deployment not found: ${deploymentId}`)
     if (deployment.status === 'CLOSED') return
 
+    const closedAt = new Date()
+
     const orchestrator = getAkashOrchestrator(this.prisma)
 
     try {
@@ -130,8 +134,18 @@ export class AkashProvider implements DeploymentProvider {
 
     await this.prisma.akashDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'CLOSED', closedAt: new Date() },
+      data: { status: 'CLOSED', closedAt },
     })
+
+    await settleAkashEscrowToTime(this.prisma, deploymentId, closedAt)
+    await getEscrowService(this.prisma).refundEscrow(deploymentId)
+
+    if (deployment.policyId) {
+      await this.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt },
+      })
+    }
   }
 
   async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {

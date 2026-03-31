@@ -9,6 +9,7 @@ import { randomBytes } from 'crypto'
 import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
+import { assertDeployBalance } from './balanceCheck.js'
 import { generateInternalHostname } from '../utils/internalHostname.js'
 import {
   getAllTemplates,
@@ -19,7 +20,6 @@ import {
   generateCompositeCompose,
   getEnvKeysFromTemplate,
   resolveEnvLinks,
-  slugify,
   generatePassword,
   generateBase64Secret,
 } from '../templates/index.js'
@@ -39,6 +39,8 @@ import type { Context } from './types.js'
 import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
 import { createLogger } from '../lib/logger.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
+import { validatePolicyInput } from '../services/policy/validator.js'
+import type { DeploymentPolicyInput } from '../services/policy/types.js'
 
 const log = createLogger('resolver-templates')
 
@@ -98,7 +100,7 @@ function resolveTemplateResources(
     gpu:
       overrides?.gpu === null
         ? undefined
-        : overrides?.gpu ?? templateResources.gpu,
+        : (overrides?.gpu ?? templateResources.gpu),
   }
 }
 
@@ -128,7 +130,7 @@ function assertRequiredTemplateEnvVars(
  */
 async function createCompanionServices(
   prisma: Context['prisma'],
-  primaryService: { id: string; slug: string; projectId: string },
+  primaryService: { id: string; slug: string; projectId: string; createdByUserId?: string | null },
   projectSlug: string,
   companions: TemplateCompanion[]
 ): Promise<void> {
@@ -151,6 +153,7 @@ async function createCompanionServices(
         type: companionTemplate.serviceType,
         projectId: primaryService.projectId,
         templateId: companion.templateId,
+        createdByUserId: primaryService.createdByUserId ?? null,
         internalHostname: generateInternalHostname(companionSlug, projectSlug),
         parentServiceId: primaryService.id,
       },
@@ -265,25 +268,24 @@ export const templateMutations = {
           storage?: string
           gpu?: { units: number; vendor: string; model?: string } | null
         }
+        policy?: DeploymentPolicyInput
       }
     },
     context: Context
   ) => {
-    // ── Subscription check ────────────────────────────────────
+    // ── Pre-deploy gates ────────────────────────────────────
     await assertSubscriptionActive(context.organizationId)
+    await assertDeployBalance(context.organizationId, 'akash')
 
-    // ── Auth ──────────────────────────────────────────────────
     if (!context.userId) {
       throw new GraphQLError('Not authenticated')
     }
 
-    // ── Look up template ─────────────────────────────────────
     const template = getTemplateById(input.templateId)
     if (!template) {
       throw new GraphQLError(`Template not found: ${input.templateId}`)
     }
 
-    // ── Verify project exists and belongs to user ────────────
     const project = await context.prisma.project.findUnique({
       where: { id: input.projectId },
     })
@@ -315,6 +317,7 @@ export const templateMutations = {
         type: template.serviceType,
         projectId: input.projectId,
         templateId: input.templateId,
+        createdByUserId: context.userId ?? null,
         internalHostname: generateInternalHostname(slug, project.slug),
       },
     })
@@ -353,14 +356,39 @@ export const templateMutations = {
     if (template.companions?.length) {
       await createCompanionServices(
         context.prisma,
-        { id: service.id, slug, projectId: input.projectId },
+        { id: service.id, slug, projectId: input.projectId, createdByUserId: context.userId },
         project.slug,
         template.companions
       )
     }
 
     // ── Build resource overrides ─────────────────────────────
-    const resourceOverrides = normalizeResourceOverrides(input.resourceOverrides)
+    const resourceOverrides = normalizeResourceOverrides(
+      input.resourceOverrides
+    )
+
+    // ── Validate and create deployment policy ────────────────
+    let policyId: string | undefined
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+      const policyRecord = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      policyId = policyRecord.id
+    }
 
     // ── Generate SDL from template ───────────────────────────
     const sdlContent = generateSDLFromTemplate(template, {
@@ -379,8 +407,16 @@ export const templateMutations = {
         sdlContent,
       })
 
+      if (policyId) {
+        await context.prisma.akashDeployment.update({
+          where: { id: deploymentId },
+          data: { policyId },
+        })
+      }
+
       const deployment = await context.prisma.akashDeployment.findUnique({
         where: { id: deploymentId },
+        include: { policy: true },
       })
 
       if (!deployment) {
@@ -415,10 +451,13 @@ export const templateMutations = {
           storage?: string
           gpu?: { units: number; vendor: string; model?: string } | null
         }
+        policy?: DeploymentPolicyInput
       }
     },
     context: Context
   ) => {
+    await assertSubscriptionActive(context.organizationId)
+    await assertDeployBalance(context.organizationId, 'phala')
     if (!context.userId) throw new GraphQLError('Not authenticated')
 
     const template = getTemplateById(input.templateId)
@@ -452,6 +491,7 @@ export const templateMutations = {
         type: template.serviceType,
         projectId: input.projectId,
         templateId: input.templateId,
+        createdByUserId: context.userId ?? null,
         internalHostname: generateInternalHostname(slug, project.slug),
       },
     })
@@ -490,15 +530,48 @@ export const templateMutations = {
     if (template.companions?.length) {
       await createCompanionServices(
         context.prisma,
-        { id: service.id, slug, projectId: input.projectId },
+        { id: service.id, slug, projectId: input.projectId, createdByUserId: context.userId },
         project.slug,
         template.companions
       )
     }
 
-    const resourceOverrides = normalizeResourceOverrides(input.resourceOverrides)
-    const phalaResources = resolveTemplateResources(template.resources, resourceOverrides)
-    const phalaInstance = await resolvePhalaInstanceType(phalaResources)
+    const resourceOverrides = normalizeResourceOverrides(
+      input.resourceOverrides
+    )
+
+    // ── Validate and create deployment policy ────────────────
+    let policyId: string | undefined
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+      const policyRecord = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      policyId = policyRecord.id
+    }
+
+    const phalaResources = resolveTemplateResources(
+      template.resources,
+      resourceOverrides
+    )
+    const phalaInstance = await resolvePhalaInstanceType(
+      phalaResources,
+      input.policy?.acceptableGpuModels,
+      input.policy?.gpuUnits
+    )
 
     const composeContent = generateComposeFromTemplate(template, {
       serviceName: slug,
@@ -529,8 +602,16 @@ export const templateMutations = {
         hourlyRateUsd: phalaInstance.hourlyRateUsd,
       })
 
+      if (policyId) {
+        await context.prisma.phalaDeployment.update({
+          where: { id: deploymentId },
+          data: { policyId },
+        })
+      }
+
       const deployment = await context.prisma.phalaDeployment.findUnique({
         where: { id: deploymentId },
+        include: { policy: true },
       })
 
       if (!deployment) {
@@ -579,11 +660,22 @@ export const templateMutations = {
           storage?: string
           gpu?: { units: number; vendor: string; model?: string } | null
         }
+        policy?: DeploymentPolicyInput
       }
     },
     context: Context
   ) => {
+    await assertSubscriptionActive(context.organizationId)
+    await assertDeployBalance(context.organizationId, 'akash')
     if (!context.userId) throw new GraphQLError('Not authenticated')
+
+    // ── Validate policy input if provided ────────────────────
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+    }
 
     const template = getTemplateById(input.templateId)
     if (!template)
@@ -596,7 +688,7 @@ export const templateMutations = {
       ? new Set(input.enabledComponentIds)
       : null
 
-    const isComponentRequired = (comp: typeof template.components[0]) =>
+    const isComponentRequired = (comp: (typeof template.components)[0]) =>
       comp.primary || comp.internalOnly || comp.required !== false
 
     // Validate that all required components are enabled
@@ -725,7 +817,9 @@ export const templateMutations = {
 
     // Build fallback map for disabled components, merging user overrides
     const componentFallbacks: Record<string, Record<string, string>> = {}
-    const userFallbackOverrides = input.componentFallbackOverrides as Record<string, Record<string, string>> | undefined
+    const userFallbackOverrides = input.componentFallbackOverrides as
+      | Record<string, Record<string, string>>
+      | undefined
     if (enabledSet) {
       for (const comp of template.components) {
         if (!enabledSet.has(comp.id)) {
@@ -737,7 +831,14 @@ export const templateMutations = {
       }
     }
 
-    const ctx: CompositeContext = { slugs, groups, providers, password, secret, componentFallbacks }
+    const ctx: CompositeContext = {
+      slugs,
+      groups,
+      providers,
+      password,
+      secret,
+      componentFallbacks,
+    }
 
     const resolved: ResolvedComponent[] = []
     for (const comp of activeComponents) {
@@ -828,6 +929,7 @@ export const templateMutations = {
         type: template.serviceType,
         projectId: input.projectId,
         templateId: input.templateId,
+        createdByUserId: context.userId ?? null,
         internalHostname: generateInternalHostname(
           slugs[primaryComp.id],
           project.slug
@@ -852,6 +954,7 @@ export const templateMutations = {
             : template.serviceType,
           projectId: input.projectId,
           templateId: compDef.templateId ?? input.templateId,
+          createdByUserId: context.userId ?? null,
           internalHostname: generateInternalHostname(
             slugs[comp.id],
             project.slug
@@ -897,6 +1000,25 @@ export const templateMutations = {
       }
     }
 
+    // ── Helper: create a policy record for each sub-deployment ─
+    async function createPolicyForComponent(): Promise<string | undefined> {
+      if (!input.policy) return undefined
+      const record = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      return record.id
+    }
+
     // ── Deploy Akash groups ─────────────────────────────────────
     for (const [groupName, groupComponents] of akashGroups) {
       const sdlContent = generateCompositeSDL(groupComponents)
@@ -913,10 +1035,18 @@ export const templateMutations = {
         : serviceIds[groupComponents[0].id]
 
       try {
-        await orchestrator.deployService(deployServiceId, {
+        const deploymentId = await orchestrator.deployService(deployServiceId, {
           sdlContent,
           skipEnvInjection: true,
         })
+
+        const compositePolicyId = await createPolicyForComponent()
+        if (compositePolicyId) {
+          await context.prisma.akashDeployment.update({
+            where: { id: deploymentId },
+            data: { policyId: compositePolicyId },
+          })
+        }
       } catch (error: any) {
         throw new GraphQLError(
           `Composite deployment failed (Akash): ${error.message || 'Unknown error'}`
@@ -934,8 +1064,12 @@ export const templateMutations = {
       const svcId = serviceIds[comp.id]
 
       try {
-        const phalaInstance = await resolvePhalaInstanceType(comp.resources)
-        await orchestrator.deployServicePhala(svcId, {
+        const phalaInstance = await resolvePhalaInstanceType(
+          comp.resources,
+          input.policy?.acceptableGpuModels,
+          input.policy?.gpuUnits
+        )
+        const deploymentId = await orchestrator.deployServicePhala(svcId, {
           composeContent,
           env: comp.resolvedEnv,
           envKeys,
@@ -944,6 +1078,14 @@ export const templateMutations = {
           gpuModel: phalaInstance.gpuModel ?? undefined,
           hourlyRateUsd: phalaInstance.hourlyRateUsd,
         })
+
+        const compositePolicyId = await createPolicyForComponent()
+        if (compositePolicyId) {
+          await context.prisma.phalaDeployment.update({
+            where: { id: deploymentId },
+            data: { policyId: compositePolicyId },
+          })
+        }
       } catch (error: any) {
         throw new GraphQLError(
           `Composite deployment failed (Phala): ${error.message || 'Unknown error'}`
@@ -975,7 +1117,9 @@ function resolveComponent(
       if (a.chownPaths?.length)
         env['AKASH_CHOWN_PATHS'] = a.chownPaths.join(':')
       if (a.runUser) env['AKASH_RUN_USER'] = a.runUser
-      if (a.runUid != null) env['AKASH_RUN_UID'] = String(a.runUid)
+      if (a.runUid !== undefined && a.runUid !== null) {
+        env['AKASH_RUN_UID'] = String(a.runUid)
+      }
     }
     for (const [k, v] of Object.entries(envOverrides)) env[k] = v
 
@@ -1015,9 +1159,12 @@ function resolveComponent(
       if (a.chownPaths?.length)
         env['AKASH_CHOWN_PATHS'] = a.chownPaths.join(':')
       if (a.runUser) env['AKASH_RUN_USER'] = a.runUser
-      if (a.runUid != null) env['AKASH_RUN_UID'] = String(a.runUid)
+      if (a.runUid !== undefined && a.runUid !== null) {
+        env['AKASH_RUN_UID'] = String(a.runUid)
+      }
     }
-    const isPostgres = comp.templateId === 'postgres' ||
+    const isPostgres =
+      comp.templateId === 'postgres' ||
       ref.dockerImage.startsWith('postgres') ||
       ref.dockerImage.startsWith('pgvector/')
     if (isPostgres && !env.POSTGRES_PASSWORD) {

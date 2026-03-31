@@ -3,47 +3,11 @@
  */
 import { GraphQLError } from 'graphql'
 import { getPhalaOrchestrator } from '../services/phala/index.js'
-import { getBillingApiClient } from '../services/billing/billingApiClient.js'
+import { processFinalPhalaBilling } from '../services/billing/deploymentSettlement.js'
 import type { Context } from './types.js'
 import { createLogger } from '../lib/logger.js'
 
 const log = createLogger('resolver-phala')
-
-/**
- * Process final billing for a Phala deployment.
- * Bills for partial hours since the last billing checkpoint.
- */
-async function processFinalPhalaBilling(deployment: any) {
-  if (!deployment.orgBillingId || !deployment.hourlyRateCents) return
-
-  const now = new Date()
-  const lastBilled = deployment.lastBilledAt || deployment.activeStartedAt || deployment.createdAt
-  const hoursSinceLastBill = (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
-
-  if (hoursSinceLastBill < 0.01) return // less than ~36 seconds, skip
-
-  // Bill for partial hours (round up to nearest minute = 1/60 hour)
-  const billableHours = Math.ceil(hoursSinceLastBill * 60) / 60
-  const amountCents = Math.ceil(billableHours * deployment.hourlyRateCents)
-
-  if (amountCents <= 0) return
-
-  try {
-    const billingApi = getBillingApiClient()
-    await billingApi.computeDebit({
-      orgBillingId: deployment.orgBillingId,
-      amountCents,
-      serviceType: 'phala_tee',
-      provider: 'phala',
-      resource: deployment.id,
-      description: `Phala TEE final billing: ${billableHours.toFixed(2)}h @ $${(deployment.hourlyRateCents / 100).toFixed(2)}/hr`,
-      idempotencyKey: `phala_final:${deployment.id}:${now.getTime()}`,
-    })
-    log.info(`Final billing for ${deployment.id}: $${(amountCents / 100).toFixed(2)}`)
-  } catch (error) {
-    log.warn(error, `Final billing failed for ${deployment.id}`)
-  }
-}
 
 type PhalaResourceSnapshot = {
   cpuUnits: number | null
@@ -215,6 +179,13 @@ export const phalaFieldResolvers = {
         where: { id: parent.afFunctionId },
       })
     },
+    policy: async (parent: any, _: unknown, context: Context) => {
+      if (parent.policy) return parent.policy
+      if (!parent.policyId) return null
+      return context.prisma.deploymentPolicy.findUnique({
+        where: { id: parent.policyId },
+      })
+    },
   },
   Service: {
     phalaDeployments: async (parent: any, _: unknown, context: Context) => {
@@ -250,8 +221,10 @@ export const phalaMutations = {
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
 
+    const stoppedAt = new Date()
+
     if (deployment.status === 'ACTIVE') {
-      await processFinalPhalaBilling(deployment)
+      await processFinalPhalaBilling(context.prisma, deployment.id, stoppedAt, 'phala_manual_stop')
     }
 
     // If the CVM hasn't been provisioned yet (appId still 'pending'),
@@ -261,11 +234,20 @@ export const phalaMutations = {
       await orchestrator.stopPhalaDeployment(deployment.appId)
     }
 
-    return context.prisma.phalaDeployment.update({
+    const updated = await context.prisma.phalaDeployment.update({
       where: { id },
       data: { status: 'STOPPED' },
       include: { service: true },
     })
+
+    if (deployment.policyId) {
+      await context.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt },
+      })
+    }
+
+    return updated
   },
 
   deletePhalaDeployment: async (
@@ -280,8 +262,15 @@ export const phalaMutations = {
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
 
+    const deletedAt = new Date()
+
     if (deployment.status === 'ACTIVE') {
-      await processFinalPhalaBilling(deployment)
+      await processFinalPhalaBilling(
+        context.prisma,
+        deployment.id,
+        deletedAt,
+        'phala_manual_delete'
+      )
     }
 
     if (deployment.appId && deployment.appId !== 'pending') {
@@ -289,10 +278,19 @@ export const phalaMutations = {
       await orchestrator.deletePhalaDeployment(deployment.appId)
     }
 
-    return context.prisma.phalaDeployment.update({
+    const updated = await context.prisma.phalaDeployment.update({
       where: { id },
       data: { status: 'DELETED' },
       include: { service: true },
     })
+
+    if (deployment.policyId) {
+      await context.prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: deletedAt },
+      })
+    }
+
+    return updated
   },
 }

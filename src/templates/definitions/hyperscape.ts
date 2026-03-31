@@ -21,7 +21,7 @@ export const hyperscapeServer: Template = {
   ],
   icon: '/templates/hyperscape.png',
   repoUrl: 'https://github.com/HyperscapeAI/hyperscape',
-  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v23',
+  dockerImage: 'ghcr.io/alternatefutures/hyperscape:v25',
   serviceType: 'VM',
   envVars: [
     {
@@ -115,17 +115,21 @@ export const hyperscapeServer: Template = {
       primary: true,
       sdlServiceName: 'app',
       startCommand: [
+        'export UWS_ENABLED=false',
+        'export LOG_LEVEL=info',
+        'echo "[startup] UWS_ENABLED=$UWS_ENABLED LOG_LEVEL=$LOG_LEVEL"',
         'if [ -n "$POSTGRES_SERVICE_HOST" ]; then',
         '  export DATABASE_URL=$(echo "$DATABASE_URL" | sed "s/@postgres:/@${POSTGRES_SERVICE_HOST}:/")',
-        '  echo "Resolved postgres -> $POSTGRES_SERVICE_HOST via K8s service discovery"',
+        '  echo "[startup] Resolved postgres -> $POSTGRES_SERVICE_HOST"',
         'fi',
         'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
         '  curl -so /dev/null --connect-timeout 2 http://${POSTGRES_SERVICE_HOST:-postgres}:5432/ 2>/dev/null',
         '  rc=$?; [ $rc -ne 6 ] && [ $rc -ne 7 ] && break',
-        '  echo "Waiting for postgres ($i/15)..."',
+        '  echo "[startup] Waiting for postgres ($i/15)..."',
         '  sleep 2',
         'done',
-        'exec tsx /app/packages/server/dist/entry.mjs',
+        'echo "[startup] Launching bun server..."',
+        'exec bun --preload /app/packages/server/src/shared/polyfills.ts /app/packages/server/dist/index.js',
       ].join('\n'),
       envLinks: {
         DATABASE_URL:
@@ -174,7 +178,7 @@ export const hyperscapeServer: Template = {
       },
       sdlServiceName: 'web',
       inline: {
-        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v23',
+        dockerImage: 'ghcr.io/alternatefutures/hyperscape:v25',
         resources: { cpu: 0.5, memory: '256Mi', storage: '1Gi' },
         ports: [{ port: 80, as: 80, global: true }],
         healthCheck: { path: '/', port: 80 },

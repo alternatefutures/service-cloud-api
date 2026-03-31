@@ -14,6 +14,7 @@ import { deploymentEvents } from '../events/deploymentEvents.js'
 import { providerSelector } from '../akash/providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
+import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { execAsync } from './asyncExec.js'
 import {
   AKASH_TOTAL_STEPS,
@@ -189,6 +190,23 @@ async function failDirectly(
   errorMessage: string
 ): Promise<void> {
   try {
+    const deployment = await prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { dseq: true },
+    })
+
+    if (deployment?.dseq && Number(deployment.dseq) > 0) {
+      try {
+        await runAkashAsync([
+          'tx', 'deployment', 'close',
+          '--dseq', String(Number(deployment.dseq)),
+          '-o', 'json', '-y',
+        ])
+      } catch (closeErr) {
+        log.warn({ dseq: deployment.dseq, err: closeErr }, 'Failed to close on-chain deployment in failDirectly')
+      }
+    }
+
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
       data: {
@@ -481,7 +499,7 @@ export async function handleCheckBids(
     })
 
     const filteredBids = providerSelector.filterBids(bids as any, 'standalone')
-    const safeBids = filteredBids.filter(b => b.isSafe)
+    let safeBids = filteredBids.filter(b => b.isSafe)
 
     if (safeBids.length === 0) {
       await enqueueNext('/queue/akash/step', {
@@ -490,6 +508,42 @@ export async function handleCheckBids(
         errorMessage: 'No safe bids available - all providers are blocked',
       } satisfies AkashHandleFailurePayload)
       return
+    }
+
+    // ── Policy GPU filtering: filter bids by acceptable GPU models ──
+    const policyDeployment = await prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { policyId: true },
+    })
+    if (policyDeployment?.policyId) {
+      const policy = await prisma.deploymentPolicy.findUnique({
+        where: { id: policyDeployment.policyId },
+      })
+      if (policy && policy.acceptableGpuModels.length > 0) {
+        const acceptable = new Set(policy.acceptableGpuModels.map(m => m.toLowerCase()))
+        const gpuFilteredBids: typeof safeBids = []
+        for (const bid of safeBids) {
+          const model = await resolveProviderGpuModel(
+            bid.bidId.provider,
+            deployment.dseq,
+            prisma,
+            deploymentId
+          )
+          if (model && acceptable.has(model.toLowerCase())) {
+            gpuFilteredBids.push(bid)
+          }
+        }
+        if (gpuFilteredBids.length === 0) {
+          await enqueueNext('/queue/akash/step', {
+            step: 'HANDLE_FAILURE',
+            deploymentId,
+            errorMessage: `No providers offer the requested GPU models: ${policy.acceptableGpuModels.join(', ')}`,
+          } satisfies AkashHandleFailurePayload)
+          return
+        }
+        safeBids = gpuFilteredBids
+        log.info(`Policy GPU filter: ${safeBids.length} bid(s) match acceptable models [${policy.acceptableGpuModels.join(', ')}]`)
+      }
     }
 
     // If no preferred providers have bid yet and we haven't exhausted
@@ -898,10 +952,10 @@ export async function handlePollUrls(
       return
     }
 
-    await finalizeDeployment(prisma, deployment, parsed)
+    await finalizeDeploymentOrFail(prisma, deployment, parsed)
   } catch (err) {
     if (attempt >= URL_POLL_MAX_ATTEMPTS) {
-      await finalizeDeployment(prisma, deployment, {})
+      await finalizeDeploymentOrFail(prisma, deployment, {})
       return
     }
     await enqueueNext(
@@ -916,29 +970,65 @@ export async function handlePollUrls(
   }
 }
 
-async function finalizeDeployment(
+async function finalizeDeploymentOrFail(
   prisma: PrismaClient,
   deployment: any,
   serviceUrls: Record<string, { uris: string[] }>
 ): Promise<void> {
   try {
-    const organizationId = deployment.service?.project?.organizationId
-    if (organizationId && deployment.pricePerBlock) {
-      const escrowService = getEscrowService(prisma)
-      const billingApi = getBillingApiClient()
-      const orgMarkup = await billingApi.getOrgMarkup(
-        (await billingApi.getOrgBilling(organizationId)).orgBillingId
-      )
-      await escrowService.createEscrow({
-        akashDeploymentId: deployment.id,
-        organizationId,
-        pricePerBlock: deployment.pricePerBlock,
-        marginRate: orgMarkup.marginRate,
-        userId: deployment.service?.createdByUserId || 'system',
-      })
+    await finalizeDeployment(prisma, deployment, serviceUrls)
+  } catch (err) {
+    const errMsg =
+      err instanceof Error ? err.message : 'Error finalizing Akash deployment'
+    try {
+      await enqueueNext('/queue/akash/step', {
+        step: 'HANDLE_FAILURE',
+        deploymentId: deployment.id,
+        errorMessage: errMsg,
+      } satisfies AkashHandleFailurePayload)
+    } catch {
+      await failDirectly(prisma, deployment.id, errMsg)
     }
+  }
+}
+
+export async function finalizeDeployment(
+  prisma: PrismaClient,
+  deployment: any,
+  serviceUrls: Record<string, { uris: string[] }>
+): Promise<void> {
+  const organizationId = deployment.service?.project?.organizationId
+  if (!organizationId) {
+    throw new Error(
+      `Cannot activate Akash deployment ${deployment.id} without organizationId`
+    )
+  }
+  if (!deployment.pricePerBlock) {
+    throw new Error(
+      `Cannot activate Akash deployment ${deployment.id} without pricePerBlock`
+    )
+  }
+
+  const escrowService = getEscrowService(prisma)
+  const billingApi = getBillingApiClient()
+  const orgBilling = await billingApi.getOrgBilling(organizationId)
+  const orgMarkup = await billingApi.getOrgMarkup(orgBilling.orgBillingId)
+
+  try {
+    await escrowService.createEscrow({
+      akashDeploymentId: deployment.id,
+      organizationId,
+      pricePerBlock: deployment.pricePerBlock,
+      marginRate: orgMarkup.marginRate,
+      userId: deployment.service?.createdByUserId
+        || deployment.service?.project?.userId,
+    })
   } catch (escrowErr) {
-    log.warn({ detail: escrowErr instanceof Error ? escrowErr.message : escrowErr }, `Escrow creation failed for ${deployment.id}`)
+    const detail = escrowErr instanceof Error ? escrowErr.message : String(escrowErr)
+    log.warn({ detail }, `Escrow creation failed for ${deployment.id}`)
+    throw new Error(
+      `Escrow creation failed for deployment ${deployment.id}: ${detail}`
+    )
   }
 
   let gpuModelUpdate: string | undefined
@@ -964,6 +1054,10 @@ async function finalizeDeployment(
       ...(gpuModelUpdate ? { gpuModel: gpuModelUpdate } : {}),
     },
   })
+
+  if (deployment.policyId) {
+    await scheduleOrEnforcePolicyExpiry(prisma, deployment.policyId)
+  }
 
   const baseDomain = process.env.PROXY_BASE_DOMAIN || 'alternatefutures.ai'
   const protocol = baseDomain.includes('localhost') ? 'http' : 'https'
@@ -1048,6 +1142,32 @@ export async function handleFailure(
       }
     }
 
+    let retryPolicyId: string | undefined
+    if (deployment.policyId) {
+      const existingPolicy = await prisma.deploymentPolicy.findUnique({
+        where: { id: deployment.policyId },
+      })
+
+      if (existingPolicy) {
+        const retryPolicy = await prisma.deploymentPolicy.create({
+          data: {
+            acceptableGpuModels: existingPolicy.acceptableGpuModels,
+            gpuUnits: existingPolicy.gpuUnits,
+            gpuVendor: existingPolicy.gpuVendor,
+            maxBudgetUsd: existingPolicy.maxBudgetUsd,
+            maxMonthlyUsd: existingPolicy.maxMonthlyUsd,
+            runtimeMinutes: existingPolicy.runtimeMinutes,
+            expiresAt: existingPolicy.runtimeMinutes
+              ? new Date(Date.now() + existingPolicy.runtimeMinutes * 60_000)
+              : null,
+            totalSpentUsd: existingPolicy.totalSpentUsd,
+          },
+        })
+
+        retryPolicyId = retryPolicy.id
+      }
+    }
+
     const newDeployment = await prisma.akashDeployment.create({
       data: {
         owner: deployment.owner,
@@ -1061,6 +1181,7 @@ export async function handleFailure(
         status: 'CREATING',
         retryCount: retryCount + 1,
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,
+        policyId: retryPolicyId,
       },
     })
 

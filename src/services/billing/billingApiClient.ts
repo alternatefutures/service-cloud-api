@@ -23,6 +23,12 @@ interface CreditResult {
   alreadyProcessed?: boolean
 }
 
+interface UsageLogResult {
+  success: boolean
+  usageId: string
+  alreadyProcessed?: boolean
+}
+
 interface OrgBalance {
   orgBillingId: string
   balanceCents: number
@@ -136,6 +142,29 @@ class BillingApiClient {
     })
   }
 
+  /**
+   * Record a normalized usage event when billing happened outside computeDebit
+   * (e.g. Akash escrow accrual/final settlement).
+   */
+  async usageLog(args: {
+    orgBillingId: string
+    userId?: string
+    serviceType: string
+    provider: string
+    resource: string
+    model?: string
+    usdCostRaw: number
+    marginRate: number
+    usdCharged: number
+    requestId: string
+    metadata?: Record<string, unknown>
+  }): Promise<UsageLogResult> {
+    return this.request<UsageLogResult>('/usage-log', {
+      method: 'POST',
+      body: JSON.stringify(args),
+    })
+  }
+
   // ========================================
   // BALANCE & MARKUP QUERIES
   // ========================================
@@ -212,4 +241,11 @@ export function getBillingApiClient(): BillingApiClient {
 }
 
 export { BillingApiClient }
-export type { DebitResult, CreditResult, OrgBalance, OrgMarkup, OrgBillingInfo }
+export type {
+  DebitResult,
+  CreditResult,
+  UsageLogResult,
+  OrgBalance,
+  OrgMarkup,
+  OrgBillingInfo,
+}

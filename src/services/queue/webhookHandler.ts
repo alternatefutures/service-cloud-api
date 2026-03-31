@@ -15,7 +15,8 @@ import type { PrismaClient } from '@prisma/client'
 import { verifyWebhookSignature, isQStashEnabled } from './qstashClient.js'
 import { handleSubmitTx, handleCheckBids, handleCreateLease, handleSendManifest, handlePollUrls, handleFailure } from './akashSteps.js'
 import { handleDeployCvm, handlePollStatus, handlePhalaFailure } from './phalaSteps.js'
-import type { AkashJobPayload, PhalaJobPayload } from './types.js'
+import { handlePolicyExpiry } from '../policy/runtimeScheduler.js'
+import type { AkashJobPayload, PhalaJobPayload, PolicyJobPayload } from './types.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('webhook-handler')
@@ -75,6 +76,18 @@ export async function handlePhalaStep(payload: PhalaJobPayload): Promise<void> {
       return handlePhalaFailure(_prisma, payload)
     default:
       throw new Error(`Unknown Phala step: ${(payload as any).step}`)
+  }
+}
+
+/**
+ * Handle policy runtime step — can be called from QStash webhook or directly in local dev.
+ */
+export async function handlePolicyStep(payload: PolicyJobPayload): Promise<void> {
+  switch (payload.step) {
+    case 'EXPIRE_POLICY':
+      return handlePolicyExpiry(_prisma, payload)
+    default:
+      throw new Error(`Unknown policy step: ${(payload as any).step}`)
   }
 }
 
@@ -160,6 +173,49 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
     sendJson(res, 200, { ok: true, step: payload.step })
   } catch (err) {
     log.error(err as Error, `Phala step ${payload.step} failed`)
+    sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
+  }
+}
+
+/**
+ * HTTP request handler for /queue/policy/expire
+ *
+ * Processes the step BEFORE responding so QStash retries on failure.
+ */
+export async function handlePolicyWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' })
+    return
+  }
+
+  const body = await readBody(req)
+
+  if (isQStashEnabled()) {
+    const signature = req.headers['upstash-signature'] as string
+    if (!signature) {
+      sendJson(res, 401, { error: 'Missing signature' })
+      return
+    }
+    const valid = await verifyWebhookSignature(signature, body)
+    if (!valid) {
+      sendJson(res, 401, { error: 'Invalid signature' })
+      return
+    }
+  }
+
+  let payload: PolicyJobPayload
+  try {
+    payload = JSON.parse(body) as PolicyJobPayload
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON' })
+    return
+  }
+
+  try {
+    await handlePolicyStep(payload)
+    sendJson(res, 200, { ok: true, step: payload.step })
+  } catch (err) {
+    log.error(err as Error, `Policy step ${payload.step} failed`)
     sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
   }
 }

@@ -39,8 +39,10 @@ import {
   initQueueHandler,
   handleAkashWebhook,
   handlePhalaWebhook,
+  handlePolicyWebhook,
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
+import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId } from './lib/requestContext.js'
 
@@ -217,6 +219,10 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
       await handlePhalaWebhook(req, res)
       return
     }
+    if (url.pathname === '/queue/policy/expire' && req.method === 'POST') {
+      await handlePolicyWebhook(req, res)
+      return
+    }
 
     return yoga(req, res)
   })
@@ -266,6 +272,9 @@ server.listen(port, () => {
 
   initQueueHandler(prisma)
   log.info('QStash queue handler initialized')
+  reconcileActivePolicyExpirySchedules(prisma).catch(err => {
+    log.error({ err }, 'Failed to reconcile policy expiry schedules on startup')
+  })
 
   const orchestrator = new AkashOrchestrator(prisma)
   orchestrator.resumePendingBackfills()

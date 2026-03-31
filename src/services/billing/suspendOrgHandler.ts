@@ -12,6 +12,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
 import { getEscrowService } from './escrowService.js'
+import {
+  processFinalPhalaBilling,
+  settleAkashEscrowToTime,
+} from './deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('suspend-org-handler')
@@ -78,6 +82,8 @@ export async function handleSuspendOrg(
 
     for (const deployment of akashDeployments) {
       try {
+        const stoppedAt = new Date()
+
         await prisma.akashDeployment.update({
           where: { id: deployment.id },
           data: {
@@ -86,15 +92,35 @@ export async function handleSuspendOrg(
           },
         })
 
+        // Mark policy stop reason as BALANCE_LOW if policy exists
+        if (deployment.policyId) {
+          await prisma.deploymentPolicy
+            .update({
+              where: { id: deployment.policyId },
+              data: { stopReason: 'BALANCE_LOW', stoppedAt: new Date() },
+            })
+            .catch(err =>
+              log.warn(
+                { policyId: deployment.policyId, err },
+                'Failed to set policy stopReason'
+              )
+            )
+        }
+
         try {
-          const { getAkashOrchestrator } = await import('../akash/orchestrator.js')
+          const { getAkashOrchestrator } =
+            await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(prisma)
           await orchestrator.closeDeployment(Number(deployment.dseq))
         } catch (err) {
-          log.warn({ dseq: deployment.dseq, err }, 'Failed to close Akash deployment on-chain')
+          log.warn(
+            { dseq: deployment.dseq, err },
+            'Failed to close Akash deployment on-chain'
+          )
         }
 
         if (deployment.escrow && deployment.escrow.status === 'ACTIVE') {
+          await settleAkashEscrowToTime(prisma, deployment.id, stoppedAt)
           await escrowService.pauseEscrow(deployment.id)
         }
 
@@ -102,7 +128,10 @@ export async function handleSuspendOrg(
       } catch (error) {
         const msg = `Akash ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
         errors.push(msg)
-        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Akash deployment')
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Akash deployment'
+        )
       }
     }
 
@@ -111,16 +140,22 @@ export async function handleSuspendOrg(
     const phalaDeployments = await prisma.phalaDeployment.findMany({
       where: {
         status: 'ACTIVE',
-        OR: [
-          { organizationId },
-          { service: { project: { organizationId } } },
-        ],
+        OR: [{ organizationId }, { service: { project: { organizationId } } }],
       },
     })
 
     for (const deployment of phalaDeployments) {
       try {
-        const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
+        const stoppedAt = new Date()
+        await processFinalPhalaBilling(
+          prisma,
+          deployment.id,
+          stoppedAt,
+          'phala_balance_low_suspend'
+        )
+
+        const { getPhalaOrchestrator } =
+          await import('../phala/orchestrator.js')
         const orchestrator = getPhalaOrchestrator(prisma)
         await orchestrator.stopPhalaDeployment(deployment.appId)
 
@@ -129,11 +164,29 @@ export async function handleSuspendOrg(
           data: { status: 'STOPPED' },
         })
 
+        // Mark policy stop reason as BALANCE_LOW if policy exists
+        if (deployment.policyId) {
+          await prisma.deploymentPolicy
+            .update({
+              where: { id: deployment.policyId },
+              data: { stopReason: 'BALANCE_LOW', stoppedAt: new Date() },
+            })
+            .catch(err =>
+              log.warn(
+                { policyId: deployment.policyId, err },
+                'Failed to set policy stopReason'
+              )
+            )
+        }
+
         paused.push(`Phala: ${deployment.name}`)
       } catch (error) {
         const msg = `Phala ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
         errors.push(msg)
-        log.error({ deploymentId: deployment.id, err: error }, 'Failed to pause Phala deployment')
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Phala deployment'
+        )
       }
     }
 
