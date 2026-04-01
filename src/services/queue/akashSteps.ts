@@ -515,11 +515,15 @@ export async function handleCheckBids(
       where: { id: deploymentId },
       select: { policyId: true },
     })
+    let hasGpuPolicy = false
+    let requestedGpuModels: string[] = []
     if (policyDeployment?.policyId) {
       const policy = await prisma.deploymentPolicy.findUnique({
         where: { id: policyDeployment.policyId },
       })
       if (policy && policy.acceptableGpuModels.length > 0) {
+        hasGpuPolicy = true
+        requestedGpuModels = policy.acceptableGpuModels
         const acceptable = new Set(policy.acceptableGpuModels.map(m => m.toLowerCase()))
         const gpuFilteredBids: typeof safeBids = []
         for (const bid of safeBids) {
@@ -549,6 +553,31 @@ export async function handleCheckBids(
     // If no preferred providers have bid yet and we haven't exhausted
     // polling attempts, wait for more bids before settling on unverified
     const hasPreferred = safeBids.some(b => providerSelector.isPreferredProvider(b.bidId.provider))
+    if (hasGpuPolicy && !hasPreferred) {
+      if (attempt < BID_POLL_MAX_ATTEMPTS) {
+        log.info(
+          `${safeBids.length} bid(s) for GPU models [${requestedGpuModels.join(', ')}], but none from preferred providers — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`
+        )
+        await enqueueNext(
+          '/queue/akash/step',
+          {
+            step: 'CHECK_BIDS',
+            deploymentId,
+            attempt: attempt + 1,
+          } satisfies AkashCheckBidsPayload,
+          5
+        )
+        return
+      }
+
+      await enqueueNext('/queue/akash/step', {
+        step: 'HANDLE_FAILURE',
+        deploymentId,
+        errorMessage: `Requested GPU models [${requestedGpuModels.join(', ')}] are not currently available from preferred providers`,
+      } satisfies AkashHandleFailurePayload)
+      return
+    }
+
     if (!hasPreferred && attempt < BID_POLL_MAX_ATTEMPTS) {
       log.info(`${safeBids.length} bid(s) but none preferred — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`)
       await enqueueNext(
