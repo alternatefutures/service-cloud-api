@@ -5,76 +5,64 @@
  * Prevents NAT hairpin issues by ensuring services that route through the SSL proxy
  * are not deployed on the same provider as the proxy.
  *
- * Preferred providers are loaded from lib/preferred-providers.json — a curated
- * whitelist of verified providers. During bid selection, preferred providers are
- * chosen over unverified ones (cheapest preferred first), with unverified providers
- * used only as a last resort.
- *
- * Usage:
- *   import { ProviderSelector } from './providerSelector';
- *
- *   const selector = new ProviderSelector();
- *   const safeBids = selector.filterBids(bids, 'backend');
- *   const isSafe = selector.isProviderSafe(providerAddress, 'backend');
+ * Verified (preferred) providers are loaded from the compute_provider DB table.
+ * During bid selection, preferred providers are chosen over unverified ones
+ * (cheapest preferred first), with unverified providers used only as a last resort.
  */
 
-import { readFileSync } from 'fs'
-import { resolve, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import type { PrismaClient } from '@prisma/client'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('provider-selector')
 
 export type ServiceType = 'proxy' | 'backend' | 'standalone'
 
-// ── Preferred Providers (verified whitelist) ────────────────────────────
+// ── In-memory cache (refreshed from DB periodically) ────────────────
 
-export interface PreferredProviderEntry {
-  address: string
-  name: string
-  verified: boolean
-}
+let verifiedProviders = new Set<string>()
+let blockedProviders = new Map<string, string>() // address → reason
+let lastRefreshedAt = 0
+const CACHE_TTL_MS = 5 * 60_000 // 5 minutes
 
-interface PreferredProvidersFile {
-  providers: PreferredProviderEntry[]
-}
+/**
+ * Refresh the verified/blocked provider sets from the database.
+ * Called automatically when the cache expires, or manually after test runs.
+ */
+export async function refreshProviderCache(prisma: PrismaClient): Promise<void> {
+  try {
+    const providers = await prisma.computeProvider.findMany({
+      where: { providerType: 'AKASH' },
+      select: { address: true, verified: true, blocked: true, blockReason: true },
+    })
 
-function loadPreferredProviders(): Set<string> {
-  // Try multiple resolution strategies since tsx/ts-node can alter import.meta.url
-  const candidates = [
-    resolve(process.cwd(), 'lib/preferred-providers.json'),
-    resolve(dirname(fileURLToPath(import.meta.url)), '../../../lib/preferred-providers.json'),
-  ]
+    const nextVerified = new Set<string>()
+    const nextBlocked = new Map<string, string>()
 
-  for (const filePath of candidates) {
-    try {
-      const raw = readFileSync(filePath, 'utf-8')
-      const data = JSON.parse(raw) as PreferredProvidersFile
-      const addrs = new Set<string>()
-      for (const p of data.providers ?? []) {
-        if (p.verified && p.address) addrs.add(p.address)
-      }
-      log.info(`Loaded ${addrs.size} preferred provider(s) from ${filePath}`)
-      return addrs
-    } catch {
-      continue
+    for (const p of providers) {
+      if (p.verified) nextVerified.add(p.address)
+      if (p.blocked) nextBlocked.set(p.address, p.blockReason || 'Blocked')
     }
+
+    verifiedProviders = nextVerified
+    blockedProviders = nextBlocked
+    lastRefreshedAt = Date.now()
+
+    log.info(
+      `Refreshed provider cache: ${nextVerified.size} verified, ${nextBlocked.size} blocked`
+    )
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : err },
+      'Failed to refresh provider cache from DB — using stale cache'
+    )
   }
-
-  log.info('No preferred-providers.json found, all providers treated equally')
-  return new Set()
 }
 
-const PREFERRED_PROVIDERS = loadPreferredProviders()
-
-export interface ProviderInfo {
-  address: string
-  name: string
-  hasIpLeases: boolean
-  ipLeaseStatus: 'available' | 'exhausted' | 'unknown'
-  lastChecked?: Date
-  notes?: string
+function isCacheStale(): boolean {
+  return Date.now() - lastRefreshedAt > CACHE_TTL_MS
 }
+
+// ── Types ─────────────────────────────────────────────────────────────
 
 export interface ProviderSafetyResult {
   safe: boolean
@@ -112,13 +100,6 @@ export interface FilteredBid extends AkashBid {
  *
  * Backend services must avoid deploying on the same provider as the SSL proxy
  * to prevent NAT hairpin issues.
- *
- * Configure via env in production:
- * - `AKASH_SSL_PROXY_PROVIDER`
- * - `AKASH_SSL_PROXY_PROVIDER_NAME`
- *
- * Source of truth for the current proxy provider:
- * - repo root `DEPLOYMENTS.md`
  */
 const PROXY_PROVIDER = process.env.AKASH_SSL_PROXY_PROVIDER || 'akash1zlsep362zz46qlwzttm06t8lv9qtg8gtaya97u'
 const PROXY_PROVIDER_NAME = process.env.AKASH_SSL_PROXY_PROVIDER_NAME || 'america.computer'
@@ -140,195 +121,67 @@ interface UptimeCacheEntry {
 
 const uptimeCache = new Map<string, UptimeCacheEntry>()
 
-/**
- * Providers with known issues that should be blocked for all deployments.
- * 
- * History:
- * - 2026-02-05: Added airitdecomp - wildcard DNS not configured for ingress
- * - 2026-02-17: Added akash1chnhn... - consistently fails manifest submission
- * - 2026-03-11: Added ouroboroz.tech - nginx returns 502 despite healthy container
- */
-const BLOCKED_PROVIDERS: Record<string, { address: string; name: string; reason: string }> = {
-  akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040: {
-    address: 'akash1adyrcsp2ptwd83txgv555eqc0vhfufc37wx040',
-    name: 'AiritDecomp',
-    reason: 'Wildcard DNS not configured - ingress URLs do not resolve',
-  },
-  akash1chnhnu50f6hv98xl0m7xm95vel457ysp32uwpj: {
-    address: 'akash1chnhnu50f6hv98xl0m7xm95vel457ysp32uwpj',
-    name: 'Unknown (chnhnu...)',
-    reason: 'Consistently fails to accept manifest submissions (send-manifest error)',
-  },
-  akash1swxj75e8tz2nuepnqdas787h3eqfmhyh8lak8g: {
-    address: 'akash1swxj75e8tz2nuepnqdas787h3eqfmhyh8lak8g',
-    name: 'DataNode UK',
-    reason: 'Extremely slow ingress setup - URIs not available for 5+ minutes after deployment',
-  },
-  akash1sjwuwre4qprcaa34f6324yz7m8nn0awvc75gp5: {
-    address: 'akash1sjwuwre4qprcaa34f6324yz7m8nn0awvc75gp5',
-    name: 'quanglong.org',
-    reason: 'Repeated kube: lease not found after manifest; 502 Bad Gateway on ingress',
-  },
-  akash18zskyywdy4ng50dd9yjen8daep0z585mc296h4: {
-    address: 'akash18zskyywdy4ng50dd9yjen8daep0z585mc296h4',
-    name: 'ouroboroz.tech',
-    reason: 'Nginx ingress returns persistent 502 Bad Gateway despite healthy running containers',
-  },
-  akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe: {
-    address: 'akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe',
-    name: 'Unknown (ut3m...)',
-    reason: 'Accepts bids but containers never start — 0 replicas, no URIs after multiple attempts',
-  },
-}
-
-/**
- * Known Akash providers with metadata.
- * Update when provider status changes.
- */
-const KNOWN_PROVIDERS: Record<string, ProviderInfo> = {
-  akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc: {
-    address: 'akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc',
-    name: 'Europlots',
-    hasIpLeases: true,
-    ipLeaseStatus: 'available',
-    lastChecked: new Date('2026-01-30'),
-    notes: 'Previously hosted SSL proxy, now available for services',
-  },
-  akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z: {
-    address: 'akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z',
-    name: 'DigitalFrontier',
-    hasIpLeases: true,
-    ipLeaseStatus: 'available',
-    lastChecked: new Date('2026-01-30'),
-    notes: 'Previously hosted SSL proxy - avoid if proxy is deployed here (see env config)',
-  },
-  akash1zlsep362zz46qlwzttm06t8lv9qtg8gtaya97u: {
-    address: 'akash1zlsep362zz46qlwzttm06t8lv9qtg8gtaya97u',
-    name: 'america.computer',
-    hasIpLeases: true,
-    ipLeaseStatus: 'available',
-    lastChecked: new Date('2026-02-07'),
-    notes: 'Hosts SSL proxy in current production (see repo-root deployment tracker)',
-  },
-  akash1f6gmtjpx4r8qda9nxjwq26fp5mcjyqmaq5m6j7: {
-    address: 'akash1f6gmtjpx4r8qda9nxjwq26fp5mcjyqmaq5m6j7',
-    name: 'Subangle (GPU)',
-    hasIpLeases: false,
-    ipLeaseStatus: 'unknown',
-    notes: 'GPU provider, recommended for compute workloads',
-  },
-}
-
 export class ProviderSelector {
   private proxyProvider: string
   private proxyProviderName: string
-  private knownProviders: Record<string, ProviderInfo>
-  private blockedProviders: Record<string, { address: string; name: string; reason: string }>
 
   constructor(
     proxyProvider: string = PROXY_PROVIDER,
     proxyProviderName: string = PROXY_PROVIDER_NAME,
-    knownProviders: Record<string, ProviderInfo> = KNOWN_PROVIDERS,
-    blockedProviders: Record<string, { address: string; name: string; reason: string }> = BLOCKED_PROVIDERS
   ) {
     this.proxyProvider = proxyProvider
     this.proxyProviderName = proxyProviderName
-    this.knownProviders = knownProviders
-    this.blockedProviders = blockedProviders
   }
 
-  /**
-   * Get the current proxy provider address.
-   */
   getProxyProvider(): string {
     return this.proxyProvider
   }
 
   /**
-   * Get info about a provider if known.
+   * Ensure the provider cache is fresh. Call this before bid selection
+   * if you have a Prisma client available.
    */
-  getProviderInfo(address: string): ProviderInfo | undefined {
-    return this.knownProviders[address]
+  async ensureFresh(prisma: PrismaClient): Promise<void> {
+    if (isCacheStale()) {
+      await refreshProviderCache(prisma)
+    }
   }
 
-  /**
-   * Get list of blocked providers for a given service type.
-   *
-   * @param serviceType - Type of service being deployed
-   * @returns Array of provider addresses that should NOT be used
-   */
   getBlockedProviders(serviceType: ServiceType): string[] {
-    // Proxy can be on any provider - it doesn't route through itself
-    if (serviceType === 'proxy') {
-      return []
-    }
-
-    // Standalone services don't route through proxy
-    if (serviceType === 'standalone') {
-      return []
-    }
-
-    // Backend services must avoid proxy's provider (NAT hairpin)
+    if (serviceType === 'proxy' || serviceType === 'standalone') return []
     return [this.proxyProvider]
   }
 
-  /**
-   * Check if a provider is safe to use for a given service type.
-   *
-   * @param providerAddress - The provider to check
-   * @param serviceType - Type of service being deployed
-   * @returns Safety result with reason
-   */
   isProviderSafe(
     providerAddress: string,
     serviceType: ServiceType
   ): ProviderSafetyResult {
-    const providerInfo = this.knownProviders[providerAddress]
-    const providerName = providerInfo?.name || 'Unknown'
-
-    // Check global blocklist first (applies to ALL service types)
-    const blockedInfo = this.blockedProviders[providerAddress]
-    if (blockedInfo) {
+    // Check DB-sourced blocklist
+    const blockReason = blockedProviders.get(providerAddress)
+    if (blockReason) {
       return {
         safe: false,
         provider: providerAddress,
-        providerName: blockedInfo.name,
-        reason: `BLOCKED PROVIDER: ${blockedInfo.name} - ${blockedInfo.reason}`,
+        reason: `BLOCKED PROVIDER: ${blockReason}`,
         blockedProvider: providerAddress,
-        blockedProviderName: blockedInfo.name,
       }
     }
 
-    // Proxy can be on any provider (that's not globally blocked)
-    if (serviceType === 'proxy') {
+    if (serviceType === 'proxy' || serviceType === 'standalone') {
       return {
         safe: true,
         provider: providerAddress,
-        providerName,
-        reason: 'Proxy can be deployed on any provider with IP leases',
+        reason: `${serviceType} services are not restricted by proxy provider`,
       }
     }
 
-    // Standalone services don't route through proxy
-    if (serviceType === 'standalone') {
-      return {
-        safe: true,
-        provider: providerAddress,
-        providerName,
-        reason: 'Standalone services do not route through the proxy',
-      }
-    }
-
-    // Backend services must avoid proxy's provider
     if (providerAddress === this.proxyProvider) {
       return {
         safe: false,
         provider: providerAddress,
-        providerName,
         reason:
           `NAT HAIRPIN ISSUE: Provider ${this.proxyProviderName} (${providerAddress}) is hosting the SSL proxy. ` +
-          `Services routed through the proxy cannot be deployed here - ` +
-          `the proxy cannot reach its own provider's public ingress from within the provider's network.`,
+          `Services routed through the proxy cannot be deployed here.`,
         blockedProvider: this.proxyProvider,
         blockedProviderName: this.proxyProviderName,
       }
@@ -337,91 +190,49 @@ export class ProviderSelector {
     return {
       safe: true,
       provider: providerAddress,
-      providerName,
-      reason:
-        'Provider is different from proxy provider - safe for backend services',
+      reason: 'Provider is safe for this service type',
     }
   }
 
-  /**
-   * Filter a list of bids, marking unsafe ones.
-   *
-   * @param bids - Array of bids from Akash network
-   * @param serviceType - Type of service being deployed
-   * @returns Bids with safety information added
-   */
   filterBids(bids: AkashBid[], serviceType: ServiceType): FilteredBid[] {
     return bids.map(bid => {
       const provider = bid.bidId.provider
       const safetyResult = this.isProviderSafe(provider, serviceType)
-      const providerInfo = this.knownProviders[provider]
-
       return {
         ...bid,
         isSafe: safetyResult.safe,
         unsafeReason: safetyResult.safe ? undefined : safetyResult.reason,
-        providerName: providerInfo?.name,
       }
     })
   }
 
-  /**
-   * Get only safe bids for a service type.
-   *
-   * @param bids - Array of bids from Akash network
-   * @param serviceType - Type of service being deployed
-   * @returns Only bids from safe providers
-   */
   getSafeBids(bids: AkashBid[], serviceType: ServiceType): FilteredBid[] {
     return this.filterBids(bids, serviceType).filter(bid => bid.isSafe)
   }
 
-  /**
-   * Sort bids by price (lowest first) and safety (safe first).
-   *
-   * @param bids - Array of filtered bids
-   * @returns Sorted bids
-   */
   sortBidsByPriceAndSafety(bids: FilteredBid[]): FilteredBid[] {
     return [...bids].sort((a, b) => {
-      // Safe bids first
       if (a.isSafe && !b.isSafe) return -1
       if (!a.isSafe && b.isSafe) return 1
-
-      // Then by price (lowest first)
       const priceA = BigInt(a.price.amount)
       const priceB = BigInt(b.price.amount)
       if (priceA < priceB) return -1
       if (priceA > priceB) return 1
-
       return 0
     })
   }
 
-  /**
-   * Get the best (cheapest safe) provider from a list of bids.
-   *
-   * @param bids - Array of bids from Akash network
-   * @param serviceType - Type of service being deployed
-   * @returns Best provider address or null if none safe
-   */
   getBestProvider(bids: AkashBid[], serviceType: ServiceType): string | null {
     const safeBids = this.getSafeBids(bids, serviceType)
-    if (safeBids.length === 0) {
-      return null
-    }
-
+    if (safeBids.length === 0) return null
     const sorted = this.sortBidsByPriceAndSafety(safeBids)
     return sorted[0].bidId.provider
   }
 
   /**
-   * Select the best bid from safe+uptime-filtered bids using the preferred
-   * provider whitelist. Preferred (verified) providers are chosen first,
-   * sorted by price ascending. Unverified providers are only used when no
-   * preferred provider has bid.
-   *
-   * @returns The best bid, or null if the list is empty
+   * Select the best bid using the verified provider whitelist from DB.
+   * Preferred (verified) providers are chosen first, sorted by price.
+   * Unverified providers are only used when no preferred provider has bid.
    */
   selectPreferredBid(bids: FilteredBid[]): FilteredBid | null {
     if (bids.length === 0) return null
@@ -430,7 +241,7 @@ export class ProviderSelector {
     const unverified: FilteredBid[] = []
 
     for (const bid of bids) {
-      if (PREFERRED_PROVIDERS.has(bid.bidId.provider)) {
+      if (verifiedProviders.has(bid.bidId.provider)) {
         preferred.push(bid)
       } else {
         unverified.push(bid)
@@ -444,34 +255,23 @@ export class ProviderSelector {
       preferred.sort(byPrice)
       log.info(
         `${preferred.length} preferred provider(s) bidding, ` +
-        `picking cheapest: ${preferred[0].bidId.provider} @ ${preferred[0].price.amount} uakt`
+        `picking cheapest: ${preferred[0].bidId.provider} @ ${preferred[0].price.amount}`
       )
       return preferred[0]
     }
 
-    // No preferred providers bid — fall back to cheapest unverified
     unverified.sort(byPrice)
     log.info(
       `No preferred providers among ${bids.length} bid(s). ` +
-      `Bidders: ${bids.map(b => b.bidId.provider).join(', ')}. ` +
-      `Preferred: ${[...PREFERRED_PROVIDERS].join(', ')}. ` +
       `Falling back to cheapest: ${unverified[0].bidId.provider}`
     )
     return unverified[0]
   }
 
-  /**
-   * Check whether a provider address is in the preferred whitelist.
-   */
   isPreferredProvider(address: string): boolean {
-    return PREFERRED_PROVIDERS.has(address)
+    return verifiedProviders.has(address)
   }
 
-  /**
-   * Fetch uptime for a single provider from Akashlytics API.
-   * Returns uptime percentage (0-100) or null if unavailable.
-   * Results are cached for 5 minutes.
-   */
   async fetchProviderUptime(address: string): Promise<number | null> {
     const cached = uptimeCache.get(address)
     if (cached && Date.now() - cached.fetchedAt < UPTIME_CACHE_TTL_MS) {
@@ -508,9 +308,6 @@ export class ProviderSelector {
   /**
    * Filter safe bids by provider uptime from Akashlytics.
    * Fail-open: providers with unknown uptime are kept as fallback.
-   *
-   * @returns Bids from providers meeting the uptime threshold, or all bids
-   *          with unknown uptime if no provider meets the threshold.
    */
   async filterBidsByUptime(bids: FilteredBid[]): Promise<FilteredBid[]> {
     if (bids.length === 0) return bids
@@ -521,15 +318,14 @@ export class ProviderSelector {
 
     const qualified: FilteredBid[] = []
     const unknownUptime: FilteredBid[] = []
-    const rejected: Array<{ provider: string; name?: string; uptime: number }> = []
+    const rejected: Array<{ provider: string; uptime: number }> = []
 
     for (let i = 0; i < bids.length; i++) {
       const bid = bids[i]
       const result = uptimeResults[i]
       const uptime = result.status === 'fulfilled' ? result.value : null
 
-      // Preferred (verified) providers always pass — we tested them ourselves
-      if (PREFERRED_PROVIDERS.has(bid.bidId.provider)) {
+      if (verifiedProviders.has(bid.bidId.provider)) {
         qualified.push(bid)
         continue
       }
@@ -539,24 +335,20 @@ export class ProviderSelector {
       } else if (uptime >= MIN_UPTIME_PERCENT) {
         qualified.push(bid)
       } else {
-        rejected.push({
-          provider: bid.bidId.provider,
-          name: bid.providerName,
-          uptime,
-        })
+        rejected.push({ provider: bid.bidId.provider, uptime })
       }
     }
 
     if (rejected.length > 0) {
       log.info(
-        `Filtered ${rejected.length} provider(s) below ${MIN_UPTIME_PERCENT}% uptime: ${rejected.map(r => `${r.name || r.provider} (${r.uptime.toFixed(1)}%)`).join(', ')}`
+        `Filtered ${rejected.length} provider(s) below ${MIN_UPTIME_PERCENT}% uptime: ${rejected.map(r => `${r.provider} (${r.uptime.toFixed(1)}%)`).join(', ')}`
       )
     }
 
     if (qualified.length > 0) {
       if (unknownUptime.length > 0) {
         log.info(
-          `${unknownUptime.length} provider(s) had unknown uptime (API unavailable), skipped in favor of ${qualified.length} verified provider(s)`
+          `${unknownUptime.length} provider(s) had unknown uptime, skipped in favor of ${qualified.length} verified provider(s)`
         )
       }
       return qualified
@@ -572,48 +364,9 @@ export class ProviderSelector {
     log.info(`All ${bids.length} provider(s) failed uptime check. No bids remain.`)
     return []
   }
-
-  /**
-   * Generate provider guidance for documentation/UI.
-   */
-  generateProviderGuidance(serviceType: ServiceType): string {
-    const blocked = this.getBlockedProviders(serviceType)
-
-    const lines: string[] = [
-      `## Provider Selection for ${serviceType} Services`,
-      '',
-    ]
-
-    if (blocked.length > 0) {
-      lines.push('### Blocked Providers (DO NOT USE)')
-      lines.push('')
-      for (const addr of blocked) {
-        const info = this.knownProviders[addr]
-        lines.push(`- **${info?.name || 'Unknown'}** (\`${addr}\`)`)
-        lines.push(
-          `  - Reason: Currently hosting SSL proxy - NAT hairpin issue`
-        )
-      }
-      lines.push('')
-    }
-
-    lines.push('### Recommended Providers')
-    lines.push('')
-    for (const [addr, info] of Object.entries(this.knownProviders)) {
-      if (!blocked.includes(addr)) {
-        lines.push(`- **${info.name}** (\`${addr}\`)`)
-        if (info.notes) {
-          lines.push(`  - ${info.notes}`)
-        }
-      }
-    }
-
-    return lines.join('\n')
-  }
 }
 
 // Default singleton instance
 export const providerSelector = new ProviderSelector()
 
-// Export constants for external use
-export { PROXY_PROVIDER, PROXY_PROVIDER_NAME, KNOWN_PROVIDERS, MIN_UPTIME_PERCENT }
+export { PROXY_PROVIDER, PROXY_PROVIDER_NAME, MIN_UPTIME_PERCENT }

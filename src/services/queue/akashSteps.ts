@@ -427,6 +427,9 @@ export async function handleCheckBids(
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
 
+  // Ensure the verified/blocked provider cache is fresh from DB
+  await providerSelector.ensureFresh(prisma)
+
   emitProgress(
     deploymentId,
     'CHECK_BIDS',
@@ -515,13 +518,18 @@ export async function handleCheckBids(
       where: { id: deploymentId },
       select: { policyId: true },
     })
+    let hasGpuPolicy = false
+    let requestedGpuModels: string[] = []
     if (policyDeployment?.policyId) {
       const policy = await prisma.deploymentPolicy.findUnique({
         where: { id: policyDeployment.policyId },
       })
       if (policy && policy.acceptableGpuModels.length > 0) {
+        hasGpuPolicy = true
+        requestedGpuModels = policy.acceptableGpuModels
         const acceptable = new Set(policy.acceptableGpuModels.map(m => m.toLowerCase()))
         const gpuFilteredBids: typeof safeBids = []
+        const bidderModels: Array<{ provider: string; model: string | null }> = []
         for (const bid of safeBids) {
           const model = await resolveProviderGpuModel(
             bid.bidId.provider,
@@ -529,15 +537,19 @@ export async function handleCheckBids(
             prisma,
             deploymentId
           )
+          bidderModels.push({ provider: bid.bidId.provider, model })
           if (model && acceptable.has(model.toLowerCase())) {
             gpuFilteredBids.push(bid)
           }
         }
         if (gpuFilteredBids.length === 0) {
+          log.info(
+            `Policy GPU filter rejected all ${safeBids.length} bid(s). Requested [${policy.acceptableGpuModels.join(', ')}]. Bidder models: ${bidderModels.map(b => `${b.provider}:${b.model ?? 'unknown'}`).join(', ')}`
+          )
           await enqueueNext('/queue/akash/step', {
             step: 'HANDLE_FAILURE',
             deploymentId,
-            errorMessage: `No providers offer the requested GPU models: ${policy.acceptableGpuModels.join(', ')}`,
+            errorMessage: `No current preferred bids matched requested GPU models: ${policy.acceptableGpuModels.join(', ')}`,
           } satisfies AkashHandleFailurePayload)
           return
         }
@@ -549,6 +561,31 @@ export async function handleCheckBids(
     // If no preferred providers have bid yet and we haven't exhausted
     // polling attempts, wait for more bids before settling on unverified
     const hasPreferred = safeBids.some(b => providerSelector.isPreferredProvider(b.bidId.provider))
+    if (hasGpuPolicy && !hasPreferred) {
+      if (attempt < BID_POLL_MAX_ATTEMPTS) {
+        log.info(
+          `${safeBids.length} bid(s) for GPU models [${requestedGpuModels.join(', ')}], but none from preferred providers — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`
+        )
+        await enqueueNext(
+          '/queue/akash/step',
+          {
+            step: 'CHECK_BIDS',
+            deploymentId,
+            attempt: attempt + 1,
+          } satisfies AkashCheckBidsPayload,
+          5
+        )
+        return
+      }
+
+      await enqueueNext('/queue/akash/step', {
+        step: 'HANDLE_FAILURE',
+        deploymentId,
+        errorMessage: `Requested GPU models [${requestedGpuModels.join(', ')}] are not currently available from preferred providers`,
+      } satisfies AkashHandleFailurePayload)
+      return
+    }
+
     if (!hasPreferred && attempt < BID_POLL_MAX_ATTEMPTS) {
       log.info(`${safeBids.length} bid(s) but none preferred — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`)
       await enqueueNext(
@@ -651,7 +688,7 @@ async function resolveProviderGpuModel(
       const gpuMatch = attr.key.match(
         /capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/
       )
-      if (gpuMatch?.[2]) return `${gpuMatch[1]}-${gpuMatch[2]}`
+      if (gpuMatch?.[2]) return gpuMatch[2]
     }
   } catch (err) {
     log.warn({ detail: err instanceof Error ? err.message : err }, `Could not resolve GPU model for provider ${providerAddr}`)

@@ -52,7 +52,7 @@ if [ -n "$AKASH_MNEMONIC" ]; then
 fi
 
 # NOTE: prisma CLI is a devDependency — not installed in production.
-# Migrations must be applied externally. See AF_DB_RESET_PROTOCOL.md.
+# Migrations must be applied externally. See AF_DATABASE_OPERATIONS.md.
 
 echo "Starting Node.js application..."
 exec node dist/index.js
