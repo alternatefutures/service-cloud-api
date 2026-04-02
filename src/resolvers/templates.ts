@@ -10,6 +10,7 @@ import { GraphQLError } from 'graphql'
 import { generateSlug } from '../utils/slug.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance } from './balanceCheck.js'
+import { BILLING_CONFIG } from '../config/billing.js'
 import { generateInternalHostname } from '../utils/internalHostname.js'
 import {
   getAllTemplates,
@@ -275,7 +276,6 @@ export const templateMutations = {
   ) => {
     // ── Pre-deploy gates ────────────────────────────────────
     await assertSubscriptionActive(context.organizationId)
-    await assertDeployBalance(context.organizationId, 'akash')
 
     if (!context.userId) {
       throw new GraphQLError('Not authenticated')
@@ -285,6 +285,14 @@ export const templateMutations = {
     if (!template) {
       throw new GraphQLError(`Template not found: ${input.templateId}`)
     }
+
+    const gpuUnits = input.resourceOverrides?.gpu?.units ?? template.resources.gpu?.units ?? 0
+    const estimatedCost = gpuUnits > 0
+      ? BILLING_CONFIG.thresholds.failClosedAboveCentsPerDay * gpuUnits
+      : BILLING_CONFIG.akash.minBalanceCentsToLaunch
+    await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
+      dailyCostCents: estimatedCost,
+    })
 
     const project = await context.prisma.project.findUnique({
       where: { id: input.projectId },
@@ -457,7 +465,9 @@ export const templateMutations = {
     context: Context
   ) => {
     await assertSubscriptionActive(context.organizationId)
-    await assertDeployBalance(context.organizationId, 'phala')
+    await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
+      dailyCostCents: BILLING_CONFIG.phala.minBalanceCentsToLaunch,
+    })
     if (!context.userId) throw new GraphQLError('Not authenticated')
 
     const template = getTemplateById(input.templateId)
@@ -666,7 +676,16 @@ export const templateMutations = {
     context: Context
   ) => {
     await assertSubscriptionActive(context.organizationId)
-    await assertDeployBalance(context.organizationId, 'akash')
+    {
+      const hasGpu = !!(input.resourceOverrides?.gpu?.units || input.policy?.gpuUnits)
+      const gpuUnits = input.resourceOverrides?.gpu?.units ?? input.policy?.gpuUnits ?? 0
+      const compositeCost = hasGpu
+        ? BILLING_CONFIG.thresholds.failClosedAboveCentsPerDay * gpuUnits
+        : BILLING_CONFIG.akash.minBalanceCentsToLaunch
+      await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
+        dailyCostCents: compositeCost,
+      })
+    }
     if (!context.userId) throw new GraphQLError('Not authenticated')
 
     // ── Validate policy input if provided ────────────────────

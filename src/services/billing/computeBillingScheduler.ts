@@ -24,6 +24,7 @@ const log = createLogger('compute-billing')
 
 export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
+  private thresholdCronJob: cron.ScheduledTask | null = null
   private forceMode = false
   private noPauseMode = false
   private readonly prisma: PrismaClient
@@ -42,14 +43,40 @@ export class ComputeBillingScheduler {
       await this.runBillingCycle()
     })
 
-    log.info(`Started — runs at ${BILLING_CONFIG.scheduler.cronExpression}`)
+    this.thresholdCronJob = cron.schedule(BILLING_CONFIG.thresholds.checkIntervalCron, async () => {
+      await this.runThresholdCheck()
+    })
+
+    log.info(
+      `Started — billing at ${BILLING_CONFIG.scheduler.cronExpression}, threshold checks at ${BILLING_CONFIG.thresholds.checkIntervalCron}`
+    )
   }
 
   stop() {
     if (this.cronJob) {
       this.cronJob.stop()
       this.cronJob = null
-      log.info('Stopped')
+    }
+    if (this.thresholdCronJob) {
+      this.thresholdCronJob.stop()
+      this.thresholdCronJob = null
+    }
+    log.info('Stopped')
+  }
+
+  async runThresholdCheck() {
+    const startTime = Date.now()
+    const stats = { orgsPaused: 0 }
+    try {
+      await this.checkThresholds(stats)
+      const duration = Date.now() - startTime
+      if (stats.orgsPaused > 0) {
+        log.info({ orgsPaused: stats.orgsPaused, durationMs: duration }, 'Hourly threshold check — paused orgs')
+      } else {
+        log.debug({ durationMs: duration }, 'Hourly threshold check — all clear')
+      }
+    } catch (error) {
+      log.error(error, 'Fatal error in hourly threshold check')
     }
   }
 
