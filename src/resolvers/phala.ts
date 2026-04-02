@@ -247,6 +247,32 @@ export const phalaMutations = {
       })
     }
 
+    // Cancel any in-progress sibling/retry deployments for the same service
+    const IN_PROGRESS_PHALA = ['CREATING', 'STARTING'] as const
+    const siblings = await context.prisma.phalaDeployment.findMany({
+      where: {
+        serviceId: deployment.serviceId,
+        id: { not: id },
+        status: { in: [...IN_PROGRESS_PHALA] },
+      },
+      select: { id: true, appId: true },
+    })
+    for (const sib of siblings) {
+      if (sib.appId && sib.appId !== 'pending') {
+        try {
+          const orchestrator = getPhalaOrchestrator(context.prisma)
+          await orchestrator.deletePhalaDeployment(sib.appId)
+        } catch {
+          // Non-fatal — CVM may not exist yet
+        }
+      }
+      await context.prisma.phalaDeployment.update({
+        where: { id: sib.id },
+        data: { status: 'DELETED' },
+      })
+      log.info(`Closed sibling Phala deployment ${sib.id} (user cancelled ${id})`)
+    }
+
     return updated
   },
 
@@ -289,6 +315,32 @@ export const phalaMutations = {
         where: { id: deployment.policyId },
         data: { stopReason: 'MANUAL_STOP', stoppedAt: deletedAt },
       })
+    }
+
+    // Cancel any in-progress sibling/retry deployments for the same service
+    const IN_PROGRESS_PHALA_DEL = ['CREATING', 'STARTING'] as const
+    const siblings = await context.prisma.phalaDeployment.findMany({
+      where: {
+        serviceId: deployment.serviceId,
+        id: { not: id },
+        status: { in: [...IN_PROGRESS_PHALA_DEL] },
+      },
+      select: { id: true, appId: true },
+    })
+    for (const sib of siblings) {
+      if (sib.appId && sib.appId !== 'pending') {
+        try {
+          const orchestrator = getPhalaOrchestrator(context.prisma)
+          await orchestrator.deletePhalaDeployment(sib.appId)
+        } catch {
+          // Non-fatal — CVM may not exist yet
+        }
+      }
+      await context.prisma.phalaDeployment.update({
+        where: { id: sib.id },
+        data: { status: 'DELETED' },
+      })
+      log.info(`Closed sibling Phala deployment ${sib.id} (user cancelled ${id})`)
     }
 
     return updated

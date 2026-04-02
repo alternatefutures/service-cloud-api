@@ -929,6 +929,8 @@ export const resolvers = {
           ACTIVE: 'ACTIVE',
           FAILED: 'FAILED',
           CLOSED: 'REMOVED',
+          PERMANENTLY_FAILED: 'FAILED',
+          SUSPENDED: 'STOPPED',
         }
 
         // Try to extract image from SDL
@@ -974,6 +976,7 @@ export const resolvers = {
           FAILED: 'FAILED',
           STOPPED: 'STOPPED',
           DELETED: 'REMOVED',
+          PERMANENTLY_FAILED: 'FAILED',
         }
 
         unified.push({
@@ -1614,6 +1617,30 @@ export const resolvers = {
         await context.prisma.akashDeployment.update({
           where: { id: dep.id },
           data: { status: 'CLOSED', closedAt: new Date() },
+        })
+      }
+
+      // Best-effort: delete orphaned Phala CVMs before deleting service
+      const orphanedPhala = await context.prisma.phalaDeployment.findMany({
+        where: {
+          serviceId: id,
+          status: { in: ['FAILED', 'PERMANENTLY_FAILED'] },
+        },
+        select: { id: true, appId: true },
+      })
+      for (const dep of orphanedPhala) {
+        if (dep.appId && dep.appId !== 'pending') {
+          try {
+            const { getPhalaOrchestrator } = await import('../services/phala/index.js')
+            const orchestrator = getPhalaOrchestrator(context.prisma)
+            await orchestrator.deletePhalaDeployment(dep.appId)
+          } catch {
+            // Non-fatal — the CVM may already be deleted
+          }
+        }
+        await context.prisma.phalaDeployment.update({
+          where: { id: dep.id },
+          data: { status: 'DELETED' },
         })
       }
 

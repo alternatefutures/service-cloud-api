@@ -10,11 +10,13 @@
  */
 
 import type { PrismaClient } from '@prisma/client'
+import { getAkashOrchestrator } from '../akash/orchestrator.js'
+import { getPhalaOrchestrator } from '../phala/index.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('stale-sweeper')
 
-const STALE_THRESHOLD_MS = 15 * 60 * 1000 // 15 minutes
+const STALE_THRESHOLD_MS = 25 * 60 * 1000 // 25 minutes
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000   // 5 minutes
 
 const AKASH_INTERMEDIATE_STATES = [
@@ -37,11 +39,20 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         status: { in: [...AKASH_INTERMEDIATE_STATES] },
         updatedAt: { lt: cutoff },
       },
-      select: { id: true, status: true, updatedAt: true, retryCount: true },
+      select: { id: true, status: true, updatedAt: true, retryCount: true, dseq: true },
     })
 
     for (const dep of staleAkash) {
       log.warn(`Akash deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+      if (dep.dseq && Number(dep.dseq) > 0) {
+        try {
+          const orchestrator = getAkashOrchestrator(prisma)
+          await orchestrator.closeDeployment(Number(dep.dseq))
+          log.info(`Closed on-chain deployment dseq=${dep.dseq} during stale sweep`)
+        } catch (closeErr) {
+          log.warn({ dseq: String(dep.dseq), err: closeErr }, 'Failed to close on-chain deployment during sweep — may still be leaking')
+        }
+      }
       await prisma.akashDeployment.update({
         where: { id: dep.id },
         data: {
@@ -65,11 +76,20 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         status: { in: [...PHALA_INTERMEDIATE_STATES] },
         updatedAt: { lt: cutoff },
       },
-      select: { id: true, status: true, updatedAt: true, retryCount: true },
+      select: { id: true, status: true, updatedAt: true, retryCount: true, appId: true },
     })
 
     for (const dep of stalePhala) {
       log.warn(`Phala deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+      if (dep.appId && dep.appId !== 'pending') {
+        try {
+          const orchestrator = getPhalaOrchestrator(prisma)
+          await orchestrator.deletePhalaDeployment(dep.appId)
+          log.info(`Deleted CVM ${dep.appId} during stale sweep`)
+        } catch (delErr) {
+          log.warn({ appId: dep.appId, err: delErr }, 'Failed to delete CVM during sweep')
+        }
+      }
       await prisma.phalaDeployment.update({
         where: { id: dep.id },
         data: {

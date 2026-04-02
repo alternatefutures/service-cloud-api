@@ -243,7 +243,7 @@ export async function handleSubmitTx(
   // Abort if user manually closed a sibling deployment for this service
   if (deployment.retryCount > 0) {
     const userCancelled = await prisma.akashDeployment.findFirst({
-      where: { serviceId: deployment.serviceId, status: 'CLOSED', closedAt: { not: null } },
+      where: { serviceId: deployment.serviceId, status: { in: ['CLOSED', 'SUSPENDED'] } },
       select: { id: true },
     })
     if (userCancelled) {
@@ -443,6 +443,11 @@ export async function handleCheckBids(
     },
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
+
+  await prisma.akashDeployment.update({
+    where: { id: deploymentId },
+    data: { updatedAt: new Date() },
+  })
 
   // Ensure the verified/blocked provider cache is fresh from DB
   await providerSelector.ensureFresh(prisma)
@@ -923,6 +928,11 @@ export async function handlePollUrls(
   )
     return
 
+  await prisma.akashDeployment.update({
+    where: { id: deploymentId },
+    data: { updatedAt: new Date() },
+  })
+
   emitProgress(
     deploymentId,
     'POLL_URLS',
@@ -1181,8 +1191,7 @@ export async function handleFailure(
     const userCancelled = await prisma.akashDeployment.findFirst({
       where: {
         serviceId: deployment.serviceId,
-        status: 'CLOSED',
-        closedAt: { not: null },
+        status: { in: ['CLOSED', 'SUSPENDED'] },
       },
       select: { id: true },
     })
@@ -1190,7 +1199,7 @@ export async function handleFailure(
       log.info(`Skipping retry for ${deploymentId} — user cancelled a sibling deployment`)
       await prisma.akashDeployment.update({
         where: { id: deploymentId },
-        data: { status: 'PERMANENTLY_FAILED' as any },
+        data: { status: 'PERMANENTLY_FAILED' },
       })
       deploymentEvents.emitStatus({
         deploymentId,
@@ -1306,7 +1315,7 @@ export async function handleFailure(
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'PERMANENTLY_FAILED' as any },
+      data: { status: 'PERMANENTLY_FAILED' },
     })
 
     if (
