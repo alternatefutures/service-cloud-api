@@ -283,7 +283,7 @@ export const akashMutations = {
 
     // ── Validate and create deployment policy ────────────────
     let policyId: string | undefined
-    let estimatedDailyCostCents = BILLING_CONFIG.akash.minBalanceCentsToLaunch
+    let estimatedDailyCostCents: number = BILLING_CONFIG.akash.minBalanceCentsToLaunch
     if (input.policy) {
       const validation = validatePolicyInput(input.policy)
       if (!validation.allowed) {
