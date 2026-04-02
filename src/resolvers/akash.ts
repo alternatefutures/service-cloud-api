@@ -10,10 +10,12 @@ import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 import { getEscrowService } from '../services/billing/escrowService.js'
 import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
+import { assertDeployBalance } from './balanceCheck.js'
 import type { Context } from './types.js'
 import { createLogger } from '../lib/logger.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
+import { BILLING_CONFIG } from '../config/billing.js'
 
 const log = createLogger('resolver-akash')
 
@@ -110,6 +112,50 @@ async function parseAkashDeploymentResources(parent: any, context: Context) {
     memoryBytes: memoryMatch ? parseSizeToBytes(memoryMatch[1]) : null,
     storageBytes: storageMatches.length > 0 ? storageBytes : null,
     gpuUnits: gpuMatch ? Math.round(parseFloat(gpuMatch[1])) : null,
+  }
+}
+
+/**
+ * Estimate daily USD cost (in cents) for a GPU deployment using provider registry pricing.
+ * Falls back to a conservative $18/day if no registry data available.
+ */
+async function estimateGpuDailyCost(
+  prisma: import('@prisma/client').PrismaClient,
+  gpuUnits: number,
+  gpuModels: string[]
+): Promise<number> {
+  try {
+    const where: any = {
+      verified: true,
+      blocked: false,
+      gpuAvailable: { gt: 0 },
+      minPriceUact: { not: null },
+    }
+    if (gpuModels.length > 0) {
+      where.gpuModels = { hasSome: gpuModels.map(m => m.toLowerCase()) }
+    }
+
+    const providers = await prisma.computeProvider.findMany({
+      where,
+      select: { minPriceUact: true },
+    })
+
+    if (providers.length === 0) return 1800 * gpuUnits
+
+    const { getAktUsdPrice, akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } =
+      await import('../config/pricing.js')
+    const aktPrice = await getAktUsdPrice()
+
+    const minUact = providers.reduce(
+      (min, p) => (p.minPriceUact! < min ? p.minPriceUact! : min),
+      providers[0].minPriceUact!
+    )
+    const dailyUsd = akashPricePerBlockToUsdPerDay(Number(minUact), aktPrice)
+    const withMargin = applyMargin(dailyUsd, DEFAULT_MONTHLY_MARGIN)
+    return Math.ceil(withMargin * 100) * gpuUnits
+  } catch (error) {
+    log.warn(error, 'Failed to estimate GPU cost from registry — using $18/day fallback')
+    return 1800 * gpuUnits
   }
 }
 
@@ -237,11 +283,21 @@ export const akashMutations = {
 
     // ── Validate and create deployment policy ────────────────
     let policyId: string | undefined
+    let estimatedDailyCostCents: number = BILLING_CONFIG.akash.minBalanceCentsToLaunch
     if (input.policy) {
       const validation = validatePolicyInput(input.policy)
       if (!validation.allowed) {
         throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
       }
+
+      if (input.policy.gpuUnits && input.policy.gpuUnits > 0) {
+        estimatedDailyCostCents = await estimateGpuDailyCost(
+          context.prisma,
+          input.policy.gpuUnits,
+          input.policy.acceptableGpuModels ?? []
+        )
+      }
+
       const policyRecord = await context.prisma.deploymentPolicy.create({
         data: {
           acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
@@ -257,6 +313,10 @@ export const akashMutations = {
       })
       policyId = policyRecord.id
     }
+
+    await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
+      dailyCostCents: estimatedDailyCostCents,
+    })
 
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
@@ -324,6 +384,10 @@ export const akashMutations = {
     if (!func.serviceId) {
       throw new GraphQLError('Function has no associated service in the registry')
     }
+
+    await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
+      dailyCostCents: BILLING_CONFIG.akash.minBalanceCentsToLaunch,
+    })
 
     // Mark function as deploying
     await context.prisma.aFFunction.update({

@@ -28,6 +28,8 @@ export const BILLING_CONFIG = {
   },
   thresholds: {
     lowBalanceDays: 1,
+    checkIntervalCron: '15 * * * *',
+    failClosedAboveCentsPerDay: 500,
   },
 } as const
 
