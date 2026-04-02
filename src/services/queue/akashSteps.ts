@@ -234,10 +234,27 @@ export async function handleSubmitTx(
       retryCount: true,
       depositUakt: true,
       status: true,
+      serviceId: true,
     },
   })
   if (!deployment) throw new Error(`Deployment not found: ${deploymentId}`)
   if (AKASH_TERMINAL_STATES.has(deployment.status)) return
+
+  // Abort if user manually closed a sibling deployment for this service
+  if (deployment.retryCount > 0) {
+    const userCancelled = await prisma.akashDeployment.findFirst({
+      where: { serviceId: deployment.serviceId, status: 'CLOSED', closedAt: { not: null } },
+      select: { id: true },
+    })
+    if (userCancelled) {
+      log.info(`Aborting SUBMIT_TX for retry ${deploymentId} — user cancelled a sibling`)
+      await prisma.akashDeployment.update({
+        where: { id: deploymentId },
+        data: { status: 'CLOSED', closedAt: new Date() },
+      })
+      return
+    }
+  }
 
   emitProgress(
     deploymentId,
@@ -1160,6 +1177,29 @@ export async function handleFailure(
   )
 
   if (retryCount < MAX_RETRY_COUNT) {
+    // If the user manually closed any deployment for this service, stop retrying
+    const userCancelled = await prisma.akashDeployment.findFirst({
+      where: {
+        serviceId: deployment.serviceId,
+        status: 'CLOSED',
+        closedAt: { not: null },
+      },
+      select: { id: true },
+    })
+    if (userCancelled) {
+      log.info(`Skipping retry for ${deploymentId} — user cancelled a sibling deployment`)
+      await prisma.akashDeployment.update({
+        where: { id: deploymentId },
+        data: { status: 'PERMANENTLY_FAILED' as any },
+      })
+      deploymentEvents.emitStatus({
+        deploymentId,
+        status: 'PERMANENTLY_FAILED',
+        timestamp: new Date(),
+      })
+      return
+    }
+
     log.info(`Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for deployment ${deploymentId}`)
 
     if (deployment.dseq && Number(deployment.dseq) > 0) {

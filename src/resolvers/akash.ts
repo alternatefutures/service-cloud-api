@@ -502,6 +502,32 @@ export const akashMutations = {
       })
     }
 
+    // Cancel any in-progress sibling/retry deployments for the same service
+    const IN_PROGRESS = ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING']
+    const siblings = await context.prisma.akashDeployment.findMany({
+      where: {
+        serviceId: deployment.serviceId,
+        id: { not: id },
+        status: { in: IN_PROGRESS },
+      },
+      select: { id: true, dseq: true },
+    })
+    for (const sib of siblings) {
+      if (sib.dseq && Number(sib.dseq) > 0) {
+        try {
+          const orchestrator = getAkashOrchestrator(context.prisma)
+          await orchestrator.closeDeployment(Number(sib.dseq))
+        } catch {
+          // Non-fatal
+        }
+      }
+      await context.prisma.akashDeployment.update({
+        where: { id: sib.id },
+        data: { status: 'CLOSED', closedAt },
+      })
+      log.info(`Closed sibling deployment ${sib.id} (user cancelled ${id})`)
+    }
+
     return formatDeployment(updated)
   },
 }
