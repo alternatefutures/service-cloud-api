@@ -8,11 +8,10 @@
 export {
   ProviderSelector,
   providerSelector,
+  refreshProviderCache,
   PROXY_PROVIDER,
   PROXY_PROVIDER_NAME,
-  KNOWN_PROVIDERS,
   type ServiceType,
-  type ProviderInfo,
   type ProviderSafetyResult,
   type AkashBid,
   type FilteredBid,

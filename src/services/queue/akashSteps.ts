@@ -427,6 +427,9 @@ export async function handleCheckBids(
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
 
+  // Ensure the verified/blocked provider cache is fresh from DB
+  await providerSelector.ensureFresh(prisma)
+
   emitProgress(
     deploymentId,
     'CHECK_BIDS',
@@ -526,6 +529,7 @@ export async function handleCheckBids(
         requestedGpuModels = policy.acceptableGpuModels
         const acceptable = new Set(policy.acceptableGpuModels.map(m => m.toLowerCase()))
         const gpuFilteredBids: typeof safeBids = []
+        const bidderModels: Array<{ provider: string; model: string | null }> = []
         for (const bid of safeBids) {
           const model = await resolveProviderGpuModel(
             bid.bidId.provider,
@@ -533,15 +537,19 @@ export async function handleCheckBids(
             prisma,
             deploymentId
           )
+          bidderModels.push({ provider: bid.bidId.provider, model })
           if (model && acceptable.has(model.toLowerCase())) {
             gpuFilteredBids.push(bid)
           }
         }
         if (gpuFilteredBids.length === 0) {
+          log.info(
+            `Policy GPU filter rejected all ${safeBids.length} bid(s). Requested [${policy.acceptableGpuModels.join(', ')}]. Bidder models: ${bidderModels.map(b => `${b.provider}:${b.model ?? 'unknown'}`).join(', ')}`
+          )
           await enqueueNext('/queue/akash/step', {
             step: 'HANDLE_FAILURE',
             deploymentId,
-            errorMessage: `No providers offer the requested GPU models: ${policy.acceptableGpuModels.join(', ')}`,
+            errorMessage: `No current preferred bids matched requested GPU models: ${policy.acceptableGpuModels.join(', ')}`,
           } satisfies AkashHandleFailurePayload)
           return
         }
@@ -680,7 +688,7 @@ async function resolveProviderGpuModel(
       const gpuMatch = attr.key.match(
         /capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/
       )
-      if (gpuMatch?.[2]) return `${gpuMatch[1]}-${gpuMatch[2]}`
+      if (gpuMatch?.[2]) return gpuMatch[2]
     }
   } catch (err) {
     log.warn({ detail: err instanceof Error ? err.message : err }, `Could not resolve GPU model for provider ${providerAddr}`)

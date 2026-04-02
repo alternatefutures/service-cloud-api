@@ -43,6 +43,8 @@ import {
   handlePolicyWebhook,
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
+import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
+import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId } from './lib/requestContext.js'
@@ -59,6 +61,7 @@ const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma)
 const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
 const computeBillingScheduler = new ComputeBillingScheduler(prisma)
+const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
@@ -208,6 +211,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
       return
     }
 
+    if (url.pathname === '/internal/provider-registry' && req.method === 'GET') {
+      await handleProviderRegistryRequest(req, res, prisma)
+      return
+    }
+
     if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
       const expectedToken = process.env.INTERNAL_AUTH_TOKEN
       const authToken = req.headers['x-internal-auth']
@@ -271,8 +279,9 @@ server.listen(port, () => {
   invoiceScheduler.start()
   usageAggregator.start()
   computeBillingScheduler.start()
+  providerRegistryScheduler.start()
   telemetryIngestionService.start()
-  log.info('billing schedulers started')
+  log.info('billing + provider registry schedulers started')
 
   startSslRenewalJob()
   log.info('SSL renewal job started')
@@ -299,6 +308,7 @@ async function gracefulShutdown(signal: string) {
   storageSnapshotScheduler.stop()
   invoiceScheduler.stop()
   computeBillingScheduler.stop()
+  providerRegistryScheduler.stop()
   server.close(async () => {
     await chatServer.shutdown()
     await usageAggregator.shutdown()

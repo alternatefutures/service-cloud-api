@@ -1224,3 +1224,74 @@ model DeploymentPolicy {
   @@index([stopReason])
   @@map("deployment_policy")
 }
+
+// ============================================
+// COMPUTE PROVIDER REGISTRY
+// ============================================
+
+enum ComputeProviderType {
+  AKASH
+  PHALA
+}
+
+model ComputeProvider {
+  id                String              @id @default(cuid())
+  address           String              @unique
+  providerType      ComputeProviderType
+  name              String?
+
+  // Verification status (from test-deploy runs)
+  verified          Boolean             @default(false)
+  blocked           Boolean             @default(false)
+  blockReason       String?             @map("block_reason")
+
+  // Live status (from hourly API scan)
+  isOnline          Boolean             @default(false)  @map("is_online")
+  lastSeenOnlineAt  DateTime?           @map("last_seen_online_at")
+
+  // GPU inventory (from live API scan)
+  gpuModels         String[]            @map("gpu_models")
+  gpuAvailable      Int                 @default(0) @map("gpu_available")
+  gpuTotal          Int                 @default(0) @map("gpu_total")
+
+  // Pricing range (from actual deployment bids, in uact)
+  minPriceUact      BigInt?             @map("min_price_uact")
+  maxPriceUact      BigInt?             @map("max_price_uact")
+
+  // Raw provider attributes from chain/API
+  attributes        Json?
+
+  // Test metadata
+  lastTestedAt      DateTime?           @map("last_tested_at")
+
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  templateResults   ProviderTemplateResult[]
+
+  @@index([providerType])
+  @@index([verified])
+  @@index([isOnline])
+  @@map("compute_provider")
+}
+
+model ProviderTemplateResult {
+  id              String          @id @default(cuid())
+
+  providerId      String          @map("provider_id")
+  provider        ComputeProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  templateId      String          @map("template_id")
+
+  passed          Boolean
+  priceUact       BigInt?         @map("price_uact")
+  durationMs      Int?            @map("duration_ms")
+  errorMessage    String?         @map("error_message")
+
+  testedAt        DateTime        @default(now()) @map("tested_at")
+
+  @@unique([providerId, templateId])
+  @@index([templateId])
+  @@index([passed])
+  @@map("provider_template_result")
+}

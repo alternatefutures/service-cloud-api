@@ -884,7 +884,7 @@ function cmdListTemplates() {
 
 // ── TEST-ALL command ──────────────────────────────────────────────────
 
-async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }) {
+async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; updateDb: boolean }) {
   const templates = getAllTemplates()
   const toTest = opts.includeGpu
     ? templates
@@ -896,11 +896,11 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
   console.log(`  Templates total: ${templates.length}`)
   console.log(`  Testing: ${toTest.length} (${opts.includeGpu ? 'including' : 'excluding'} GPU)`)
   if (opts.preferProvider) console.log(`  Prefer provider: ${opts.preferProvider}`)
-  console.log(`  Results merge into: lib/preferred-providers.json`)
+  console.log(`  Results target: ${opts.updateDb ? 'database (compute_provider)' : 'lib/preferred-providers.json (legacy)'}`)
   console.log('')
 
   const results: DeployResult[] = []
-  const providerTally: Record<string, { passed: string[]; failed: string[] }> = {}
+  const providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }> = {}
 
   for (let i = 0; i < toTest.length; i++) {
     const t = toTest[i]
@@ -929,17 +929,19 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
 
     results.push(result)
 
-    // Pause between deployments for on-chain sequence number to settle
     if (i < toTest.length - 1) await sleep(10_000)
 
     if (result.provider) {
       if (!providerTally[result.provider]) {
-        providerTally[result.provider] = { passed: [], failed: [] }
+        providerTally[result.provider] = { passed: [], failed: [], prices: [] }
       }
       if (result.passed) {
         providerTally[result.provider].passed.push(t.id)
       } else {
         providerTally[result.provider].failed.push(t.id)
+      }
+      if (result.priceUakt) {
+        providerTally[result.provider].prices.push(result.priceUakt)
       }
     }
 
@@ -975,10 +977,127 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
     }
   }
 
-  // ── Merge into preferred-providers.json ─────────────────────────────
-  // Reads existing file, adds/updates providers that passed ALL their
-  // deployments this run, preserves existing entries from prior runs.
+  // ── Persist results ────────────────────────────────────────────────
+  const MIN_PASS_RATE = 0.5
 
+  if (opts.updateDb) {
+    await persistResultsToDb(results, providerTally, MIN_PASS_RATE)
+  } else {
+    await persistResultsToJson(results, providerTally, MIN_PASS_RATE)
+  }
+
+  console.log('═'.repeat(70))
+}
+
+// ── DB persistence ────────────────────────────────────────────────────
+
+async function persistResultsToDb(
+  results: DeployResult[],
+  providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }>,
+  minPassRate: number
+) {
+  console.log('\n  Writing results to database...')
+
+  // Lazy-import Prisma so the script still works without a DB for non-DB modes
+  const { PrismaClient } = await import('@prisma/client')
+  const prisma = new PrismaClient()
+
+  try {
+    const now = new Date()
+
+    for (const [addr, tally] of Object.entries(providerTally)) {
+      const total = tally.passed.length + tally.failed.length
+      const passRate = tally.passed.length / total
+      const verified = passRate >= minPassRate && tally.passed.length > 0
+
+      // Compute min/max price from this run's bids
+      let minPrice: bigint | undefined
+      let maxPrice: bigint | undefined
+      for (const p of tally.prices) {
+        const val = BigInt(p)
+        if (minPrice === undefined || val < minPrice) minPrice = val
+        if (maxPrice === undefined || val > maxPrice) maxPrice = val
+      }
+
+      await prisma.computeProvider.upsert({
+        where: { address: addr },
+        create: {
+          address: addr,
+          providerType: 'AKASH',
+          name: `Provider ${addr.slice(5, 9)}`,
+          verified,
+          lastTestedAt: now,
+          ...(minPrice !== undefined ? { minPriceUact: minPrice } : {}),
+          ...(maxPrice !== undefined ? { maxPriceUact: maxPrice } : {}),
+        },
+        update: {
+          verified,
+          lastTestedAt: now,
+          ...(minPrice !== undefined ? { minPriceUact: minPrice } : {}),
+          ...(maxPrice !== undefined ? { maxPriceUact: maxPrice } : {}),
+        },
+      })
+
+      const icon = verified ? '✓' : '✗'
+      console.log(`  ${icon} ${addr}: ${verified ? 'VERIFIED' : 'NOT VERIFIED'} (${tally.passed.length}/${total} passed)`)
+    }
+
+    // Upsert per-template results
+    for (const result of results) {
+      if (!result.provider) continue
+
+      const provider = await prisma.computeProvider.findUnique({
+        where: { address: result.provider },
+        select: { id: true },
+      })
+      if (!provider) continue
+
+      const priceVal = result.priceUakt ? BigInt(result.priceUakt) : null
+
+      await prisma.providerTemplateResult.upsert({
+        where: {
+          providerId_templateId: {
+            providerId: provider.id,
+            templateId: result.templateId,
+          },
+        },
+        create: {
+          providerId: provider.id,
+          templateId: result.templateId,
+          passed: result.passed,
+          priceUact: priceVal,
+          durationMs: result.totalMs,
+          errorMessage: result.passed
+            ? null
+            : result.steps.filter(s => s.status !== 'OK').map(s => s.detail).join('; ').slice(0, 500) || result.error?.slice(0, 500) || null,
+          testedAt: new Date(),
+        },
+        update: {
+          passed: result.passed,
+          priceUact: priceVal,
+          durationMs: result.totalMs,
+          errorMessage: result.passed
+            ? null
+            : result.steps.filter(s => s.status !== 'OK').map(s => s.detail).join('; ').slice(0, 500) || result.error?.slice(0, 500) || null,
+          testedAt: new Date(),
+        },
+      })
+    }
+
+    const verified = await prisma.computeProvider.count({ where: { verified: true } })
+    console.log(`\n  Database updated. Total verified providers: ${verified}`)
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
+// ── Legacy JSON persistence (kept for backwards compatibility) ─────────
+
+async function persistResultsToJson(
+  _results: DeployResult[],
+  providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }>,
+  minPassRate: number
+) {
   const libDir = resolve(import.meta.dir, '../lib')
   if (!existsSync(libDir)) mkdirSync(libDir, { recursive: true })
   const outPath = resolve(libDir, 'preferred-providers.json')
@@ -1006,9 +1125,6 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
   } catch { /* first run, start empty */ }
 
   const existingByAddr = new Map(existing.providers.map(p => [p.address, p]))
-
-  // Determine which providers from this run qualify as verified
-  const MIN_PASS_RATE = 0.5
   const now = new Date().toISOString()
 
   for (const [addr, tally] of Object.entries(providerTally)) {
@@ -1017,7 +1133,7 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
 
     if (tally.passed.length === 0) continue
 
-    if (passRate >= MIN_PASS_RATE) {
+    if (passRate >= minPassRate) {
       const entry: PreferredEntry = {
         address: addr,
         name: existingByAddr.get(addr)?.name ?? `Provider ${addr.slice(5, 9)}`,
@@ -1031,10 +1147,9 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
       existingByAddr.set(addr, entry)
       console.log(`\n  ✓ ${addr}: ADDED/UPDATED (${tally.passed.length}/${total} passed)`)
     } else {
-      // Provider failed too many — remove from verified if it was there
       if (existingByAddr.has(addr)) {
         existingByAddr.delete(addr)
-        console.log(`\n  ✗ ${addr}: REMOVED (${tally.passed.length}/${total} passed, below ${MIN_PASS_RATE * 100}% threshold)`)
+        console.log(`\n  ✗ ${addr}: REMOVED (${tally.passed.length}/${total} passed, below ${minPassRate * 100}% threshold)`)
       }
     }
   }
@@ -1052,8 +1167,6 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string }
   for (const p of outFile.providers) {
     console.log(`    ${p.verified ? '●' : '○'} ${p.address} (${p.name}) — ${p.templatesPassed} passed`)
   }
-
-  console.log('═'.repeat(70))
 }
 
 // ── Main ──────────────────────────────────────────────────────────────
@@ -1068,7 +1181,7 @@ async function main() {
 
   Usage:
     bun scripts/test-deploy.ts deploy <template-id> [--close] [--provider <addr>] [--env KEY=VAL ...]
-    bun scripts/test-deploy.ts test-all [--no-gpu] [--provider <addr>]
+    bun scripts/test-deploy.ts test-all [--no-gpu] [--provider <addr>] [--update-db]
     bun scripts/test-deploy.ts status <dseq> --provider <addr>
     bun scripts/test-deploy.ts logs   <dseq> --provider <addr> [--service name] [--tail N]
     bun scripts/test-deploy.ts close  <dseq>
@@ -1077,9 +1190,10 @@ async function main() {
     bun scripts/test-deploy.ts list-templates
 
   test-all:
-    Deploys every template sequentially, records pricing, and writes
-    service-cloud-api/lib/preferred-providers.json when a single provider
-    passes all templates. GPU templates are included by default.
+    Deploys every template sequentially, records pricing.
+    --update-db writes results to the compute_provider DB tables (default).
+    Without --update-db, writes to lib/preferred-providers.json (legacy).
+    GPU templates are included by default.
     Use --no-gpu to skip GPU templates. Use --provider to force
     a specific provider for all deployments.
     `)
@@ -1142,9 +1256,10 @@ async function main() {
     }
     case 'test-all': {
       const excludeGpu = args.includes('--no-gpu')
+      const updateDb = args.includes('--update-db')
       const provIdx = args.indexOf('--provider')
       const preferProvider = provIdx >= 0 ? args[provIdx + 1] : undefined
-      await cmdTestAll({ includeGpu: !excludeGpu, preferProvider })
+      await cmdTestAll({ includeGpu: !excludeGpu, preferProvider, updateDb })
       break
     }
     case 'list-templates':

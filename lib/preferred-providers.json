@@ -1,24 +1,24 @@
 {
   "_run": "cd service-cloud-api && bun scripts/test-deploy.ts test-all",
-  "generatedAt": "2026-03-31T16:49:32.524Z",
+  "generatedAt": "2026-04-01T18:42:18.181Z",
   "providers": [
     {
       "address": "akash175llqyjvxfle9qwt740vm46772dzaznpzgm576",
       "name": "JJOzzie Tech",
       "verified": true,
-      "testedAt": "2026-03-15T20:57:35.646Z",
-      "templatesPassed": 9,
-      "templatesTested": 9,
-      "notes": "Passed: hyperscape, milady-gateway, openclaw-gateway, nanobot-gateway, postgres, redis, n8n, gitea, minecraft-server"
+      "testedAt": "2026-04-01T18:42:18.181Z",
+      "templatesPassed": 1,
+      "templatesTested": 1,
+      "notes": "Passed: gitea"
     },
     {
       "address": "akash1k94uya5rhrtj9rfw850az9aq2d6vdpjmtnlgd0",
       "name": "Provider k94",
       "verified": true,
-      "testedAt": "2026-03-15T13:20:32.918Z",
-      "templatesPassed": 4,
-      "templatesTested": 4,
-      "notes": "Handles heavier images (hyperscape, minecraft). Slightly higher prices."
+      "testedAt": "2026-04-01T18:42:18.181Z",
+      "templatesPassed": 6,
+      "templatesTested": 6,
+      "notes": "Passed: milady-gateway, openclaw-gateway, nanobot-gateway, redis, n8n, minecraft-server"
     },
     {
       "address": "akash1sevd2ymtty3dpq9ycxgkhuzzk4fe6mchqdwd4e",
@@ -60,10 +60,10 @@
       "address": "akash1ut3m97h62tty06qdq9lds85r34dxe3snjj0xfe",
       "name": "Provider 1ut3",
       "verified": true,
-      "testedAt": "2026-03-31T16:49:32.524Z",
-      "templatesPassed": 2,
-      "templatesTested": 2,
-      "notes": "Passed: ollama-gpu, comfyui"
+      "testedAt": "2026-04-01T18:42:18.181Z",
+      "templatesPassed": 3,
+      "templatesTested": 4,
+      "notes": "Passed: gpu-instance, ollama-gpu, jupyter-ml-workspace. Failed: comfyui"
     },
     {
       "address": "akash18ga02jzaq8cw52anyhzkwta5wygufgu6zsz6xc",
@@ -87,10 +87,19 @@
       "address": "akash1st7fqtuqk6hj06fkkavq0fxtw0w9sm4zzt3r5g",
       "name": "Provider 1st7",
       "verified": true,
-      "testedAt": "2026-03-31T16:49:32.524Z",
-      "templatesPassed": 5,
-      "templatesTested": 8,
-      "notes": "Passed: alternate-agent, react-vite, hugo-server, node-ws-gameserver, bun-ws-gameserver. Failed: nextjs-server, astro-server, nuxt-server"
+      "testedAt": "2026-04-01T18:42:18.181Z",
+      "templatesPassed": 6,
+      "templatesTested": 9,
+      "notes": "Passed: hyperscape, alternate-agent, react-vite, hugo-server, node-ws-gameserver, bun-ws-gameserver. Failed: nextjs-server, astro-server, nuxt-server"
+    },
+    {
+      "address": "akash1q3qgaq33qu2spkrl6nk47ukz9mzpvm00drf00v",
+      "name": "Provider 1q3q",
+      "verified": true,
+      "testedAt": "2026-04-01T18:42:18.181Z",
+      "templatesPassed": 1,
+      "templatesTested": 1,
+      "notes": "Passed: postgres"
     }
   ]
 }
