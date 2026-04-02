@@ -450,6 +450,22 @@ export const akashMutations = {
       throw new GraphQLError('Deployment is already closed')
     }
 
+    if (deployment.status === 'SUSPENDED') {
+      // On-chain deployment was already closed by the billing scheduler.
+      // Just transition SUSPENDED → CLOSED in the DB without on-chain close.
+      const updated = await context.prisma.akashDeployment.update({
+        where: { id },
+        data: { status: 'CLOSED', closedAt: new Date() },
+      })
+      if (deployment.policyId) {
+        await context.prisma.deploymentPolicy.update({
+          where: { id: deployment.policyId },
+          data: { stopReason: 'MANUAL_STOP', stoppedAt: new Date() },
+        })
+      }
+      return formatDeployment(updated)
+    }
+
     const closedAt = new Date()
 
     // Try to close on-chain, but force-close the DB record even if it fails
@@ -500,6 +516,32 @@ export const akashMutations = {
         where: { id: deployment.policyId },
         data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt },
       })
+    }
+
+    // Cancel any in-progress sibling/retry deployments for the same service
+    const IN_PROGRESS = ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING'] as const
+    const siblings = await context.prisma.akashDeployment.findMany({
+      where: {
+        serviceId: deployment.serviceId,
+        id: { not: id },
+        status: { in: [...IN_PROGRESS] },
+      },
+      select: { id: true, dseq: true },
+    })
+    for (const sib of siblings) {
+      if (sib.dseq && Number(sib.dseq) > 0) {
+        try {
+          const orchestrator = getAkashOrchestrator(context.prisma)
+          await orchestrator.closeDeployment(Number(sib.dseq))
+        } catch {
+          // Non-fatal
+        }
+      }
+      await context.prisma.akashDeployment.update({
+        where: { id: sib.id },
+        data: { status: 'CLOSED', closedAt },
+      })
+      log.info(`Closed sibling deployment ${sib.id} (user cancelled ${id})`)
     }
 
     return formatDeployment(updated)

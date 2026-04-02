@@ -23,7 +23,7 @@ describe('Phala Resolvers', () => {
         phalaDeployment: {
           findUnique: vi.fn(),
           findFirst: vi.fn(),
-          findMany: vi.fn(),
+          findMany: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
         },
         service: {

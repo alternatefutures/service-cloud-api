@@ -86,6 +86,19 @@ async function enqueueNext(path: string, body: Record<string, unknown>, delaySec
  */
 async function failDirectly(prisma: PrismaClient, deploymentId: string, errorMessage: string): Promise<void> {
   try {
+    const deployment = await prisma.phalaDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { appId: true },
+    })
+
+    if (deployment?.appId && deployment.appId !== 'pending') {
+      try {
+        await runPhalaAsync(['cvms', 'delete', deployment.appId, '--force'], 30_000)
+      } catch (delErr) {
+        log.warn({ appId: deployment.appId, err: delErr }, 'Failed to delete CVM in failDirectly')
+      }
+    }
+
     await prisma.phalaDeployment.update({
       where: { id: deploymentId },
       data: { status: 'FAILED', errorMessage: `[Queue failure] ${errorMessage}` },
@@ -192,6 +205,11 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
   })
   if (!deployment || PHALA_TERMINAL_STATES.has(deployment.status)) return
 
+  await prisma.phalaDeployment.update({
+    where: { id: deploymentId },
+    data: { updatedAt: new Date() },
+  })
+
   emitProgress(deploymentId, 'POLL_STATUS', PHALA_STEP_NUMBERS.POLL_STATUS, deployment.retryCount, `Checking CVM status (attempt ${attempt}/${PHALA_POLL_MAX_ATTEMPTS})...`)
 
   try {
@@ -235,7 +253,7 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
       await enqueueNext('/queue/phala/step', {
         step: 'HANDLE_FAILURE',
         deploymentId,
-        errorMessage: 'CVM did not start within timeout (2 minutes)',
+        errorMessage: 'CVM did not start within timeout (5 minutes)',
       } satisfies PhalaHandleFailurePayload)
       return
     }
@@ -285,6 +303,24 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
   emitProgress(deploymentId, 'HANDLE_FAILURE', PHALA_STEP_NUMBERS.HANDLE_FAILURE, retryCount, `Deployment failed: ${errorMessage}`, errorMessage)
 
   if (retryCount < MAX_RETRY_COUNT) {
+    // If the user manually stopped/deleted any deployment for this service, stop retrying
+    const userCancelled = await prisma.phalaDeployment.findFirst({
+      where: {
+        serviceId: deployment.serviceId,
+        status: { in: ['STOPPED', 'DELETED'] },
+      },
+      select: { id: true },
+    })
+    if (userCancelled) {
+      log.info(`Skipping retry for ${deploymentId} — user stopped/deleted a sibling deployment`)
+      await prisma.phalaDeployment.update({
+        where: { id: deploymentId },
+        data: { status: 'PERMANENTLY_FAILED' },
+      })
+      deploymentEvents.emitStatus({ deploymentId, status: 'PERMANENTLY_FAILED', timestamp: new Date() })
+      return
+    }
+
     log.info(`Retry ${retryCount + 1}/${MAX_RETRY_COUNT} for Phala deployment ${deploymentId}`)
 
     if (deployment.appId && deployment.appId !== 'pending') {
@@ -292,6 +328,30 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
         await runPhalaAsync(['cvms', 'delete', deployment.appId, '--force'], 30_000)
       } catch (delErr) {
         log.warn({ detail: delErr instanceof Error ? delErr.message : delErr }, 'Failed to delete CVM for retry')
+      }
+    }
+
+    let retryPolicyId: string | undefined
+    if ((deployment as any).policyId) {
+      const existingPolicy = await prisma.deploymentPolicy.findUnique({
+        where: { id: (deployment as any).policyId },
+      })
+      if (existingPolicy) {
+        const retryPolicy = await prisma.deploymentPolicy.create({
+          data: {
+            acceptableGpuModels: existingPolicy.acceptableGpuModels,
+            gpuUnits: existingPolicy.gpuUnits,
+            gpuVendor: existingPolicy.gpuVendor,
+            maxBudgetUsd: existingPolicy.maxBudgetUsd,
+            maxMonthlyUsd: existingPolicy.maxMonthlyUsd,
+            runtimeMinutes: existingPolicy.runtimeMinutes,
+            expiresAt: existingPolicy.runtimeMinutes
+              ? new Date(Date.now() + existingPolicy.runtimeMinutes * 60_000)
+              : null,
+            totalSpentUsd: existingPolicy.totalSpentUsd,
+          },
+        })
+        retryPolicyId = retryPolicy.id
       }
     }
 
@@ -312,6 +372,7 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
         organizationId: deployment.organizationId,
         retryCount: retryCount + 1,
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,
+        policyId: retryPolicyId,
       },
     })
 
@@ -336,7 +397,7 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
 
     await prisma.phalaDeployment.update({
       where: { id: deploymentId },
-      data: { status: 'PERMANENTLY_FAILED' as any, errorMessage: `Permanently failed after ${MAX_RETRY_COUNT + 1} attempts: ${errorMessage}` },
+      data: { status: 'PERMANENTLY_FAILED', errorMessage: `Permanently failed after ${MAX_RETRY_COUNT + 1} attempts: ${errorMessage}` },
     })
 
     if (deployment.service?.type === 'FUNCTION' && deployment.service?.afFunction) {

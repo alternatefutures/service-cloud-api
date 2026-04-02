@@ -41,6 +41,7 @@ import { healthQueries } from './health.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
+import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 
 export type { Context }
 
@@ -928,6 +929,8 @@ export const resolvers = {
           ACTIVE: 'ACTIVE',
           FAILED: 'FAILED',
           CLOSED: 'REMOVED',
+          PERMANENTLY_FAILED: 'FAILED',
+          SUSPENDED: 'STOPPED',
         }
 
         // Try to extract image from SDL
@@ -973,6 +976,7 @@ export const resolvers = {
           FAILED: 'FAILED',
           STOPPED: 'STOPPED',
           DELETED: 'REMOVED',
+          PERMANENTLY_FAILED: 'FAILED',
         }
 
         unified.push({
@@ -1558,12 +1562,12 @@ export const resolvers = {
         where: { id },
         include: {
           akashDeployments: {
-            where: { status: { notIn: ['CLOSED', 'FAILED'] } },
+            where: { status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'] } },
             orderBy: { createdAt: 'desc' },
             take: 1,
           },
           phalaDeployments: {
-            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED'] } },
+            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] } },
             orderBy: { createdAt: 'desc' },
             take: 1,
           },
@@ -1591,6 +1595,53 @@ export const resolvers = {
         throw new GraphQLError(
           `Cannot delete "${service.name}" — it has an active Phala deployment (${activePhala.status}). Stop or delete the deployment first.`
         )
+      }
+
+      // Best-effort: close any orphaned on-chain deployments before deleting
+      const orphanedAkash = await context.prisma.akashDeployment.findMany({
+        where: {
+          serviceId: id,
+          status: { in: ['FAILED', 'PERMANENTLY_FAILED'] },
+        },
+        select: { id: true, dseq: true },
+      })
+      for (const dep of orphanedAkash) {
+        if (dep.dseq && Number(dep.dseq) > 0) {
+          try {
+            const orchestrator = getAkashOrchestrator(context.prisma)
+            await orchestrator.closeDeployment(Number(dep.dseq))
+          } catch {
+            // Non-fatal — the dseq may already be closed on-chain
+          }
+        }
+        await context.prisma.akashDeployment.update({
+          where: { id: dep.id },
+          data: { status: 'CLOSED', closedAt: new Date() },
+        })
+      }
+
+      // Best-effort: delete orphaned Phala CVMs before deleting service
+      const orphanedPhala = await context.prisma.phalaDeployment.findMany({
+        where: {
+          serviceId: id,
+          status: { in: ['FAILED', 'PERMANENTLY_FAILED'] },
+        },
+        select: { id: true, appId: true },
+      })
+      for (const dep of orphanedPhala) {
+        if (dep.appId && dep.appId !== 'pending') {
+          try {
+            const { getPhalaOrchestrator } = await import('../services/phala/index.js')
+            const orchestrator = getPhalaOrchestrator(context.prisma)
+            await orchestrator.deletePhalaDeployment(dep.appId)
+          } catch {
+            // Non-fatal — the CVM may already be deleted
+          }
+        }
+        await context.prisma.phalaDeployment.update({
+          where: { id: dep.id },
+          data: { status: 'DELETED' },
+        })
       }
 
       await context.prisma.service.delete({ where: { id } })

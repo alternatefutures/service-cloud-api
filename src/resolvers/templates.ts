@@ -465,9 +465,6 @@ export const templateMutations = {
     context: Context
   ) => {
     await assertSubscriptionActive(context.organizationId)
-    await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
-      dailyCostCents: BILLING_CONFIG.phala.minBalanceCentsToLaunch,
-    })
     if (!context.userId) throw new GraphQLError('Not authenticated')
 
     const template = getTemplateById(input.templateId)
@@ -582,6 +579,14 @@ export const templateMutations = {
       input.policy?.acceptableGpuModels,
       input.policy?.gpuUnits
     )
+
+    const estimatedDailyCostCents = Math.max(
+      BILLING_CONFIG.phala.minBalanceCentsToLaunch,
+      Math.ceil(phalaInstance.hourlyRateUsd * 24 * 100)
+    )
+    await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
+      dailyCostCents: estimatedDailyCostCents,
+    })
 
     const composeContent = generateComposeFromTemplate(template, {
       serviceName: slug,
