@@ -7,6 +7,7 @@ import { DeploymentService } from '../services/deployment/index.js'
 import type { StorageType } from '../services/storage/factory.js'
 import { deploymentEvents } from '../services/events/index.js'
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js'
+import { getBillingApiClient } from '../services/billing/billingApiClient.js'
 import { chatResolvers } from './chat.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
@@ -728,25 +729,26 @@ export const resolvers = {
       const totalCount = totalAkash + totalPhala
       const deploymentsFormatted = `${activeCount} active`
 
-      // ── Spend Metrics ─────────────────────────────────────────────
-      const orgId = context.organizationId
+      // ── Spend Metrics (real ledger data from auth service) ────────
       let currentMonthCents = 0
 
-      if (orgId) {
-        const now = new Date()
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-
-        const escrows = await context.prisma.deploymentEscrow.findMany({
-          where: { organizationId: orgId },
-          select: { consumedCents: true, lastBilledAt: true, dailyRateCents: true, createdAt: true },
+      // Resolve org: context may have it, or derive from projects
+      let spendOrgId = context.organizationId
+      if (!spendOrgId && projectIds.length > 0) {
+        const firstProject = await context.prisma.project.findFirst({
+          where: { id: { in: projectIds } },
+          select: { organizationId: true },
         })
+        spendOrgId = firstProject?.organizationId ?? undefined
+      }
 
-        for (const e of escrows) {
-          const escrowStart = e.createdAt > monthStart ? e.createdAt : monthStart
-          const escrowEnd = e.lastBilledAt ?? now
-          if (escrowEnd <= monthStart) continue
-          const days = Math.max(0, (escrowEnd.getTime() - escrowStart.getTime()) / 86_400_000)
-          currentMonthCents += Math.round(days * e.dailyRateCents)
+      if (spendOrgId) {
+        try {
+          const billingClient = getBillingApiClient()
+          const spend = await billingClient.getOrgMonthlySpend(spendOrgId)
+          currentMonthCents = spend.currentMonthCents
+        } catch (err) {
+          console.warn('[workspaceMetrics] Failed to fetch monthly spend from auth:', err)
         }
       }
 

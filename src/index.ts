@@ -1,4 +1,5 @@
 import './instrumentation.js'
+
 import { createYoga } from 'graphql-yoga'
 import type { Plugin } from 'graphql-yoga'
 import { createServer } from 'node:http'
