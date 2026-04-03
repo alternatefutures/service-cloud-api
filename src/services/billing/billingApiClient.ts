@@ -191,6 +191,17 @@ class BillingApiClient {
   }
 
   // ========================================
+  // MONTHLY SPEND
+  // ========================================
+
+  /**
+   * Get total DEBIT spend for the current month from auth ledger
+   */
+  async getOrgMonthlySpend(orgId: string): Promise<{ orgId: string; currentMonthCents: number }> {
+    return this.request(`/org-monthly-spend/${orgId}`)
+  }
+
+  // ========================================
   // SUBSCRIPTION STATUS
   // ========================================
 
