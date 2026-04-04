@@ -591,8 +591,13 @@ export class StripeService {
         return 'TRIALING'
       case 'paused':
         return 'PAUSED'
+      case 'incomplete':
+      case 'incomplete_expired':
+      case 'unpaid':
+        return 'PAST_DUE'
       default:
-        return 'ACTIVE'
+        log.warn({ status }, 'Unknown Stripe subscription status, defaulting to PAST_DUE')
+        return 'PAST_DUE'
     }
   }
 }

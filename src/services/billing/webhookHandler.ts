@@ -79,10 +79,8 @@ export async function handleStripeWebhook(
       res.end(JSON.stringify({ received: true }))
     } catch (err) {
       log.error(err, 'Error processing webhook')
-      // Still return 200 to prevent Stripe from retrying
-      // Log the error for investigation
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ received: true, error: 'Processing failed' }))
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Processing failed' }))
     }
   } catch (err) {
     log.error(err, 'Webhook handler error')

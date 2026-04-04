@@ -17,28 +17,6 @@ import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('invoice-service')
 import { join } from 'path'
-import { getBillingApiClient } from './billingApiClient.js'
-
-/** Compute ledger entry for invoice detail */
-interface ComputeLedgerEntry {
-  date: string
-  description: string
-  provider: string
-  debitCents: number
-  creditCents: number
-  balanceCents: number
-}
-
-/** Escrow detail line for invoice */
-interface EscrowDetail {
-  deploymentId: string
-  dseq: string
-  depositedCents: number
-  consumedCents: number
-  remainingCents: number
-  dailyRateCents: number
-  status: string
-}
 
 export class InvoiceService {
   constructor(private prisma: PrismaClient) {}
@@ -171,10 +149,25 @@ export class InvoiceService {
     periodStart: Date,
     periodEnd: Date
   ) {
-    // Akash escrow consumption in the period
+    // Resolve the customer's org to scope compute queries
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      select: { userId: true },
+    })
+    const orgIds: string[] = []
+    if (customer?.userId) {
+      const memberships = await this.prisma.organizationMember.findMany({
+        where: { userId: customer.userId },
+        select: { organizationId: true },
+      })
+      orgIds.push(...memberships.map(m => m.organizationId))
+    }
+
+    // Akash escrow consumption in the period — scoped to customer's orgs
     const akashEscrows = await this.prisma.deploymentEscrow.findMany({
       where: {
         createdAt: { lte: periodEnd },
+        ...(orgIds.length > 0 ? { organizationId: { in: orgIds } } : {}),
         OR: [
           { status: 'ACTIVE', lastBilledAt: { gte: periodStart } },
           { status: 'REFUNDED', updatedAt: { gte: periodStart } },
@@ -209,10 +202,11 @@ export class InvoiceService {
       }
     }
 
-    // Phala hourly charges in the period
+    // Phala hourly charges in the period — scoped to customer's orgs
     const phalaDeployments = await this.prisma.phalaDeployment.findMany({
       where: {
         totalBilledCents: { gt: 0 },
+        ...(orgIds.length > 0 ? { organizationId: { in: orgIds } } : {}),
         OR: [
           { status: 'ACTIVE', lastBilledAt: { gte: periodStart } },
           { status: 'STOPPED', updatedAt: { gte: periodStart } },
