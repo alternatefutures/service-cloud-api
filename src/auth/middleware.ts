@@ -461,7 +461,7 @@ export async function getAuthContext(
       projectId,
     }
   } catch (error) {
-    log.error(error, 'Auth error')
+    log.error(error, 'Auth error — failing closed (unauthenticated)')
     return {}
   }
 }

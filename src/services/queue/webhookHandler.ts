@@ -27,10 +27,21 @@ export function initQueueHandler(prisma: PrismaClient) {
   _prisma = prisma
 }
 
+const MAX_BODY_BYTES = 256 * 1024 // 256KB — QStash payloads are small JSON
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    let totalBytes = 0
+    req.on('data', (chunk: Buffer) => {
+      totalBytes += chunk.length
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy()
+        reject(new Error('Request body too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
     req.on('error', reject)
   })
@@ -102,7 +113,13 @@ export async function handleAkashWebhook(req: IncomingMessage, res: ServerRespon
     return
   }
 
-  const body = await readBody(req)
+  let body: string
+  try {
+    body = await readBody(req)
+  } catch {
+    sendJson(res, 413, { error: 'Request body too large' })
+    return
+  }
 
   if (isQStashEnabled()) {
     const signature = req.headers['upstash-signature'] as string
@@ -115,6 +132,10 @@ export async function handleAkashWebhook(req: IncomingMessage, res: ServerRespon
       sendJson(res, 401, { error: 'Invalid signature' })
       return
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    log.error('QStash not configured in production — rejecting webhook')
+    sendJson(res, 503, { error: 'Queue system not configured' })
+    return
   }
 
   let payload: AkashJobPayload
@@ -145,7 +166,13 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
     return
   }
 
-  const body = await readBody(req)
+  let body: string
+  try {
+    body = await readBody(req)
+  } catch {
+    sendJson(res, 413, { error: 'Request body too large' })
+    return
+  }
 
   if (isQStashEnabled()) {
     const signature = req.headers['upstash-signature'] as string
@@ -158,6 +185,10 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
       sendJson(res, 401, { error: 'Invalid signature' })
       return
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    log.error('QStash not configured in production — rejecting webhook')
+    sendJson(res, 503, { error: 'Queue system not configured' })
+    return
   }
 
   let payload: PhalaJobPayload
@@ -188,7 +219,13 @@ export async function handlePolicyWebhook(req: IncomingMessage, res: ServerRespo
     return
   }
 
-  const body = await readBody(req)
+  let body: string
+  try {
+    body = await readBody(req)
+  } catch {
+    sendJson(res, 413, { error: 'Request body too large' })
+    return
+  }
 
   if (isQStashEnabled()) {
     const signature = req.headers['upstash-signature'] as string
@@ -201,6 +238,10 @@ export async function handlePolicyWebhook(req: IncomingMessage, res: ServerRespo
       sendJson(res, 401, { error: 'Invalid signature' })
       return
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    log.error('QStash not configured in production — rejecting webhook')
+    sendJson(res, 503, { error: 'Queue system not configured' })
+    return
   }
 
   let payload: PolicyJobPayload

@@ -128,7 +128,9 @@ const yoga = createYoga({
     }
   },
   cors: {
-    origin: process.env.APP_URL || '*',
+    origin: process.env.APP_URL || (process.env.NODE_ENV === 'production'
+      ? 'https://alternatefutures.ai'
+      : 'http://localhost:3000'),
     credentials: true,
   },
   graphqlEndpoint: '/graphql',
@@ -145,7 +147,7 @@ const helmetMiddleware = helmet({
       styleSrc: ["'self'", "'unsafe-inline'"], // GraphiQL needs inline styles
       scriptSrc: ["'self'", "'unsafe-inline'"], // GraphiQL needs inline scripts
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", process.env.APP_URL || '*'],
+      connectSrc: ["'self'", process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://alternatefutures.ai' : 'http://localhost:3000')],
     },
   },
   crossOriginEmbedderPolicy: false, // Allow GraphiQL to work
@@ -310,11 +312,23 @@ async function gracefulShutdown(signal: string) {
   invoiceScheduler.stop()
   computeBillingScheduler.stop()
   providerRegistryScheduler.stop()
+
+  const forceExitTimeout = setTimeout(() => {
+    log.warn('Graceful shutdown timed out after 15s — forcing exit')
+    process.exit(1)
+  }, 15_000)
+  forceExitTimeout.unref()
+
   server.close(async () => {
-    await chatServer.shutdown()
-    await usageAggregator.shutdown()
-    await telemetryIngestionService.stop()
-    await prisma.$disconnect()
+    try {
+      await chatServer.shutdown()
+      await usageAggregator.shutdown()
+      await telemetryIngestionService.stop()
+      await prisma.$disconnect()
+    } catch (err) {
+      log.error(err, 'Error during shutdown cleanup')
+    }
+    clearTimeout(forceExitTimeout)
     process.exit(0)
   })
 }
