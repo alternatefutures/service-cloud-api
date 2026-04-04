@@ -28,6 +28,7 @@ const PHALA_INTERMEDIATE_STATES = [
 ] as const
 
 let sweepInterval: ReturnType<typeof setInterval> | null = null
+let activeSweep: Promise<void> | null = null
 
 async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS)
@@ -107,25 +108,35 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
   }
 }
 
-export function startStaleDeploymentSweeper(prisma: PrismaClient): void {
-  // Run immediately on startup
-  sweepStaleDeployments(prisma).catch(err => {
-    log.error(err as Error, 'Initial sweep failed')
-  })
+function runSweep(prisma: PrismaClient): void {
+  const sweep = sweepStaleDeployments(prisma)
+    .catch(err => log.error(err as Error, 'Sweep failed'))
+    .finally(() => { if (activeSweep === sweep) activeSweep = null })
+  activeSweep = sweep
+}
 
-  // Then run periodically
+export function startStaleDeploymentSweeper(prisma: PrismaClient): void {
+  runSweep(prisma)
+
   sweepInterval = setInterval(() => {
-    sweepStaleDeployments(prisma).catch(err => {
-      log.error(err as Error, 'Periodic sweep failed')
-    })
+    if (!activeSweep) runSweep(prisma)
   }, SWEEP_INTERVAL_MS)
 
   log.info(`Stale deployment sweeper started (every ${SWEEP_INTERVAL_MS / 1000}s, threshold ${STALE_THRESHOLD_MS / 1000}s)`)
 }
 
-export function stopStaleDeploymentSweeper(): void {
+/**
+ * Stop the sweeper and wait for any in-flight sweep to complete.
+ * Safe to call during graceful shutdown — Prisma won't disconnect
+ * while a sweep is still running.
+ */
+export async function stopStaleDeploymentSweeper(): Promise<void> {
   if (sweepInterval) {
     clearInterval(sweepInterval)
     sweepInterval = null
+  }
+  if (activeSweep) {
+    log.info('Waiting for in-flight sweep to complete…')
+    await activeSweep
   }
 }

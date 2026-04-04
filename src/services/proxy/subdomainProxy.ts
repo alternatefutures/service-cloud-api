@@ -111,42 +111,64 @@ class BackendCache {
 // SSRF protection — block proxying to internal/private IPs
 // ---------------------------------------------------------------------------
 
-function isPrivateIP(ip: string): boolean {
+function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number)
-  if (parts.length === 4) {
-    // 10.0.0.0/8
-    if (parts[0] === 10) return true
-    // 172.16.0.0/12
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
-    // 192.168.0.0/16
-    if (parts[0] === 192 && parts[1] === 168) return true
-    // 127.0.0.0/8 (loopback)
-    if (parts[0] === 127) return true
-    // 169.254.0.0/16 (link-local, includes AWS metadata 169.254.169.254)
-    if (parts[0] === 169 && parts[1] === 254) return true
-    // 0.0.0.0
-    if (parts.every((p) => p === 0)) return true
-  }
-  // IPv6 loopback / link-local
-  if (ip === '::1' || ip.startsWith('fe80:') || ip.startsWith('fc00:') || ip.startsWith('fd00:')) {
-    return true
-  }
+  if (parts.length !== 4) return false
+  if (parts[0] === 10) return true
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+  if (parts[0] === 192 && parts[1] === 168) return true
+  if (parts[0] === 127) return true
+  if (parts[0] === 169 && parts[1] === 254) return true
+  if (parts.every((p) => p === 0)) return true
   return false
 }
 
-async function isInternalTarget(targetUrl: string): Promise<boolean> {
+function isPrivateIP(ip: string): boolean {
+  // IPv4-mapped IPv6 (::ffff:10.0.0.1)
+  const v4Mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
+  if (v4Mapped) return isPrivateIPv4(v4Mapped[1])
+
+  if (isPrivateIPv4(ip)) return true
+
+  const lower = ip.toLowerCase()
+  if (lower === '::1') return true
+  if (lower === '::') return true
+  if (lower.startsWith('fe80:')) return true      // link-local
+  if (lower.startsWith('fc00:')) return true      // unique local
+  if (lower.startsWith('fd')) return true          // unique local (fd00::/8)
+  if (lower.startsWith('fec0:')) return true       // site-local (deprecated but exists)
+  if (lower.startsWith('::ffff:')) return true     // catch remaining mapped addresses
+
+  return false
+}
+
+/**
+ * Resolves a target URL's hostname to an IP and validates it's not internal.
+ *
+ * Returns the original URL if safe, null if blocked.
+ * We preserve the original hostname (rather than IP-pinning) because some
+ * backends (Phala CDN, etc.) rely on Host-header routing. The DNS TOCTOU
+ * window is acceptable here since target URLs come from our own database,
+ * not user input.
+ */
+async function resolveAndValidateTarget(targetUrl: string): Promise<string | null> {
   try {
     const url = new URL(targetUrl)
     const hostname = url.hostname
 
+    let resolvedIP: string
     if (isIP(hostname)) {
-      return isPrivateIP(hostname)
+      resolvedIP = hostname
+    } else {
+      const result = await lookup(hostname)
+      resolvedIP = result.address
     }
 
-    const { address } = await lookup(hostname)
-    return isPrivateIP(address)
+    if (isPrivateIP(resolvedIP)) return null
+
+    return targetUrl
   } catch {
-    return true
+    return null
   }
 }
 
@@ -242,17 +264,26 @@ export class SubdomainProxy {
     const { tier, slug } = parsed
     const cacheKey = `${tier}:${slug}`
 
-    // Check cache first
+    // Check cache first (cached targets are already IP-pinned and validated)
     let cached = this.cache.get(cacheKey)
     if (!cached) {
-      const lookup = await this.lookupBackend(slug, tier)
-      if (lookup.target) {
-        this.cache.set(cacheKey, lookup.target, lookup.status)
-        cached = this.cache.get(cacheKey)
-      } else {
-        this.sendError(res, lookup)
+      const backend = await this.lookupBackend(slug, tier)
+      if (!backend.target) {
+        this.sendError(res, backend)
         return true
       }
+
+      // Resolve DNS and validate BEFORE caching — prevents caching internal targets
+      // and pins the IP to eliminate TOCTOU between check and proxy connect
+      const pinnedTarget = await resolveAndValidateTarget(backend.target)
+      if (!pinnedTarget) {
+        log.warn({ slug, tier, target: backend.target }, 'SSRF blocked: internal target')
+        this.sendError(res, { target: null, status: 'INTERNAL_ERROR', tier })
+        return true
+      }
+
+      this.cache.set(cacheKey, pinnedTarget, backend.status)
+      cached = this.cache.get(cacheKey)
     }
 
     if (!cached) {
@@ -260,14 +291,6 @@ export class SubdomainProxy {
       return true
     }
 
-    if (await isInternalTarget(cached.target)) {
-      log.warn({ slug, tier, target: cached.target }, 'SSRF blocked: internal target')
-      this.cache.invalidate(cacheKey)
-      this.sendError(res, { target: null, status: 'INTERNAL_ERROR', tier })
-      return true
-    }
-
-    // Add forwarding headers
     req.headers['x-forwarded-host'] = host
     req.headers['x-forwarded-proto'] = 'https'
     req.headers['x-af-tier'] = tier
@@ -295,21 +318,24 @@ export class SubdomainProxy {
 
     let cached = this.cache.get(cacheKey)
     if (!cached) {
-      const lookup = await this.lookupBackend(slug, tier)
-      if (lookup.target) {
-        this.cache.set(cacheKey, lookup.target, lookup.status)
-        cached = this.cache.get(cacheKey)
+      const backend = await this.lookupBackend(slug, tier)
+      if (!backend.target) {
+        socket.destroy()
+        return true
       }
+
+      const pinnedTarget = await resolveAndValidateTarget(backend.target)
+      if (!pinnedTarget) {
+        log.warn({ slug, tier, target: backend.target }, 'SSRF blocked: internal WS target')
+        socket.destroy()
+        return true
+      }
+
+      this.cache.set(cacheKey, pinnedTarget, backend.status)
+      cached = this.cache.get(cacheKey)
     }
 
     if (!cached) {
-      socket.destroy()
-      return true
-    }
-
-    if (await isInternalTarget(cached.target)) {
-      log.warn({ slug, tier, target: cached.target }, 'SSRF blocked: internal WS target')
-      this.cache.invalidate(cacheKey)
       socket.destroy()
       return true
     }
