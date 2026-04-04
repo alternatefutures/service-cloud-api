@@ -248,16 +248,48 @@ async function validateTokenViaAuthService(
 }
 
 /**
- * Ensure the Organization and OrganizationMember rows exist when we have
- * both a userId and organizationId from the request context.
- * Runs fire-and-forget so it never blocks the request.
+ * Validate org membership locally, then verify via auth service if not found.
+ * On successful remote verification, syncs org/membership locally for future fast-path.
+ * NEVER creates membership from unverified request headers.
  */
-async function ensureOrgMembership(
+async function validateAndSyncOrgMembership(
   prisma: PrismaClient,
+  token: string,
   userId: string,
   organizationId: string
-): Promise<void> {
+): Promise<boolean> {
   try {
+    const membership = await prisma.organizationMember.findUnique({
+      where: {
+        organizationId_userId: { organizationId, userId },
+      },
+    })
+    if (membership) return true
+  } catch {
+    // DB error — fall through to auth service verification
+  }
+
+  const authServiceUrl = process.env.AUTH_SERVICE_URL
+  if (!authServiceUrl) return false
+
+  try {
+    const res = await fetch(`${authServiceUrl}/auth/me`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    })
+    if (!res.ok) return false
+
+    const data = (await res.json()) as {
+      organizations?: Array<{ id: string; role?: string }>
+    }
+    const match = (data.organizations || []).find(
+      (o) => o.id === organizationId
+    )
+    if (!match) return false
+
     await prisma.organization.upsert({
       where: { id: organizationId },
       update: {},
@@ -268,27 +300,16 @@ async function ensureOrgMembership(
         organizationId_userId: { organizationId, userId },
       },
       update: {},
-      create: { organizationId, userId, role: 'OWNER' },
-    })
-  } catch {
-    // Non-critical — don't block auth
-  }
-}
-
-// Fixed by audit 2026-03: validate X-Organization-Id header against actual membership
-async function validateOrgMembership(
-  prisma: PrismaClient,
-  userId: string,
-  organizationId: string
-): Promise<boolean> {
-  try {
-    const membership = await prisma.organizationMember.findUnique({
-      where: {
-        organizationId_userId: { organizationId, userId },
+      create: {
+        organizationId,
+        userId,
+        role: (match.role as any) || 'MEMBER',
       },
     })
-    return !!membership
-  } catch {
+
+    return true
+  } catch (error) {
+    log.error(error, 'Org membership auth-service verification failed')
     return false
   }
 }
@@ -322,16 +343,15 @@ export async function getAuthContext(
       const projectId = request.headers.get('x-project-id') || undefined
       const organizationId = request.headers.get('x-organization-id') || undefined
 
-      // NOTE: X-Organization-Id header is used for service-auth ↔ cloud-api org sync.
-      // Resolver-level ownership checks (project.userId, project.organizationId) are the
-      // actual access-control gate. See audit 2026-03 for details.
+      let validatedOrgId: string | undefined
       if (organizationId) {
-        void ensureOrgMembership(prisma, authAccessResult.userId, organizationId)
+        const isMember = await validateAndSyncOrgMembership(prisma, token, authAccessResult.userId, organizationId)
+        validatedOrgId = isMember ? organizationId : undefined
       }
 
       return {
         userId: authAccessResult.userId,
-        organizationId,
+        organizationId: validatedOrgId,
         projectId,
       }
     }
@@ -351,13 +371,15 @@ export async function getAuthContext(
         const projectId = request.headers.get('x-project-id') || undefined
         const organizationId = request.headers.get('x-organization-id') || undefined
 
+        let validatedOrgId: string | undefined
         if (organizationId) {
-          void ensureOrgMembership(prisma, remote.userId, organizationId)
+          const isMember = await validateAndSyncOrgMembership(prisma, token, remote.userId, organizationId)
+          validatedOrgId = isMember ? organizationId : undefined
         }
 
         return {
           userId: remote.userId,
-          organizationId,
+          organizationId: validatedOrgId,
           projectId,
         }
       }
@@ -382,9 +404,15 @@ export async function getAuthContext(
 
       const organizationId = request.headers.get('x-organization-id') || undefined
 
+      let validatedOrgId: string | undefined
+      if (organizationId) {
+        const isMember = await validateAndSyncOrgMembership(prisma, token, jwtResult.userId, organizationId)
+        validatedOrgId = isMember ? organizationId : undefined
+      }
+
       return {
         userId: jwtResult.userId,
-        organizationId,
+        organizationId: validatedOrgId,
         projectId,
       }
     }
@@ -418,17 +446,18 @@ export async function getAuthContext(
     // Get project ID from X-Project-Id header (optional)
     const projectId = request.headers.get('x-project-id') || undefined
 
-    // Organization ID comes from token, can be overridden by header
     const organizationIdHeader = request.headers.get('x-organization-id')
-    const organizationId = organizationIdHeader || validationResult.organizationId
+    const requestedOrgId = organizationIdHeader || validationResult.organizationId
 
-    if (organizationId) {
-      void ensureOrgMembership(prisma, validationResult.userId, organizationId)
+    let validatedOrgId: string | undefined
+    if (requestedOrgId) {
+      const isMember = await validateAndSyncOrgMembership(prisma, token, validationResult.userId, requestedOrgId)
+      validatedOrgId = isMember ? requestedOrgId : undefined
     }
 
     return {
       userId: validationResult.userId,
-      organizationId,
+      organizationId: validatedOrgId,
       projectId,
     }
   } catch (error) {
