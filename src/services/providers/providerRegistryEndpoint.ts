@@ -25,7 +25,7 @@ export async function handleProviderRegistryRequest(
   const expectedToken = process.env.INTERNAL_AUTH_TOKEN
   const authToken = req.headers['x-internal-auth']
 
-  if (expectedToken && authToken !== expectedToken) {
+  if (!expectedToken || authToken !== expectedToken) {
     res.writeHead(401, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Unauthorized' }))
     return
