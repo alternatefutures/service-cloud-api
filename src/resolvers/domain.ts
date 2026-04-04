@@ -420,6 +420,22 @@ export const domainMutations = {
 
     if (!site) throw new GraphQLError('Site not found')
 
+    const siteOrgId = site.project.organizationId
+    if (siteOrgId) {
+      const membership = await prisma.organizationMember.findUnique({
+        where: { organizationId_userId: { organizationId: siteOrgId, userId } },
+      })
+      if (!membership) {
+        throw new GraphQLError('Not authorized to access this site')
+      }
+    } else if (site.project.userId !== userId) {
+      throw new GraphQLError('Not authorized to access this site')
+    }
+
+    if (domain.organizationId && siteOrgId && domain.organizationId !== siteOrgId) {
+      throw new GraphQLError('Domain and site must belong to the same organization')
+    }
+
     return await prisma.domain.update({
       where: { id: domainId },
       data: { siteId },
