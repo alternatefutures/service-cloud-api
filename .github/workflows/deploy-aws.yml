@@ -58,6 +58,18 @@ jobs:
           echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
 
+      - name: Run Prisma migrations (before traffic shift)
+        run: |
+          DB_URL=$(kubectl get secret database-credentials -n af-production \
+            -o jsonpath='{.data.API_DATABASE_URL}' | base64 -d)
+          kubectl run prisma-migrate-${GITHUB_SHA::7} \
+            --image=${{ env.IMAGE }}:${{ github.sha }} \
+            --restart=Never --rm -i \
+            --overrides='{"spec":{"imagePullSecrets":[{"name":"ghcr-credentials"}]}}' \
+            --env="DATABASE_URL=${DB_URL}" \
+            -n af-production \
+            --command -- npx prisma migrate deploy
+
       - name: Deploy to K3s
         run: |
           kubectl set image deployment/service-cloud-api \
@@ -65,10 +77,6 @@ jobs:
             -n af-production
           kubectl rollout status deployment/service-cloud-api \
             -n af-production --timeout=180s
-
-      - name: Run Prisma migrations
-        run: |
-          kubectl exec deployment/service-cloud-api -n af-production -- prisma migrate deploy
 
       - name: Verify deployment
         id: verify

@@ -49,6 +49,26 @@ export type { Context }
 // Service factory for storage tracking (billing is now handled by service-auth)
 const storageTracker = (prisma: any) => new StorageTracker(prisma)
 
+/**
+ * Validate that context.projectId is owned by the authenticated user.
+ * Prevents IDOR via spoofed x-project-id header.
+ */
+async function requireOwnedProjectContext(context: Context): Promise<string> {
+  requireAuth(context)
+  if (!context.projectId) {
+    throw new GraphQLError('Project ID required', { extensions: { code: 'BAD_USER_INPUT' } })
+  }
+  const project = await context.prisma.project.findUnique({
+    where: { id: context.projectId },
+    select: { userId: true, organizationId: true },
+  })
+  if (!project) {
+    throw new GraphQLError('Project not found', { extensions: { code: 'NOT_FOUND' } })
+  }
+  assertProjectAccess(context, project)
+  return context.projectId
+}
+
 // ── Workspace Metrics Helpers ──────────────────────────────────────
 
 /**
@@ -205,11 +225,9 @@ export const resolvers = {
     },
 
     sites: async (_: unknown, _args: { where?: unknown } | undefined, context: Context) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      const projectId = await requireOwnedProjectContext(context)
       const data = await context.prisma.site.findMany({
-        where: { projectId: context.projectId },
+        where: { projectId },
       })
       return { data }
     },
@@ -236,25 +254,27 @@ export const resolvers = {
       context: Context
     ) => {
       requireAuth(context)
-      return context.prisma.iPNSRecord.findUnique({
+      const record = await context.prisma.iPNSRecord.findUnique({
         where: { name },
+        include: { site: { include: { project: { select: { userId: true, organizationId: true } } } } },
       })
+      if (!record) return null
+      if ((record as any).site?.project) {
+        assertProjectAccess(context, (record as any).site.project)
+      }
+      return record
     },
 
     ipnsRecords: async (_: unknown, __: unknown, context: Context) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
-      // Get IPNS records for sites in the current project
+      const projectId = await requireOwnedProjectContext(context)
       const sites = await context.prisma.site.findMany({
-        where: { projectId: context.projectId },
+        where: { projectId },
         select: { id: true },
       })
       const siteIds = sites.map(s => s.id)
       const data = await context.prisma.iPNSRecord.findMany({
         where: { siteId: { in: siteIds } },
       })
-      // Return wrapped format for SDK compatibility
       return { data }
     },
 
@@ -283,18 +303,21 @@ export const resolvers = {
       return { data: [] }
     },
 
-    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     deployment: async (
       _: unknown,
       { where }: { where: { id: string } },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
-      return context.prisma.deployment.findUnique({
+      requireAuth(context)
+      const deployment = await context.prisma.deployment.findUnique({
         where: { id: where.id },
+        include: { site: { include: { project: { select: { userId: true, organizationId: true } } } } },
       })
+      if (!deployment) return null
+      if ((deployment as any).site?.project) {
+        assertProjectAccess(context, (deployment as any).site.project)
+      }
+      return deployment
     },
 
     deployments: async (
@@ -302,18 +325,22 @@ export const resolvers = {
       { siteId }: { siteId?: string },
       context: Context
     ) => {
-      if (!siteId && !context.projectId) {
-        throw new GraphQLError('Either siteId or project context required')
-      }
+      requireAuth(context)
       if (siteId) {
+        const site = await context.prisma.site.findUnique({
+          where: { id: siteId },
+          include: { project: { select: { userId: true, organizationId: true } } },
+        })
+        if (!site) throw new GraphQLError('Site not found')
+        assertProjectAccess(context, (site as any).project)
         return context.prisma.deployment.findMany({
           where: { siteId },
           orderBy: { createdAt: 'desc' },
         })
       }
-      // Fall back to all deployments for sites in the current project
+      const projectId = await requireOwnedProjectContext(context)
       const sites = await context.prisma.site.findMany({
-        where: { projectId: context.projectId! },
+        where: { projectId },
         select: { id: true },
       })
       return context.prisma.deployment.findMany({
@@ -324,12 +351,10 @@ export const resolvers = {
 
     // Zones (SDK compatibility)
     zones: async (_: unknown, __: unknown, context: Context) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      const projectId = await requireOwnedProjectContext(context)
 
       const sites = await context.prisma.site.findMany({
-        where: { projectId: context.projectId },
+        where: { projectId },
         select: { id: true },
       })
       const siteIds = sites.map(s => s.id)
@@ -341,12 +366,17 @@ export const resolvers = {
       return { data }
     },
 
-    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     zone: async (_: unknown, { id }: { id: string }, context: Context) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
+      requireAuth(context)
+      const zone = await context.prisma.zone.findUnique({
+        where: { id },
+        include: { site: { include: { project: { select: { userId: true, organizationId: true } } } } },
+      })
+      if (!zone) return null
+      if ((zone as any).site?.project) {
+        assertProjectAccess(context, (zone as any).site.project)
       }
-      return context.prisma.zone.findUnique({ where: { id } })
+      return zone
     },
 
     // Storage (SDK compatibility - minimal)
@@ -355,11 +385,8 @@ export const resolvers = {
       return { data: [] }
     },
 
-    // Fixed by audit 2026-03: added auth check (was unauthenticated)
     pin: async (_: unknown, { where }: { where: { cid: string } }, context: Context) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
       return context.prisma.pin.findUnique({ where: { cid: where.cid } })
     },
 
@@ -405,14 +432,17 @@ export const resolvers = {
       { where }: { where: { id: string } },
       context: Context
     ) => {
+      requireAuth(context)
       const func = await context.prisma.aFFunction.findUnique({
         where: { id: where.id },
+        include: { project: { select: { userId: true, organizationId: true } } },
       })
 
       if (!func) {
         throw new GraphQLError('Function not found')
       }
 
+      assertProjectAccess(context, (func as any).project)
       return func
     },
 
@@ -421,14 +451,12 @@ export const resolvers = {
       { where }: { where: { name: string } },
       context: Context
     ) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      const projectId = await requireOwnedProjectContext(context)
 
       const func = await context.prisma.aFFunction.findFirst({
         where: {
           name: where.name,
-          projectId: context.projectId,
+          projectId,
         },
       })
 
@@ -440,11 +468,9 @@ export const resolvers = {
     },
 
     afFunctions: async (_: unknown, __: unknown, context: Context) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      const projectId = await requireOwnedProjectContext(context)
       const data = await context.prisma.aFFunction.findMany({
-        where: { projectId: context.projectId },
+        where: { projectId },
       })
       // Return wrapped format for SDK compatibility
       return { data }
@@ -455,10 +481,19 @@ export const resolvers = {
       { where }: { where: { afFunctionId?: string; functionId?: string } },
       context: Context
     ) => {
+      requireAuth(context)
       const afFunctionId = where.afFunctionId || where.functionId
       if (!afFunctionId) {
         throw new GraphQLError('Function ID required')
       }
+      const func = await context.prisma.aFFunction.findUnique({
+        where: { id: afFunctionId },
+        include: { project: { select: { userId: true, organizationId: true } } },
+      })
+      if (!func) {
+        throw new GraphQLError('Function not found')
+      }
+      assertProjectAccess(context, (func as any).project)
       const data = await context.prisma.aFFunctionDeployment.findMany({
         where: { afFunctionId },
         orderBy: { createdAt: 'desc' },
@@ -471,30 +506,35 @@ export const resolvers = {
       { where }: { where: { id?: string; cid?: string; functionId?: string } },
       context: Context
     ) => {
-      if (where.id) {
-        return context.prisma.aFFunctionDeployment.findUnique({
-          where: { id: where.id },
-        })
-      }
+      requireAuth(context)
 
-      if (where.cid) {
-        return context.prisma.aFFunctionDeployment.findFirst({
+      let deployment: any = null
+      if (where.id) {
+        deployment = await context.prisma.aFFunctionDeployment.findUnique({
+          where: { id: where.id },
+          include: { afFunction: { include: { project: { select: { userId: true, organizationId: true } } } } },
+        })
+      } else if (where.cid) {
+        deployment = await context.prisma.aFFunctionDeployment.findFirst({
           where: {
             cid: where.cid,
             ...(where.functionId ? { afFunctionId: where.functionId } : {}),
           },
+          include: { afFunction: { include: { project: { select: { userId: true, organizationId: true } } } } },
           orderBy: { createdAt: 'desc' },
         })
-      }
-
-      if (where.functionId) {
-        return context.prisma.aFFunctionDeployment.findFirst({
+      } else if (where.functionId) {
+        deployment = await context.prisma.aFFunctionDeployment.findFirst({
           where: { afFunctionId: where.functionId },
+          include: { afFunction: { include: { project: { select: { userId: true, organizationId: true } } } } },
           orderBy: { createdAt: 'desc' },
         })
       }
 
-      return null
+      if (deployment?.afFunction?.project) {
+        assertProjectAccess(context, deployment.afFunction.project)
+      }
+      return deployment
     },
 
     // Domains (from domain resolvers)
@@ -1216,10 +1256,7 @@ export const resolvers = {
       { data }: { data: { name: string } },
       context: Context
     ) => {
-      const targetProjectId = context.projectId
-      if (!targetProjectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      const targetProjectId = await requireOwnedProjectContext(context)
 
       const slug = generateSlug(data.name)
 
@@ -1252,9 +1289,7 @@ export const resolvers = {
       { where }: { where: { id: string } },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
 
       const site = await context.prisma.site.findUnique({
         where: { id: where.id },
@@ -1266,6 +1301,7 @@ export const resolvers = {
           serviceId: true,
           createdAt: true,
           updatedAt: true,
+          project: { select: { userId: true, organizationId: true } },
         },
       })
 
@@ -1273,10 +1309,7 @@ export const resolvers = {
         throw new GraphQLError('Site not found')
       }
 
-      // Ensure site belongs to the current project context (if set)
-      if (context.projectId && site.projectId !== context.projectId) {
-        throw new GraphQLError('Not authorized to delete this site')
-      }
+      assertProjectAccess(context, (site as any).project, 'Not authorized to delete this site')
 
       // Prefer deleting the Service registry entry (cascade should remove the Site)
       if (site.serviceId) {
@@ -1386,9 +1419,7 @@ export const resolvers = {
       }: { data: { name?: string; siteId?: string; slug?: string; sourceCode?: string; routes?: any; status?: string } },
       context: Context
     ) => {
-      if (!context.projectId) {
-        throw new GraphQLError('Project ID required')
-      }
+      await requireOwnedProjectContext(context)
 
       if (!data?.name) {
         throw new GraphQLError('Function name required')
@@ -1446,6 +1477,14 @@ export const resolvers = {
       },
       context: Context
     ) => {
+      requireAuth(context)
+      const func = await context.prisma.aFFunction.findUnique({
+        where: { id: where.functionId },
+        include: { project: { select: { userId: true, organizationId: true } } },
+      })
+      if (!func) throw new GraphQLError('Function not found')
+      assertProjectAccess(context, (func as any).project)
+
       const cid = where.cid ?? data?.cid
       if (!cid) {
         throw new GraphQLError('CID required')
@@ -1484,6 +1523,14 @@ export const resolvers = {
       },
       context: Context
     ) => {
+      requireAuth(context)
+      const existing = await context.prisma.aFFunction.findUnique({
+        where: { id: where.id },
+        include: { project: { select: { userId: true, organizationId: true } } },
+      })
+      if (!existing) throw new GraphQLError('Function not found')
+      assertProjectAccess(context, (existing as any).project)
+
       // Validate routes if provided
       if (data?.routes !== undefined && data?.routes !== null) {
         validateRoutes(data.routes)
@@ -1513,6 +1560,8 @@ export const resolvers = {
       { where }: { where: { id: string } },
       context: Context
     ) => {
+      requireAuth(context)
+
       const func = await context.prisma.aFFunction.findUnique({
         where: { id: where.id },
         select: {
@@ -1528,6 +1577,7 @@ export const resolvers = {
           createdAt: true,
           updatedAt: true,
           serviceId: true,
+          project: { select: { userId: true, organizationId: true } },
         },
       })
 
@@ -1535,9 +1585,7 @@ export const resolvers = {
         throw new GraphQLError('Function not found')
       }
 
-      if (context.projectId && func.projectId !== context.projectId) {
-        throw new GraphQLError('Not authorized to delete this function')
-      }
+      assertProjectAccess(context, (func as any).project, 'Not authorized to delete this function')
 
       // Prefer deleting the Service registry entry (cascade should remove the function)
       if (func.serviceId) {
@@ -1556,13 +1604,12 @@ export const resolvers = {
       { id }: { id: string },
       context: Context
     ) => {
-      if (!context.userId) {
-        throw new GraphQLError('Not authenticated')
-      }
+      requireAuth(context)
 
       const service = await context.prisma.service.findUnique({
         where: { id },
         include: {
+          project: { select: { userId: true, organizationId: true } },
           akashDeployments: {
             where: { status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'] } },
             orderBy: { createdAt: 'desc' },
@@ -1580,9 +1627,7 @@ export const resolvers = {
         throw new GraphQLError('Service not found')
       }
 
-      if (context.projectId && service.projectId !== context.projectId) {
-        throw new GraphQLError('Not authorized to delete this service')
-      }
+      assertProjectAccess(context, (service as any).project, 'Not authorized to delete this service')
 
       // Guard: block deletion if any provider has an active/in-progress deployment
       const activeAkash = service.akashDeployments[0]
@@ -1929,9 +1974,11 @@ export const resolvers = {
         { deploymentId }: { deploymentId: string },
         context: Context
       ) {
-        // Verify deployment exists
+        requireAuth(context)
+
         const deployment = await context.prisma.deployment.findUnique({
           where: { id: deploymentId },
+          include: { site: { include: { project: { select: { userId: true, organizationId: true } } } } },
         })
 
         if (!deployment) {
@@ -1940,6 +1987,10 @@ export const resolvers = {
             deploymentId
           )
           throw new GraphQLError('Deployment not found')
+        }
+
+        if ((deployment as any).site?.project) {
+          assertProjectAccess(context, (deployment as any).site.project)
         }
 
         // Track subscription creation
@@ -2000,9 +2051,11 @@ export const resolvers = {
         { deploymentId }: { deploymentId: string },
         context: Context
       ) {
-        // Verify deployment exists
+        requireAuth(context)
+
         const deployment = await context.prisma.deployment.findUnique({
           where: { id: deploymentId },
+          include: { site: { include: { project: { select: { userId: true, organizationId: true } } } } },
         })
 
         if (!deployment) {
@@ -2011,6 +2064,10 @@ export const resolvers = {
             deploymentId
           )
           throw new GraphQLError('Deployment not found')
+        }
+
+        if ((deployment as any).site?.project) {
+          assertProjectAccess(context, (deployment as any).site.project)
         }
 
         // Track subscription creation
