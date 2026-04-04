@@ -5,6 +5,7 @@ import { GraphQLError } from 'graphql'
 import { getPhalaOrchestrator } from '../services/phala/index.js'
 import { processFinalPhalaBilling } from '../services/billing/deploymentSettlement.js'
 import type { Context } from './types.js'
+import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
 
 const log = createLogger('resolver-phala')
@@ -97,10 +98,15 @@ export const phalaQueries = {
     { id }: { id: string },
     context: Context
   ) => {
-    return context.prisma.phalaDeployment.findUnique({
+    requireAuth(context)
+
+    const deployment = await context.prisma.phalaDeployment.findUnique({
       where: { id },
-      include: { service: true, site: true, afFunction: true },
+      include: { service: { include: { project: true } }, site: true, afFunction: true },
     })
+    if (!deployment) throw new GraphQLError('Phala deployment not found')
+    assertProjectAccess(context, deployment.service.project)
+    return deployment
   },
 
   phalaDeployments: async (
@@ -108,6 +114,22 @@ export const phalaQueries = {
     { serviceId, projectId }: { serviceId?: string; projectId?: string },
     context: Context
   ) => {
+    requireAuth(context)
+
+    if (serviceId) {
+      const service = await context.prisma.service.findUnique({
+        where: { id: serviceId },
+        include: { project: true },
+      })
+      if (!service?.project) throw new GraphQLError('Service or project not found')
+      assertProjectAccess(context, service.project)
+    }
+    if (projectId) {
+      const project = await context.prisma.project.findUnique({ where: { id: projectId } })
+      if (!project) throw new GraphQLError('Project not found')
+      assertProjectAccess(context, project)
+    }
+
     const where: Record<string, unknown> = {}
     if (serviceId) where.serviceId = serviceId
     if (projectId) where.service = { projectId } as any
@@ -124,6 +146,15 @@ export const phalaQueries = {
     { serviceId }: { serviceId: string },
     context: Context
   ) => {
+    requireAuth(context)
+
+    const service = await context.prisma.service.findUnique({
+      where: { id: serviceId },
+      include: { project: true },
+    })
+    if (!service?.project) throw new GraphQLError('Service or project not found')
+    assertProjectAccess(context, service.project)
+
     return context.prisma.phalaDeployment.findFirst({
       where: { serviceId, status: { in: ['CREATING', 'STARTING', 'ACTIVE'] } },
       include: { service: true },
@@ -214,12 +245,14 @@ export const phalaMutations = {
     { id }: { id: string },
     context: Context
   ) => {
-    if (!context.userId) throw new GraphQLError('Not authenticated')
+    requireAuth(context)
 
     const deployment = await context.prisma.phalaDeployment.findUnique({
       where: { id },
+      include: { service: { include: { project: true } } },
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
+    assertProjectAccess(context, deployment.service.project, 'Not authorized to stop this deployment')
 
     const stoppedAt = new Date()
 
@@ -281,12 +314,14 @@ export const phalaMutations = {
     { id }: { id: string },
     context: Context
   ) => {
-    if (!context.userId) throw new GraphQLError('Not authenticated')
+    requireAuth(context)
 
     const deployment = await context.prisma.phalaDeployment.findUnique({
       where: { id },
+      include: { service: { include: { project: true } } },
     })
     if (!deployment) throw new GraphQLError('Phala deployment not found')
+    assertProjectAccess(context, deployment.service.project, 'Not authorized to delete this deployment')
 
     const deletedAt = new Date()
 

@@ -782,12 +782,8 @@ export class AkashOrchestrator {
           )
         } catch (err: any) {
           log.warn(
-            `Failed to close deployment dseq=${existing.dseq}: ${err.message}`
+            `Failed to close deployment dseq=${existing.dseq}: ${err.message} — keeping as ACTIVE, may need manual close`
           )
-          await this.prisma.akashDeployment.update({
-            where: { id: existing.id },
-            data: { status: 'CLOSED', closedAt: new Date() },
-          })
         }
       }
     }

@@ -42,6 +42,7 @@ import { createLogger } from '../lib/logger.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
+import { assertProjectAccess } from '../utils/authorization.js'
 
 const log = createLogger('resolver-templates')
 
@@ -300,6 +301,7 @@ export const templateMutations = {
     if (!project) {
       throw new GraphQLError('Project not found')
     }
+    assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
     const serviceName =
       input.serviceName || `${template.id}-${Date.now().toString(36)}`
@@ -476,6 +478,7 @@ export const templateMutations = {
       where: { id: input.projectId },
     })
     if (!project) throw new GraphQLError('Project not found')
+    assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
     const serviceName =
       input.serviceName || `${template.id}-${Date.now().toString(36)}`
@@ -766,6 +769,7 @@ export const templateMutations = {
       where: { id: input.projectId },
     })
     if (!project) throw new GraphQLError('Project not found')
+    assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
     const envOverrides: Record<string, string> = {}
     if (input.envOverrides) {

@@ -12,6 +12,7 @@ import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlemen
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance } from './balanceCheck.js'
 import type { Context } from './types.js'
+import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
@@ -159,20 +160,33 @@ async function estimateGpuDailyCost(
   }
 }
 
+async function assertServiceAccess(context: Context, serviceId: string) {
+  const service = await context.prisma.service.findUnique({
+    where: { id: serviceId },
+    include: { project: true },
+  })
+  if (!service?.project) throw new GraphQLError('Service or project not found')
+  assertProjectAccess(context, service.project)
+}
+
 export const akashQueries = {
   akashDeployment: async (
     _: unknown,
     { id }: { id: string },
     context: Context
   ) => {
+    requireAuth(context)
+
     const deployment = await context.prisma.akashDeployment.findUnique({
       where: { id },
+      include: { service: { include: { project: true } } },
     })
 
     if (!deployment) {
       throw new GraphQLError('Akash deployment not found')
     }
 
+    assertProjectAccess(context, deployment.service.project)
     return formatDeployment(deployment)
   },
 
@@ -181,8 +195,27 @@ export const akashQueries = {
     { serviceId, functionId, siteId }: { serviceId?: string; functionId?: string; siteId?: string },
     context: Context
   ) => {
+    requireAuth(context)
+
+    if (serviceId) await assertServiceAccess(context, serviceId)
+    if (functionId) {
+      const func = await context.prisma.aFFunction.findUnique({
+        where: { id: functionId },
+        include: { project: true },
+      })
+      if (!func?.project) throw new GraphQLError('Function or project not found')
+      assertProjectAccess(context, func.project)
+    }
+    if (siteId) {
+      const site = await context.prisma.site.findUnique({
+        where: { id: siteId },
+        include: { project: true },
+      })
+      if (!site?.project) throw new GraphQLError('Site or project not found')
+      assertProjectAccess(context, site.project)
+    }
+
     const where: any = {}
-    
     if (serviceId) where.serviceId = serviceId
     if (functionId) where.afFunctionId = functionId
     if (siteId) where.siteId = siteId
@@ -200,7 +233,9 @@ export const akashQueries = {
     { serviceId }: { serviceId: string },
     context: Context
   ) => {
-    // Get the most recent active deployment for this service
+    requireAuth(context)
+    await assertServiceAccess(context, serviceId)
+
     const deployment = await context.prisma.akashDeployment.findFirst({
       where: {
         serviceId,
@@ -221,7 +256,15 @@ export const akashQueries = {
     { functionId }: { functionId: string },
     context: Context
   ) => {
-    // Get the most recent active deployment for this function
+    requireAuth(context)
+
+    const func = await context.prisma.aFFunction.findUnique({
+      where: { id: functionId },
+      include: { project: true },
+    })
+    if (!func?.project) throw new GraphQLError('Function or project not found')
+    assertProjectAccess(context, func.project)
+
     const deployment = await context.prisma.akashDeployment.findFirst({
       where: {
         afFunctionId: functionId,
@@ -267,10 +310,7 @@ export const akashMutations = {
       throw new GraphQLError('Service not found')
     }
 
-    // Verify user has access to this project
-    if (context.projectId && service.projectId !== context.projectId) {
-      throw new GraphQLError('Not authorized to deploy this service')
-    }
+    assertProjectAccess(context, service.project, 'Not authorized to deploy this service')
 
     // If source code is provided and this is a function, save it first
     if (input.sourceCode !== undefined && service.type === 'FUNCTION' && service.afFunction) {
@@ -377,6 +417,8 @@ export const akashMutations = {
       throw new GraphQLError('Function not found')
     }
 
+    assertProjectAccess(context, func.project, 'Not authorized to deploy this function')
+
     if (!func.sourceCode) {
       throw new GraphQLError('Function has no source code to deploy')
     }
@@ -437,7 +479,7 @@ export const akashMutations = {
     const deployment = await context.prisma.akashDeployment.findUnique({
       where: { id },
       include: {
-        service: true,
+        service: { include: { project: true } },
         afFunction: true,
       },
     })
@@ -445,6 +487,8 @@ export const akashMutations = {
     if (!deployment) {
       throw new GraphQLError('Deployment not found')
     }
+
+    assertProjectAccess(context, deployment.service.project, 'Not authorized to close this deployment')
 
     if (deployment.status === 'CLOSED') {
       throw new GraphQLError('Deployment is already closed')
