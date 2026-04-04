@@ -27,7 +27,7 @@ describe('Query Resolvers', () => {
           findUnique: vi.fn(),
         },
         project: {
-          findUnique: vi.fn(),
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-123', organizationId: null }),
           findMany: vi.fn(),
         },
         site: {
@@ -37,6 +37,7 @@ describe('Query Resolvers', () => {
         aFFunction: {
           findFirst: vi.fn(),
           findMany: vi.fn(),
+          findUnique: vi.fn(),
         },
         aFFunctionDeployment: {
           findMany: vi.fn(),
@@ -307,6 +308,10 @@ describe('Query Resolvers', () => {
 
   describe('afFunctionDeployments', () => {
     it('should return deployments for function', async () => {
+      vi.mocked(mockContext.prisma.aFFunction.findUnique).mockResolvedValue({
+        id: 'func-123',
+        project: { userId: 'user-123', organizationId: null },
+      } as any)
       const mockDeployments = [
         { id: 'deploy-1', cid: 'QmTest1' },
         { id: 'deploy-2', cid: 'QmTest2' },

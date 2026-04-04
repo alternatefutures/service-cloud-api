@@ -26,10 +26,16 @@ describe('Route Configuration Resolvers', () => {
 
     mockContext = {
       prisma: {
+        project: {
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-123', organizationId: null }),
+        },
         aFFunction: {
           create: vi.fn(),
           update: vi.fn(),
-          findUnique: vi.fn(),
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'func-123',
+            project: { userId: 'user-123', organizationId: null },
+          }),
         },
         $transaction: vi.fn().mockImplementation(async (callback: any) => {
           return callback(mockTx)

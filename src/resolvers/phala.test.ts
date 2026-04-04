@@ -29,6 +29,9 @@ describe('Phala Resolvers', () => {
         service: {
           findUnique: vi.fn(),
         },
+        project: {
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-123', organizationId: null }),
+        },
         site: {
           findUnique: vi.fn(),
         },
@@ -50,6 +53,7 @@ describe('Phala Resolvers', () => {
           name: 'af-test',
           status: 'ACTIVE',
           serviceId: 'svc-1',
+          service: { project: { userId: 'user-123', organizationId: null } },
         }
         vi.mocked(mockContext.prisma.phalaDeployment.findUnique).mockResolvedValue(
           mockDeployment as any
@@ -67,25 +71,25 @@ describe('Phala Resolvers', () => {
         )
       })
 
-      it('returns null when not found', async () => {
+      it('throws when not found', async () => {
         const { phalaQueries: q } = await import('./phala.js')
         vi.mocked(mockContext.prisma.phalaDeployment.findUnique).mockResolvedValue(
           null
         )
 
-        const result = await q.phalaDeployment(
-          null,
-          { id: 'dep-999' },
-          mockContext
-        )
-
-        expect(result).toBeNull()
+        await expect(
+          q.phalaDeployment(null, { id: 'dep-999' }, mockContext)
+        ).rejects.toThrow('Phala deployment not found')
       })
     })
 
     describe('phalaDeployments', () => {
       it('filters by serviceId', async () => {
         const { phalaQueries: q } = await import('./phala.js')
+        vi.mocked(mockContext.prisma.service.findUnique).mockResolvedValue({
+          id: 'svc-1',
+          project: { userId: 'user-123', organizationId: null },
+        } as any)
         vi.mocked(mockContext.prisma.phalaDeployment.findMany).mockResolvedValue(
           []
         )
@@ -105,6 +109,10 @@ describe('Phala Resolvers', () => {
 
       it('filters by projectId', async () => {
         const { phalaQueries: q } = await import('./phala.js')
+        vi.mocked(mockContext.prisma.project.findUnique).mockResolvedValue({
+          userId: 'user-123',
+          organizationId: null,
+        } as any)
         vi.mocked(mockContext.prisma.phalaDeployment.findMany).mockResolvedValue(
           []
         )
@@ -126,6 +134,10 @@ describe('Phala Resolvers', () => {
     describe('phalaDeploymentByService', () => {
       it('returns deployment for service', async () => {
         const { phalaQueries: q } = await import('./phala.js')
+        vi.mocked(mockContext.prisma.service.findUnique).mockResolvedValue({
+          id: 'svc-1',
+          project: { userId: 'user-123', organizationId: null },
+        } as any)
         const mockDeployment = {
           id: 'dep-1',
           appId: 'app-123',
@@ -183,6 +195,7 @@ describe('Phala Resolvers', () => {
           id: 'dep-1',
           appId: 'app-123',
           status: 'ACTIVE',
+          service: { project: { userId: 'user-123', organizationId: null } },
         }
         vi.mocked(mockContext.prisma.phalaDeployment.findUnique).mockResolvedValue(
           mockDeployment as any
@@ -230,6 +243,7 @@ describe('Phala Resolvers', () => {
           id: 'dep-1',
           appId: 'app-123',
           status: 'ACTIVE',
+          service: { project: { userId: 'user-123', organizationId: null } },
         }
         vi.mocked(mockContext.prisma.phalaDeployment.findUnique).mockResolvedValue(
           mockDeployment as any
