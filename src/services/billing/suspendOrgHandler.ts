@@ -84,47 +84,58 @@ export async function handleSuspendOrg(
       try {
         const stoppedAt = new Date()
 
+        // Save SDL first — needed for eventual resume regardless of close outcome
         await prisma.akashDeployment.update({
           where: { id: deployment.id },
-          data: {
-            status: 'SUSPENDED',
-            savedSdl: deployment.sdlContent,
-          },
+          data: { savedSdl: deployment.sdlContent },
         })
 
-        // Mark policy stop reason as BALANCE_LOW if policy exists
-        if (deployment.policyId) {
-          await prisma.deploymentPolicy
-            .update({
-              where: { id: deployment.policyId },
-              data: { stopReason: 'BALANCE_LOW', stoppedAt: new Date() },
-            })
-            .catch(err =>
-              log.warn(
-                { policyId: deployment.policyId, err },
-                'Failed to set policy stopReason'
-              )
-            )
-        }
-
+        // Close on-chain BEFORE marking DB state as SUSPENDED.
+        // If close fails, the deployment stays ACTIVE and billed until resolved.
+        let onChainClosed = false
         try {
           const { getAkashOrchestrator } =
             await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(prisma)
           await orchestrator.closeDeployment(Number(deployment.dseq))
+          onChainClosed = true
         } catch (err) {
-          log.warn(
+          log.error(
             { dseq: deployment.dseq, err },
-            'Failed to close Akash deployment on-chain'
+            'On-chain close failed — deployment stays ACTIVE and billed until resolved'
+          )
+          errors.push(
+            `Akash dseq=${deployment.dseq}: on-chain close failed, still running and billed`
           )
         }
 
-        if (deployment.escrow && deployment.escrow.status === 'ACTIVE') {
-          await settleAkashEscrowToTime(prisma, deployment.id, stoppedAt)
-          await escrowService.pauseEscrow(deployment.id)
-        }
+        if (onChainClosed) {
+          await prisma.akashDeployment.update({
+            where: { id: deployment.id },
+            data: { status: 'SUSPENDED' },
+          })
 
-        paused.push(`Akash: dseq=${deployment.dseq}`)
+          if (deployment.policyId) {
+            await prisma.deploymentPolicy
+              .update({
+                where: { id: deployment.policyId },
+                data: { stopReason: 'BALANCE_LOW', stoppedAt },
+              })
+              .catch(err =>
+                log.warn(
+                  { policyId: deployment.policyId, err },
+                  'Failed to set policy stopReason'
+                )
+              )
+          }
+
+          if (deployment.escrow && deployment.escrow.status === 'ACTIVE') {
+            await settleAkashEscrowToTime(prisma, deployment.id, stoppedAt)
+            await escrowService.pauseEscrow(deployment.id)
+          }
+
+          paused.push(`Akash: dseq=${deployment.dseq}`)
+        }
       } catch (error) {
         const msg = `Akash ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
         errors.push(msg)
