@@ -42,7 +42,7 @@ describe('Mutation Resolvers', () => {
       prisma: {
         project: {
           create: vi.fn(),
-          findUnique: vi.fn(),
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-123', organizationId: null }),
           findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'project-123', slug: 'test-project' }),
         },
         service: {
@@ -352,6 +352,10 @@ describe('Mutation Resolvers', () => {
         sgx: false,
         afFunctionId: 'func-123',
       }
+      vi.mocked(mockContext.prisma.aFFunction.findUnique).mockResolvedValue({
+        id: 'func-123',
+        project: { userId: 'user-123', organizationId: null },
+      } as any)
       vi.mocked(
         mockContext.prisma.aFFunctionDeployment.create
       ).mockResolvedValue(mockDeployment)
@@ -395,6 +399,10 @@ describe('Mutation Resolvers', () => {
         assetsCid: 'QmAssets456',
         afFunctionId: 'func-123',
       }
+      vi.mocked(mockContext.prisma.aFFunction.findUnique).mockResolvedValue({
+        id: 'func-123',
+        project: { userId: 'user-123', organizationId: null },
+      } as any)
       vi.mocked(
         mockContext.prisma.aFFunctionDeployment.create
       ).mockResolvedValue(mockDeployment)
@@ -431,6 +439,13 @@ describe('Mutation Resolvers', () => {
   })
 
   describe('updateAFFunction', () => {
+    beforeEach(() => {
+      vi.mocked(mockContext.prisma.aFFunction.findUnique).mockResolvedValue({
+        id: 'func-123',
+        project: { userId: 'user-123', organizationId: null },
+      } as any)
+    })
+
     it('should update function name', async () => {
       const mockFunction = { id: 'func-123', name: 'Updated Name' }
       vi.mocked(mockContext.prisma.aFFunction.update).mockResolvedValue(
@@ -586,6 +601,7 @@ describe('Mutation Resolvers', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         serviceId: 'svc-fn-1',
+        project: { userId: 'user-123', organizationId: null },
       } as any)
       vi.mocked(mockContext.prisma.service.delete).mockResolvedValue({
         id: 'svc-fn-1',
