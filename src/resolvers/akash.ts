@@ -468,16 +468,17 @@ export const akashMutations = {
 
     const closedAt = new Date()
 
-    // Try to close on-chain, but force-close the DB record even if it fails
-    // (the dseq may not exist on-chain, may already be closed, or may be corrupt)
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
       await orchestrator.closeDeployment(Number(deployment.dseq))
     } catch (error) {
-      log.warn(
-        `On-chain close failed for dseq=${deployment.dseq}: ${error instanceof Error ? error.message : 'Unknown error'}. Force-closing DB record.`
+      log.error(
+        { dseq: deployment.dseq?.toString(), err: error },
+        'On-chain close failed — cannot mark CLOSED or refund escrow while deployment may still be running'
       )
-      // Continue — we still mark as CLOSED in the DB below
+      throw new GraphQLError(
+        `Failed to close deployment on-chain (dseq=${deployment.dseq}). The deployment may still be running. Try again or contact support.`
+      )
     }
 
     const updated = await context.prisma.akashDeployment.update({
@@ -488,7 +489,6 @@ export const akashMutations = {
       },
     })
 
-    // Refund remaining escrow to wallet
     try {
       await settleAkashEscrowToTime(context.prisma, id, closedAt)
       const escrowService = getEscrowService(context.prisma)
@@ -497,7 +497,7 @@ export const akashMutations = {
         log.info(`Refunded $${(refundCents / 100).toFixed(2)} escrow for deployment ${id}`)
       }
     } catch (error) {
-      log.warn(error, `Escrow refund failed for ${id}`)
+      log.warn(error, `Escrow settlement/refund failed for ${id} — deployment is closed, refund may need manual resolution`)
     }
 
     // Update the specific resource status based on service type
