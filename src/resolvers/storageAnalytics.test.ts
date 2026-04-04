@@ -12,6 +12,9 @@ describe('Storage Analytics Resolvers', () => {
         site: {
           findMany: vi.fn(),
         },
+        project: {
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-123', organizationId: null }),
+        },
       } as any,
       userId: 'user-123',
       projectId: 'project-123',

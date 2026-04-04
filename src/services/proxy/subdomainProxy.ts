@@ -137,7 +137,6 @@ function isPrivateIP(ip: string): boolean {
   if (lower.startsWith('fc00:')) return true      // unique local
   if (lower.startsWith('fd')) return true          // unique local (fd00::/8)
   if (lower.startsWith('fec0:')) return true       // site-local (deprecated but exists)
-  if (lower.startsWith('::ffff:')) return true     // catch remaining mapped addresses
 
   return false
 }

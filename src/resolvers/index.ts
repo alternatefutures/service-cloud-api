@@ -53,20 +53,21 @@ const storageTracker = (prisma: any) => new StorageTracker(prisma)
  * Validate that context.projectId is owned by the authenticated user.
  * Prevents IDOR via spoofed x-project-id header.
  */
-async function requireOwnedProjectContext(context: Context): Promise<string> {
+async function requireOwnedProjectContext(context: Context, projectId?: string): Promise<string> {
   requireAuth(context)
-  if (!context.projectId) {
+  const pid = projectId || context.projectId
+  if (!pid) {
     throw new GraphQLError('Project ID required', { extensions: { code: 'BAD_USER_INPUT' } })
   }
   const project = await context.prisma.project.findUnique({
-    where: { id: context.projectId },
+    where: { id: pid },
     select: { userId: true, organizationId: true },
   })
   if (!project) {
     throw new GraphQLError('Project not found', { extensions: { code: 'NOT_FOUND' } })
   }
   assertProjectAccess(context, project)
-  return context.projectId
+  return pid
 }
 
 // ── Workspace Metrics Helpers ──────────────────────────────────────
@@ -552,10 +553,12 @@ export const resolvers = {
       { projectId }: { projectId?: string },
       context: Context
     ) => {
+      requireAuth(context)
       const targetProjectId = projectId || context.projectId
       if (!targetProjectId) {
         throw new GraphQLError('Project ID required')
       }
+      await requireOwnedProjectContext(context, targetProjectId)
 
       // Get all sites for this project
       const sites = await context.prisma.site.findMany({
@@ -630,10 +633,12 @@ export const resolvers = {
       { projectId, days = 30 }: { projectId?: string; days?: number },
       context: Context
     ) => {
+      requireAuth(context)
       const targetProjectId = projectId || context.projectId
       if (!targetProjectId) {
         throw new GraphQLError('Project ID required')
       }
+      await requireOwnedProjectContext(context, targetProjectId)
 
       const startDate = new Date()
       startDate.setDate(startDate.getDate() - days)
