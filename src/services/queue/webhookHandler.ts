@@ -17,6 +17,7 @@ import { handleSubmitTx, handleCheckBids, handleCreateLease, handleSendManifest,
 import { handleDeployCvm, handlePollStatus, handlePhalaFailure } from './phalaSteps.js'
 import { handlePolicyExpiry } from '../policy/runtimeScheduler.js'
 import type { AkashJobPayload, PhalaJobPayload, PolicyJobPayload } from './types.js'
+import type { AkashStep, PhalaStep, PolicyStep } from './types.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('webhook-handler')
@@ -50,6 +51,55 @@ function readBody(req: IncomingMessage): Promise<string> {
 function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(body))
+}
+
+// ---------------------------------------------------------------------------
+// Payload validation — runtime checks before trusting the cast
+// ---------------------------------------------------------------------------
+
+const AKASH_STEPS = new Set<AkashStep>([
+  'SUBMIT_TX', 'CHECK_BIDS', 'CREATE_LEASE', 'SEND_MANIFEST', 'POLL_URLS', 'HANDLE_FAILURE',
+])
+const PHALA_STEPS = new Set<PhalaStep>(['DEPLOY_CVM', 'POLL_STATUS', 'HANDLE_FAILURE'])
+const POLICY_STEPS = new Set<PolicyStep>(['EXPIRE_POLICY'])
+
+function validateAkashPayload(raw: unknown): AkashJobPayload {
+  if (!raw || typeof raw !== 'object') throw new Error('Payload must be an object')
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.step !== 'string' || !AKASH_STEPS.has(obj.step as AkashStep))
+    throw new Error(`Invalid or missing Akash step: ${String(obj.step)}`)
+  if (typeof obj.deploymentId !== 'string' || !obj.deploymentId)
+    throw new Error('Missing deploymentId')
+  if (obj.step === 'CREATE_LEASE') {
+    if (typeof obj.provider !== 'string') throw new Error('CREATE_LEASE requires provider')
+    if (typeof obj.gseq !== 'number') throw new Error('CREATE_LEASE requires gseq')
+    if (typeof obj.oseq !== 'number') throw new Error('CREATE_LEASE requires oseq')
+  }
+  if (obj.step === 'HANDLE_FAILURE' && typeof obj.errorMessage !== 'string')
+    throw new Error('HANDLE_FAILURE requires errorMessage')
+  return raw as AkashJobPayload
+}
+
+function validatePhalaPayload(raw: unknown): PhalaJobPayload {
+  if (!raw || typeof raw !== 'object') throw new Error('Payload must be an object')
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.step !== 'string' || !PHALA_STEPS.has(obj.step as PhalaStep))
+    throw new Error(`Invalid or missing Phala step: ${String(obj.step)}`)
+  if (typeof obj.deploymentId !== 'string' || !obj.deploymentId)
+    throw new Error('Missing deploymentId')
+  return raw as PhalaJobPayload
+}
+
+function validatePolicyPayload(raw: unknown): PolicyJobPayload {
+  if (!raw || typeof raw !== 'object') throw new Error('Payload must be an object')
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.step !== 'string' || !POLICY_STEPS.has(obj.step as PolicyStep))
+    throw new Error(`Invalid or missing Policy step: ${String(obj.step)}`)
+  if (typeof obj.policyId !== 'string' || !obj.policyId)
+    throw new Error('Missing policyId')
+  if (typeof obj.expectedExpiresAt !== 'string')
+    throw new Error('Missing expectedExpiresAt')
+  return raw as PolicyJobPayload
 }
 
 /**
@@ -140,9 +190,9 @@ export async function handleAkashWebhook(req: IncomingMessage, res: ServerRespon
 
   let payload: AkashJobPayload
   try {
-    payload = JSON.parse(body) as AkashJobPayload
-  } catch {
-    sendJson(res, 400, { error: 'Invalid JSON' })
+    payload = validateAkashPayload(JSON.parse(body))
+  } catch (err) {
+    sendJson(res, 400, { error: `Invalid payload: ${(err as Error).message}` })
     return
   }
 
@@ -193,9 +243,9 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
 
   let payload: PhalaJobPayload
   try {
-    payload = JSON.parse(body) as PhalaJobPayload
-  } catch {
-    sendJson(res, 400, { error: 'Invalid JSON' })
+    payload = validatePhalaPayload(JSON.parse(body))
+  } catch (err) {
+    sendJson(res, 400, { error: `Invalid payload: ${(err as Error).message}` })
     return
   }
 
@@ -246,9 +296,9 @@ export async function handlePolicyWebhook(req: IncomingMessage, res: ServerRespo
 
   let payload: PolicyJobPayload
   try {
-    payload = JSON.parse(body) as PolicyJobPayload
-  } catch {
-    sendJson(res, 400, { error: 'Invalid JSON' })
+    payload = validatePolicyPayload(JSON.parse(body))
+  } catch (err) {
+    sendJson(res, 400, { error: `Invalid payload: ${(err as Error).message}` })
     return
   }
 

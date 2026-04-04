@@ -307,7 +307,6 @@ server.listen(port, () => {
 
 async function gracefulShutdown(signal: string) {
   log.info({ signal }, 'shutting down')
-  stopStaleDeploymentSweeper()
   storageSnapshotScheduler.stop()
   invoiceScheduler.stop()
   computeBillingScheduler.stop()
@@ -318,6 +317,9 @@ async function gracefulShutdown(signal: string) {
     process.exit(1)
   }, 15_000)
   forceExitTimeout.unref()
+
+  // Wait for in-flight sweep before closing connections
+  await stopStaleDeploymentSweeper()
 
   server.close(async () => {
     try {

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock DNS lookup to return a public IP so the SSRF check passes in tests
+// Mock DNS lookup to return a public IP so the SSRF check passes in tests.
 vi.mock('node:dns/promises', () => ({
   lookup: vi.fn().mockResolvedValue({ address: '203.0.113.1', family: 4 }),
 }))
