@@ -53,8 +53,8 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
           log.warn({ dseq: String(dep.dseq), err: closeErr }, 'Failed to close on-chain deployment during sweep — may still be leaking')
         }
       }
-      await prisma.akashDeployment.update({
-        where: { id: dep.id },
+      await prisma.akashDeployment.updateMany({
+        where: { id: dep.id, status: dep.status },
         data: {
           status: 'FAILED',
           errorMessage: `Stale deployment detected: stuck in ${dep.status} for >15 minutes (swept at ${new Date().toISOString()})`,
@@ -90,8 +90,8 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
           log.warn({ appId: dep.appId, err: delErr }, 'Failed to delete CVM during sweep')
         }
       }
-      await prisma.phalaDeployment.update({
-        where: { id: dep.id },
+      await prisma.phalaDeployment.updateMany({
+        where: { id: dep.id, status: dep.status },
         data: {
           status: 'FAILED',
           errorMessage: `Stale deployment detected: stuck in ${dep.status} for >15 minutes (swept at ${new Date().toISOString()})`,

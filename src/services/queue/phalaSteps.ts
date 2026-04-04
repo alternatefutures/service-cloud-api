@@ -127,7 +127,7 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
     const composePath = join(workDir, 'docker-compose.yml')
     const envPath = join(workDir, '.env')
 
-    writeFileSync(composePath, deployment.composeContent)
+    writeFileSync(composePath, deployment.composeContent, { mode: 0o600 })
 
     const envVars: Record<string, string> = {}
     try {
@@ -154,7 +154,7 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
     }
 
     const envLines = Object.entries(envVars).map(([k, v]) => `${k}=${v}`).join('\n')
-    writeFileSync(envPath, envLines)
+    writeFileSync(envPath, envLines, { mode: 0o600 })
 
     const deployArgs = ['deploy', '-n', deployment.name, '-c', composePath]
     if (deployment.cvmSize) deployArgs.push('--instance-type', deployment.cvmSize)
