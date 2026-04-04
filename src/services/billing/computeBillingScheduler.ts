@@ -245,7 +245,7 @@ export class ComputeBillingScheduler {
           if (amountCents <= 0) continue
 
           const dateKey = now.toISOString().slice(0, 10)
-          const runId = this.forceMode ? `force_${Date.now()}` : dateKey
+          const runId = this.forceMode ? `force_${now.toISOString().slice(0, 13)}` : dateKey
           const idempotencyKey = `akash_daily:${escrow.id}:${runId}`
 
           const result = await billingApi.computeDebit({
@@ -372,7 +372,7 @@ export class ComputeBillingScheduler {
         if (amountCents <= 0) continue
 
         const dateKey = now.toISOString().slice(0, 10)
-        const runId = this.forceMode ? `force_${Date.now()}` : dateKey
+        const runId = this.forceMode ? `force_${now.toISOString().slice(0, 13)}` : dateKey
         const idempotencyKey = `phala_daily:${deployment.id}:${runId}`
 
         const result = await billingApi.computeDebit({

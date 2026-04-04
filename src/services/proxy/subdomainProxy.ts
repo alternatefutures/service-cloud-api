@@ -16,6 +16,8 @@
 import httpProxy from 'http-proxy'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('subdomain-proxy')
@@ -102,6 +104,49 @@ class BackendCache {
 
   get size(): number {
     return this.cache.size
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SSRF protection — block proxying to internal/private IPs
+// ---------------------------------------------------------------------------
+
+function isPrivateIP(ip: string): boolean {
+  const parts = ip.split('.').map(Number)
+  if (parts.length === 4) {
+    // 10.0.0.0/8
+    if (parts[0] === 10) return true
+    // 172.16.0.0/12
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+    // 192.168.0.0/16
+    if (parts[0] === 192 && parts[1] === 168) return true
+    // 127.0.0.0/8 (loopback)
+    if (parts[0] === 127) return true
+    // 169.254.0.0/16 (link-local, includes AWS metadata 169.254.169.254)
+    if (parts[0] === 169 && parts[1] === 254) return true
+    // 0.0.0.0
+    if (parts.every((p) => p === 0)) return true
+  }
+  // IPv6 loopback / link-local
+  if (ip === '::1' || ip.startsWith('fe80:') || ip.startsWith('fc00:') || ip.startsWith('fd00:')) {
+    return true
+  }
+  return false
+}
+
+async function isInternalTarget(targetUrl: string): Promise<boolean> {
+  try {
+    const url = new URL(targetUrl)
+    const hostname = url.hostname
+
+    if (isIP(hostname)) {
+      return isPrivateIP(hostname)
+    }
+
+    const { address } = await lookup(hostname)
+    return isPrivateIP(address)
+  } catch {
+    return true
   }
 }
 
@@ -215,6 +260,13 @@ export class SubdomainProxy {
       return true
     }
 
+    if (await isInternalTarget(cached.target)) {
+      log.warn({ slug, tier, target: cached.target }, 'SSRF blocked: internal target')
+      this.cache.invalidate(cacheKey)
+      this.sendError(res, { target: null, status: 'INTERNAL_ERROR', tier })
+      return true
+    }
+
     // Add forwarding headers
     req.headers['x-forwarded-host'] = host
     req.headers['x-forwarded-proto'] = 'https'
@@ -251,6 +303,13 @@ export class SubdomainProxy {
     }
 
     if (!cached) {
+      socket.destroy()
+      return true
+    }
+
+    if (await isInternalTarget(cached.target)) {
+      log.warn({ slug, tier, target: cached.target }, 'SSRF blocked: internal WS target')
+      this.cache.invalidate(cacheKey)
       socket.destroy()
       return true
     }
