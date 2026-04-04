@@ -187,10 +187,10 @@ export async function handleComputeResumeCheck(
           })
         }
 
-        // Mark old escrow as refunded (already consumed)
-        await escrowService.resumeEscrow(deployment.id)
+        // Settle and close the old escrow (don't resume it — that would
+        // set it back to ACTIVE and contaminate burn-rate calculations)
+        await escrowService.refundEscrow(deployment.id)
 
-        // Clean up the old suspended deployment
         await prisma.akashDeployment.update({
           where: { id: deployment.id },
           data: { status: 'CLOSED', closedAt: new Date() },

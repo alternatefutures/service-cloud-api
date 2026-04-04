@@ -531,27 +531,33 @@ export class ComputeBillingScheduler {
 
         await this.prisma.akashDeployment.update({
           where: { id: deployment.id },
-          data: {
-            status: 'SUSPENDED',
-            savedSdl: deployment.sdlContent,
-          },
+          data: { savedSdl: deployment.sdlContent },
         })
 
+        let onChainClosed = false
         try {
           const { getAkashOrchestrator } =
             await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(this.prisma)
           await orchestrator.closeDeployment(Number(deployment.dseq))
+          onChainClosed = true
         } catch (err) {
-          log.warn(
+          log.error(
             { dseq: deployment.dseq, err },
-            'Failed to close Akash deployment on-chain'
+            'On-chain close failed — deployment stays ACTIVE and billed until resolved'
           )
         }
 
-        if (deployment.escrow) {
-          await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
-          await escrowService.pauseEscrow(deployment.id)
+        if (onChainClosed) {
+          await this.prisma.akashDeployment.update({
+            where: { id: deployment.id },
+            data: { status: 'SUSPENDED' },
+          })
+
+          if (deployment.escrow) {
+            await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
+            await escrowService.pauseEscrow(deployment.id)
+          }
         }
 
         pausedServices.push(`Akash: dseq=${deployment.dseq}`)
