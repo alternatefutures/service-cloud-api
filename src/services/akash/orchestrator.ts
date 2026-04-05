@@ -15,6 +15,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { Prisma } from '@prisma/client'
 import type { PrismaClient, ServiceType } from '@prisma/client'
+import type { ShellSession } from '../providers/types.js'
 import { providerSelector } from './providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
@@ -712,6 +713,122 @@ export class AkashOrchestrator {
       const msg = (err as Error).message?.slice(0, 300) ?? 'unknown error'
       log.warn(`getLogs failed for dseq=${dseq}: ${msg}`)
       throw new Error(`Failed to fetch logs for dseq=${dseq}: ${msg}`)
+    }
+  }
+
+  /**
+   * Spawn an interactive shell session via `provider-services lease-shell`.
+   * Uses node-pty to allocate a pseudo-terminal so `--tty` works
+   * (provider-services requires its stdin to be a real TTY).
+   */
+  async getShell(
+    dseq: number,
+    provider: string,
+    service: string,
+    command = '/bin/bash'
+  ): Promise<ShellSession> {
+    const env = getAkashEnv()
+    const args = [
+      'lease-shell',
+      service,
+      command,
+      '--dseq', String(dseq),
+      '--provider', provider,
+      '--stdin',
+      '--tty',
+    ]
+
+    log.info(`Spawning shell: provider-services ${args.join(' ')}`)
+
+    // node-pty is optional — fall back to spawn without --tty if unavailable
+    let pty: any
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      pty = require('node-pty')
+    } catch {
+      log.warn('node-pty not available, falling back to spawn without --tty')
+      return this.getShellFallback(env, args.filter(a => a !== '--tty'))
+    }
+
+    // Resolve full path — node-pty's posix_spawnp may not search PATH correctly
+    let binPath = 'provider-services'
+    try {
+      binPath = execFileSync('which', ['provider-services'], { encoding: 'utf-8' }).trim()
+    } catch { /* fall through with bare name */ }
+
+    const ptyProcess = pty.spawn(binPath, args, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      env,
+    })
+
+    let killed = false
+
+    const session: ShellSession = {
+      write(data: Buffer | string) {
+        if (!killed) {
+          ptyProcess.write(typeof data === 'string' ? data : data.toString())
+        }
+      },
+      onData(callback: (data: Buffer) => void) {
+        ptyProcess.onData((data: string) => {
+          callback(Buffer.from(data))
+        })
+      },
+      onExit(callback: (code: number | null) => void) {
+        ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
+          killed = true
+          callback(exitCode)
+        })
+      },
+      resize(cols: number, rows: number) {
+        if (!killed) {
+          ptyProcess.resize(cols, rows)
+        }
+      },
+      kill() {
+        if (!killed) {
+          killed = true
+          ptyProcess.kill()
+        }
+      },
+    }
+
+    return session
+  }
+
+  private getShellFallback(env: Record<string, string>, args: string[]): ShellSession {
+    const child = spawn('provider-services', args, {
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let killed = false
+
+    return {
+      write(data: Buffer | string) {
+        if (!killed && child.stdin.writable) {
+          child.stdin.write(data)
+        }
+      },
+      onData(callback: (data: Buffer) => void) {
+        child.stdout.on('data', callback)
+        child.stderr.on('data', callback)
+      },
+      onExit(callback: (code: number | null) => void) {
+        child.on('close', (code) => {
+          killed = true
+          callback(code)
+        })
+      },
+      kill() {
+        if (!killed) {
+          killed = true
+          child.kill('SIGTERM')
+        }
+      },
     }
   }
 

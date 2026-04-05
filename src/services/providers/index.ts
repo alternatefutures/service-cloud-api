@@ -9,6 +9,8 @@ export type {
   ContainerStatus,
   OverallHealth,
   LogOptions,
+  ShellOptions,
+  ShellSession,
   ProviderCapabilities,
   ProviderStatus,
 } from './types.js'
