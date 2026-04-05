@@ -46,6 +46,7 @@ import {
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
+import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId } from './lib/requestContext.js'
@@ -216,6 +217,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/provider-registry' && req.method === 'GET') {
       await handleProviderRegistryRequest(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/phala-instance-types' && req.method === 'GET') {
+      await handlePhalaInstanceTypesRequest(req, res)
       return
     }
 
