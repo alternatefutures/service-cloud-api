@@ -978,7 +978,7 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; 
   }
 
   // ── Persist results ────────────────────────────────────────────────
-  const MIN_PASS_RATE = 0.5
+  const MIN_PASS_RATE = 1.0
 
   if (opts.updateDb) {
     await persistResultsToDb(results, providerTally, MIN_PASS_RATE)
@@ -1014,7 +1014,7 @@ async function persistResultsToDb(
       let minPrice: bigint | undefined
       let maxPrice: bigint | undefined
       for (const p of tally.prices) {
-        const val = BigInt(p)
+        const val = BigInt(p.split('.')[0])
         if (minPrice === undefined || val < minPrice) minPrice = val
         if (maxPrice === undefined || val > maxPrice) maxPrice = val
       }
@@ -1052,7 +1052,7 @@ async function persistResultsToDb(
       })
       if (!provider) continue
 
-      const priceVal = result.priceUakt ? BigInt(result.priceUakt) : null
+      const priceVal = result.priceUakt ? BigInt(result.priceUakt.split('.')[0]) : null
 
       await prisma.providerTemplateResult.upsert({
         where: {
