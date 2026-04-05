@@ -5,7 +5,7 @@
  * Auth is handled via the first message (no tokens in URL).
  *
  * Protocol:
- *   1. Client connects to /ws/shell?serviceId=<id>
+ *   1. Client connects to /ws/shell?serviceId=<id>[&service=<name>][&command=<cmd>]
  *   2. Client sends: { type: "auth", token: "<jwt-or-pat>" }
  *   3. Server validates, spawns shell, sends: { type: "ready" }
  *   4. Bidirectional binary data piping (stdin/stdout)
@@ -159,6 +159,9 @@ export class ShellEndpoint {
       return
     }
 
+    const sdlServiceOverride = url.searchParams.get('service') || undefined
+    const commandOverride = url.searchParams.get('command') || undefined
+
     let authenticated = false
     const authTimer = setTimeout(() => {
       if (!authenticated) {
@@ -196,7 +199,10 @@ export class ShellEndpoint {
           return
         }
 
-        await this.startShellSession(ws, auth.userId, serviceId, auth.organizationId)
+        await this.startShellSession(ws, auth.userId, serviceId, auth.organizationId, {
+          service: sdlServiceOverride,
+          command: commandOverride,
+        })
         authenticated = true
       } catch (err) {
         log.error({ err }, 'Shell auth error')
@@ -214,7 +220,8 @@ export class ShellEndpoint {
     ws: WebSocket,
     userId: string,
     serviceId: string,
-    organizationId?: string
+    organizationId?: string,
+    shellOpts?: { service?: string; command?: string }
   ): Promise<void> {
     const startTime = Date.now()
 
@@ -230,17 +237,38 @@ export class ShellEndpoint {
       return
     }
 
-    const project = (service as any).project
-    if (project) {
-      const authorized = organizationId
-        ? project.organizationId === organizationId ||
-          (project.userId === userId && project.organizationId === null)
-        : project.userId === userId
-      if (!authorized) {
-        sendJson(ws, { type: 'error', message: 'Not authorized to access this service' })
-        ws.close(1008, 'Unauthorized')
+    const project = (service as any).project as
+      | { userId: string; organizationId: string | null }
+      | null
+
+    if (!project) {
+      sendJson(ws, { type: 'error', message: 'Service has no associated project' })
+      ws.close(1008, 'No project')
+      return
+    }
+
+    // Verify org membership when auth came from a PAT with an organizationId.
+    // The main auth middleware does validateAndSyncOrgMembership; replicate
+    // that check here so a stale PAT org claim can't grant access.
+    if (organizationId) {
+      const membership = await this.prisma.organizationMember.findUnique({
+        where: { organizationId_userId: { organizationId, userId } },
+      })
+      if (!membership) {
+        sendJson(ws, { type: 'error', message: 'Not a member of the claimed organization' })
+        ws.close(1008, 'Org membership invalid')
         return
       }
+    }
+
+    const authorized = organizationId
+      ? project.organizationId === organizationId ||
+        (project.userId === userId && project.organizationId === null)
+      : project.userId === userId
+    if (!authorized) {
+      sendJson(ws, { type: 'error', message: 'Not authorized to access this service' })
+      ws.close(1008, 'Unauthorized')
+      return
     }
 
     // Resolve active deployment and its provider type
@@ -282,7 +310,8 @@ export class ShellEndpoint {
     let session: ShellSession
     try {
       session = await provider.getShell(deployment.id, {
-        service: service.sdlServiceName ?? undefined,
+        service: shellOpts?.service || service.sdlServiceName || undefined,
+        command: shellOpts?.command,
       })
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 200) ?? 'unknown error'
@@ -352,7 +381,9 @@ export class ShellEndpoint {
         try {
           const msg = JSON.parse(data.toString())
           if (msg.type === 'resize' && session.resize) {
-            session.resize(msg.cols, msg.rows)
+            const cols = Math.max(1, Math.min(500, Math.floor(Number(msg.cols) || 80)))
+            const rows = Math.max(1, Math.min(200, Math.floor(Number(msg.rows) || 24)))
+            session.resize(cols, rows)
             return
           }
         } catch {
