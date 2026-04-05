@@ -4,29 +4,15 @@ export const gpuInstance: Template = {
   id: 'gpu-instance',
   name: 'GPU Instance',
   description:
-    'SSH-ready Linux machine with NVIDIA GPU and CUDA. Install anything — Ollama, vLLM, training frameworks, or your own stack.',
+    'Linux machine with NVIDIA GPU and CUDA. Install anything — Ollama, vLLM, training frameworks, or your own stack. Connect via the web terminal or CLI.',
   featured: true,
   category: 'AI_ML',
-  tags: ['gpu', 'ssh', 'cuda', 'instance', 'vm', 'linux', 'machine-learning', 'training'],
+  tags: ['gpu', 'cuda', 'instance', 'vm', 'linux', 'machine-learning', 'training'],
   icon: '🖥️',
   repoUrl: 'https://github.com/NVIDIA/nvidia-docker',
   dockerImage: 'nvidia/cuda:12.8.1-devel-ubuntu24.04',
   serviceType: 'VM',
-  envVars: [
-    {
-      key: 'SSH_PUBLIC_KEY',
-      default: null,
-      description: 'Your SSH public key (ssh-rsa/ssh-ed25519). Injected into authorized_keys for passwordless login.',
-      required: true,
-    },
-    {
-      key: 'ROOT_PASSWORD',
-      default: null,
-      description: 'Root password for SSH (fallback if no public key). Leave empty to disable password auth.',
-      required: false,
-      secret: true,
-    },
-  ],
+  envVars: [],
   resources: {
     cpu: 8,
     memory: '32Gi',
@@ -34,7 +20,6 @@ export const gpuInstance: Template = {
     gpu: { units: 1, vendor: 'nvidia' },
   },
   ports: [
-    { port: 22, as: 22, global: true },
     { port: 8080, as: 80, global: true },
   ],
   persistentStorage: [
@@ -45,14 +30,11 @@ export const gpuInstance: Template = {
     },
   ],
   startCommand: [
-    'apt-get update && apt-get install -y openssh-server curl wget git vim htop tmux',
-    'mkdir -p /run/sshd /root/.ssh && chmod 700 /root /root/.ssh',
-    'if [ -n "$SSH_PUBLIC_KEY" ]; then echo "$SSH_PUBLIC_KEY" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo "SSH key injected ($(wc -c < /root/.ssh/authorized_keys) bytes)"; else echo "WARNING: SSH_PUBLIC_KEY is empty"; fi',
-    'if [ -n "$ROOT_PASSWORD" ]; then echo "root:$ROOT_PASSWORD" | chpasswd && sed -i "s/#PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config && sed -i "s/.*PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config; else sed -i "s/#PermitRootLogin.*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config; fi',
     'echo "export PATH=/usr/local/cuda/bin:\\$PATH" >> /root/.bashrc',
     'echo "export LD_LIBRARY_PATH=/usr/local/cuda/lib64:\\$LD_LIBRARY_PATH" >> /root/.bashrc',
-    'echo "=== sshd starting ==="',
-    '/usr/sbin/sshd -D',
+    'apt-get update && apt-get install -y curl wget git vim htop tmux',
+    'echo "=== GPU instance ready. Use \'af services shell\' or the web terminal to connect. ==="',
+    'sleep infinity',
   ].join(' && '),
   pricingUakt: 100000,
 }

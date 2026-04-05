@@ -51,6 +51,32 @@ export interface LogOptions {
   follow?: boolean
 }
 
+// ─── Shell options ───────────────────────────────────────────────
+
+export interface ShellOptions {
+  /** Command to execute (default: /bin/sh) */
+  command?: string
+  /** Specific service/container within the deployment */
+  service?: string
+  /** Terminal columns (for resize) */
+  cols?: number
+  /** Terminal rows (for resize) */
+  rows?: number
+}
+
+export interface ShellSession {
+  /** Write data to the shell's stdin */
+  write(data: Buffer | string): void
+  /** Listen for data from the shell's stdout */
+  onData(callback: (data: Buffer) => void): void
+  /** Listen for the shell process exiting */
+  onExit(callback: (code: number | null) => void): void
+  /** Resize the terminal (not all providers support this) */
+  resize?(cols: number, rows: number): void
+  /** Kill the shell process and clean up */
+  kill(): void
+}
+
 // ─── Deployment result ───────────────────────────────────────────
 
 export interface DeploymentResult {
@@ -171,6 +197,13 @@ export interface DeploymentProvider {
   getLogs(deploymentId: string, opts?: LogOptions): Promise<string>
 
   /**
+   * Open an interactive shell session into a running deployment.
+   * Not all providers support this — check capabilities.supportsShell.
+   * Returns a ShellSession that the caller pipes to a WebSocket or terminal.
+   */
+  getShell?(deploymentId: string, opts?: ShellOptions): Promise<ShellSession>
+
+  /**
    * Provider-specific capabilities and metadata.
    */
   getCapabilities(): ProviderCapabilities
@@ -189,6 +222,8 @@ export interface ProviderCapabilities {
   supportsPersistentStorage: boolean
   /** Supports WebSocket proxying. */
   supportsWebSocket: boolean
+  /** Supports interactive shell access into running containers. */
+  supportsShell: boolean
   /** Config format this provider uses. */
   configFormat: 'sdl' | 'compose' | 'manifest' | 'custom'
   /** Billing model. */

@@ -348,6 +348,7 @@ export class PhalaProvider implements DeploymentProvider {
       supportsTEE: true,
       supportsPersistentStorage: true,
       supportsWebSocket: true,
+      supportsShell: false,
       configFormat: 'compose',
       billingModel: 'hourly',
     }

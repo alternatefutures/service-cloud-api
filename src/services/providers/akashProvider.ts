@@ -24,6 +24,8 @@ import type {
   ContainerStatus,
   OverallHealth,
   LogOptions,
+  ShellOptions,
+  ShellSession,
   ProviderCapabilities,
   ProviderStatus,
 } from './types.js'
@@ -268,6 +270,31 @@ export class AkashProvider implements DeploymentProvider {
     )
   }
 
+  async getShell(deploymentId: string, opts?: ShellOptions): Promise<ShellSession> {
+    const deployment = await this.prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      include: { service: { select: { sdlServiceName: true, slug: true } } },
+    })
+    if (!deployment || !deployment.provider) {
+      throw new Error(`Akash deployment not found or has no provider: ${deploymentId}`)
+    }
+    if (deployment.status !== 'ACTIVE') {
+      throw new Error(`Cannot open shell: deployment is ${deployment.status}, not ACTIVE`)
+    }
+
+    const sdlServiceName = opts?.service
+      || deployment.service.sdlServiceName
+      || deployment.service.slug
+
+    const orchestrator = getAkashOrchestrator(this.prisma)
+    return orchestrator.getShell(
+      Number(deployment.dseq),
+      deployment.provider,
+      sdlServiceName,
+      opts?.command,
+    )
+  }
+
   getCapabilities(): ProviderCapabilities {
     return {
       supportsStop: false,
@@ -275,6 +302,7 @@ export class AkashProvider implements DeploymentProvider {
       supportsTEE: false,
       supportsPersistentStorage: true,
       supportsWebSocket: true,
+      supportsShell: true,
       configFormat: 'sdl',
       billingModel: 'escrow',
     }

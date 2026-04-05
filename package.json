@@ -60,6 +60,7 @@
     "ipfs-http-client": "^60.0.1",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^4.2.1",
+    "node-pty": "^1.1.0",
     "pdfkit": "^0.17.2",
     "pino": "^10.3.1",
     "stripe": "^19.3.1",

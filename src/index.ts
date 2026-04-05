@@ -48,6 +48,7 @@ import { ProviderRegistryScheduler } from './services/providers/providerRegistry
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
+import { ShellEndpoint } from './services/shell/shellEndpoint.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId } from './lib/requestContext.js'
 
@@ -261,6 +262,9 @@ const server = createServer(requestHandler)
 // Initialize Chat WebSocket Server
 const chatServer = new ChatServer(prisma, effectiveJwtSecret)
 
+// Initialize Shell WebSocket Server
+const shellEndpoint = new ShellEndpoint(prisma, effectiveJwtSecret)
+
 // Handle WebSocket upgrade for /ws path and proxied subdomains
 server.on('upgrade', async (request, socket, head) => {
   // Check if this is a proxied subdomain WebSocket upgrade
@@ -272,7 +276,9 @@ server.on('upgrade', async (request, socket, head) => {
     `http://${request.headers.host}`
   )
 
-  if (pathname === '/ws') {
+  if (pathname === '/ws/shell') {
+    shellEndpoint.handleUpgrade(request, socket, head)
+  } else if (pathname === '/ws') {
     chatServer.handleUpgrade(request, socket, head)
   } else {
     socket.destroy()
@@ -329,6 +335,7 @@ async function gracefulShutdown(signal: string) {
 
   server.close(async () => {
     try {
+      shellEndpoint.shutdown()
       await chatServer.shutdown()
       await usageAggregator.shutdown()
       await telemetryIngestionService.stop()
