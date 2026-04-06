@@ -242,6 +242,12 @@ function isLikelyTcp(uri: string): boolean {
 
 // ── DEPLOY command ────────────────────────────────────────────────────
 
+interface BidderInfo {
+  provider: string
+  amount: string
+  denom: string
+}
+
 interface DeployResult {
   templateId: string
   templateName: string
@@ -255,6 +261,7 @@ interface DeployResult {
   steps: StepResult[]
   endpoints?: Record<string, string[]>
   error?: string
+  allBidders?: BidderInfo[]
 }
 
 async function cmdDeploy(templateId: string, opts: { close: boolean; envOverrides: Record<string, string>; preferProvider?: string }): Promise<DeployResult> {
@@ -311,6 +318,7 @@ async function cmdDeploy(templateId: string, opts: { close: boolean; envOverride
   let gseq = 1
   let oseq = 1
   let serviceUrls: Record<string, string[]> = {}
+  let allBidders: BidderInfo[] = []
 
   const mkResult = (): DeployResult => ({
     templateId,
@@ -322,6 +330,7 @@ async function cmdDeploy(templateId: string, opts: { close: boolean; envOverride
     totalMs: Date.now() - totalStart,
     steps: [...stepResults],
     endpoints: Object.keys(serviceUrls).length > 0 ? serviceUrls : undefined,
+    allBidders: allBidders.length > 0 ? allBidders : undefined,
   })
 
   try {
@@ -503,6 +512,12 @@ async function cmdDeploy(templateId: string, opts: { close: boolean; envOverride
           .sort((a: any, b: any) => parseFloat(a.amount) - parseFloat(b.amount))
 
         if (openBids.length > 0) {
+          allBidders = openBids.map((b: any) => ({
+            provider: b.provider,
+            amount: b.amount,
+            denom: b.denom,
+          }))
+
           if (opts.preferProvider) {
             const match = openBids.find((b: any) => b.provider.startsWith(opts.preferProvider!))
             if (match) {
@@ -884,7 +899,7 @@ function cmdListTemplates() {
 
 // ── TEST-ALL command ──────────────────────────────────────────────────
 
-async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; updateDb: boolean }) {
+async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; updateDb: boolean; cheapestOnly: boolean }) {
   const templates = getAllTemplates()
   const production = templates.filter(t => !t.releaseStage || t.releaseStage === 'production')
   const toTest = opts.includeGpu
@@ -897,12 +912,32 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; 
   const skipped = templates.length - production.length
   console.log(`  Templates total: ${templates.length}${skipped ? ` (${skipped} non-production skipped)` : ''}`)
   console.log(`  Testing: ${toTest.length} (${opts.includeGpu ? 'including' : 'excluding'} GPU)`)
+  console.log(`  Mode: ${opts.cheapestOnly ? 'cheapest bidder only (quick)' : 'ALL bidders per template (comprehensive)'}`)
   if (opts.preferProvider) console.log(`  Prefer provider: ${opts.preferProvider}`)
   console.log(`  Results target: ${opts.updateDb ? 'database (compute_provider)' : 'lib/preferred-providers.json (legacy)'}`)
   console.log('')
 
   const results: DeployResult[] = []
   const providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }> = {}
+
+  const recordResult = (result: DeployResult, templateId: string) => {
+    results.push(result)
+    if (result.provider) {
+      if (!providerTally[result.provider]) {
+        providerTally[result.provider] = { passed: [], failed: [], prices: [] }
+      }
+      if (result.passed) {
+        providerTally[result.provider].passed.push(templateId)
+      } else {
+        providerTally[result.provider].failed.push(templateId)
+      }
+      if (result.priceUakt) {
+        providerTally[result.provider].prices.push(result.priceUakt)
+      }
+    }
+  }
+
+  let totalDeploys = 0
 
   for (let i = 0; i < toTest.length; i++) {
     const t = toTest[i]
@@ -929,54 +964,110 @@ async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; 
       }
     }
 
-    results.push(result)
+    recordResult(result, t.id)
+    totalDeploys++
+    console.log(`\n  >> ${t.id}: ${result.passed ? 'PASSED' : 'FAILED'}${result.provider ? ` on ${result.provider}` : ''}`)
 
-    if (i < toTest.length - 1) await sleep(10_000)
+    // Test remaining bidders (unless --cheapest-only)
+    if (!opts.cheapestOnly && !opts.preferProvider && result.allBidders && result.allBidders.length > 1) {
+      const testedProviders = new Set<string>()
+      if (result.provider) testedProviders.add(result.provider)
 
-    if (result.provider) {
-      if (!providerTally[result.provider]) {
-        providerTally[result.provider] = { passed: [], failed: [], prices: [] }
+      const remainingBidders = result.allBidders.filter(b => !testedProviders.has(b.provider))
+      if (remainingBidders.length > 0) {
+        console.log(`\n  ${remainingBidders.length} additional bidder(s) to test for ${t.id}...`)
       }
-      if (result.passed) {
-        providerTally[result.provider].passed.push(t.id)
-      } else {
-        providerTally[result.provider].failed.push(t.id)
-      }
-      if (result.priceUakt) {
-        providerTally[result.provider].prices.push(result.priceUakt)
+
+      for (const bidder of remainingBidders) {
+        console.log(`\n${'─'.repeat(70)}`)
+        console.log(`  [${i + 1}/${toTest.length}] ${t.id} → re-testing with provider ${bidder.provider}`)
+        console.log(`${'─'.repeat(70)}\n`)
+
+        await sleep(8_000)
+
+        let bidderResult: DeployResult
+        try {
+          bidderResult = await cmdDeploy(t.id, {
+            close: true,
+            envOverrides: {},
+            preferProvider: bidder.provider,
+          })
+        } catch (err: any) {
+          bidderResult = {
+            templateId: t.id,
+            templateName: t.name,
+            image: t.dockerImage,
+            passed: false,
+            totalMs: 0,
+            steps: [],
+            error: err.message || String(err),
+          }
+        }
+
+        recordResult(bidderResult, t.id)
+        totalDeploys++
+        if (bidderResult.provider) testedProviders.add(bidderResult.provider)
+        console.log(`\n  >> ${t.id}: ${bidderResult.passed ? 'PASSED' : 'FAILED'}${bidderResult.provider ? ` on ${bidderResult.provider}` : ''}`)
       }
     }
 
-    console.log(`\n  >> ${t.id}: ${result.passed ? 'PASSED' : 'FAILED'}${result.provider ? ` on ${result.provider}` : ''}`)
+    if (i < toTest.length - 1) await sleep(10_000)
   }
+
+  console.log(`\n  Total deployments executed: ${totalDeploys}`)
 
   // ── Summary ────────────────────────────────────────────────────────
   console.log('\n\n' + '═'.repeat(70))
   console.log('  TEST-ALL SUMMARY')
   console.log('═'.repeat(70))
 
-  const passed = results.filter(r => r.passed)
-  const failed = results.filter(r => !r.passed)
+  // Per-template aggregate: a template "passes" if at least one provider passed it
+  const templateResults = new Map<string, { passedProviders: string[]; failedProviders: string[] }>()
+  for (const r of results) {
+    if (!templateResults.has(r.templateId)) {
+      templateResults.set(r.templateId, { passedProviders: [], failedProviders: [] })
+    }
+    const tr = templateResults.get(r.templateId)!
+    if (r.provider) {
+      if (r.passed) tr.passedProviders.push(r.provider)
+      else tr.failedProviders.push(r.provider)
+    }
+  }
 
-  console.log(`\n  Passed: ${passed.length}/${results.length}`)
-  if (failed.length > 0) {
-    console.log(`  Failed:`)
-    for (const f of failed) {
-      const failSteps = f.steps.filter(s => s.status !== 'OK')
-      const reason = failSteps.length > 0
-        ? failSteps.map(s => `${s.step}: ${s.detail}`).join('; ')
-        : (f.error || 'unknown')
-      console.log(`    - ${f.templateId}: ${reason.slice(0, 120)}`)
+  const allEntries = Array.from(templateResults.entries())
+  const templatesWithPass = allEntries.filter(([, v]) => v.passedProviders.length > 0)
+  const templatesAllFail = allEntries.filter(([, v]) => v.passedProviders.length === 0)
+
+  console.log(`\n  Templates: ${templatesWithPass.length}/${templateResults.size} have at least one working provider`)
+  console.log(`  Deployments: ${totalDeploys} total (${results.filter(r => r.passed).length} passed, ${results.filter(r => !r.passed).length} failed)`)
+  console.log(`  Unique providers tested: ${Object.keys(providerTally).length}`)
+
+  if (templatesAllFail.length > 0) {
+    console.log(`\n  Templates with NO working provider:`)
+    for (const [tid, tr] of templatesAllFail) {
+      const failReasons = results
+        .filter(r => r.templateId === tid && !r.passed)
+        .map(r => {
+          const failSteps = r.steps.filter(s => s.status !== 'OK')
+          const reason = failSteps.length > 0 ? failSteps[0].detail : (r.error || 'unknown')
+          return `${r.provider?.slice(0, 12) || '?'}… → ${reason.slice(0, 80)}`
+        })
+      console.log(`    - ${tid}:`)
+      for (const fr of failReasons) console.log(`        ${fr}`)
     }
   }
 
   console.log('\n  Provider results:')
   for (const [addr, tally] of Object.entries(providerTally)) {
+    const avgPrice = tally.prices.length > 0
+      ? (tally.prices.reduce((sum, p) => sum + parseFloat(p), 0) / tally.prices.length).toFixed(2)
+      : 'N/A'
     console.log(`    ${addr}`)
     console.log(`      passed: ${tally.passed.length} (${tally.passed.join(', ')})`)
     if (tally.failed.length > 0) {
       console.log(`      failed: ${tally.failed.length} (${tally.failed.join(', ')})`)
     }
+    console.log(`      avg price: ${avgPrice} uact`)
   }
 
   // ── Persist results ────────────────────────────────────────────────
@@ -1183,7 +1274,7 @@ async function main() {
 
   Usage:
     bun scripts/test-deploy.ts deploy <template-id> [--close] [--provider <addr>] [--env KEY=VAL ...]
-    bun scripts/test-deploy.ts test-all [--no-gpu] [--provider <addr>] [--update-db]
+    bun scripts/test-deploy.ts test-all [--no-gpu] [--provider <addr>] [--update-db] [--cheapest-only]
     bun scripts/test-deploy.ts status <dseq> --provider <addr>
     bun scripts/test-deploy.ts logs   <dseq> --provider <addr> [--service name] [--tail N]
     bun scripts/test-deploy.ts close  <dseq>
@@ -1192,12 +1283,13 @@ async function main() {
     bun scripts/test-deploy.ts list-templates
 
   test-all:
-    Deploys every template sequentially, records pricing.
-    --update-db writes results to the compute_provider DB tables (default).
+    Deploys every template and tests ALL providers that bid (comprehensive).
+    --update-db writes results to the compute_provider DB tables.
     Without --update-db, writes to lib/preferred-providers.json (legacy).
     GPU templates are included by default.
-    Use --no-gpu to skip GPU templates. Use --provider to force
-    a specific provider for all deployments.
+    --cheapest-only  Only test the cheapest bidder per template (quick mode).
+    --no-gpu         Skip GPU templates.
+    --provider       Force a specific provider for all deployments.
     `)
     process.exit(0)
   }
@@ -1259,9 +1351,10 @@ async function main() {
     case 'test-all': {
       const excludeGpu = args.includes('--no-gpu')
       const updateDb = args.includes('--update-db')
+      const cheapestOnly = args.includes('--cheapest-only')
       const provIdx = args.indexOf('--provider')
       const preferProvider = provIdx >= 0 ? args[provIdx + 1] : undefined
-      await cmdTestAll({ includeGpu: !excludeGpu, preferProvider, updateDb })
+      await cmdTestAll({ includeGpu: !excludeGpu, preferProvider, updateDb, cheapestOnly })
       break
     }
     case 'list-templates':

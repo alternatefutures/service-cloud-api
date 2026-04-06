@@ -1224,6 +1224,40 @@ export const resolvers = {
       })
     },
 
+    updateProject: async (
+      _: unknown,
+      { id, data }: { id: string; data: { name?: string } },
+      context: Context
+    ) => {
+      requireAuth(context)
+
+      const project = await context.prisma.project.findUnique({
+        where: { id },
+        select: { id: true, userId: true, organizationId: true },
+      })
+
+      if (!project) {
+        throw new GraphQLError('Project not found')
+      }
+
+      assertProjectAccess(context, project, 'Not authorized to update this project')
+
+      const updateData: Record<string, unknown> = {}
+      if (data.name !== undefined && data.name !== null) {
+        updateData.name = data.name
+        updateData.slug = generateSlug(data.name)
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return context.prisma.project.findUnique({ where: { id } })
+      }
+
+      return context.prisma.project.update({
+        where: { id },
+        data: updateData,
+      })
+    },
+
     deleteProject: async (
       _: unknown,
       { id }: { id: string },
