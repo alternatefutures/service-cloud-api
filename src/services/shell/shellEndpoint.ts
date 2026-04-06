@@ -347,7 +347,9 @@ export class ShellEndpoint {
       if (cleanedUp) return
       cleanedUp = true
       clearTimeout(idleTimer)
-      session.kill()
+      try { session.kill() } catch (err) {
+        log.warn({ err, userId, serviceId }, 'session.kill() threw during cleanup')
+      }
       untrackSession(userId, ws)
       const durationSec = Math.round((Date.now() - startTime) / 1000)
       log.info(
