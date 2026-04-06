@@ -584,6 +584,8 @@ export class AkashOrchestrator {
     const BACKFILL_INTERVAL_MS = 10_000
     const BACKFILL_MAX_ATTEMPTS = 18 // 18 * 10s = 3 minutes
 
+    let consecutiveErrors = 0
+
     for (let i = 0; i < BACKFILL_MAX_ATTEMPTS; i++) {
       await new Promise(r => setTimeout(r, BACKFILL_INTERVAL_MS))
 
@@ -609,6 +611,7 @@ export class AkashOrchestrator {
 
       try {
         const services = await this.getServices(dseq, provider)
+        consecutiveErrors = 0
         const hasUris = Object.values(services).some(s => s.uris?.length > 0)
         if (hasUris) {
           await this.prisma.akashDeployment.update({
@@ -621,9 +624,22 @@ export class AkashOrchestrator {
           return
         }
       } catch (err) {
+        consecutiveErrors++
         log.warn(
           `Backfill getServices attempt ${i + 1} failed for ${deploymentId}: ${err instanceof Error ? err.message : err}`
         )
+
+        // If the provider consistently rejects us, the lease is likely dead
+        if (consecutiveErrors >= 6) {
+          log.error(
+            `Backfill: ${consecutiveErrors} consecutive provider errors for ${deploymentId} — lease likely dead, marking CLOSED`
+          )
+          await this.prisma.akashDeployment.updateMany({
+            where: { id: deploymentId, status: 'ACTIVE' },
+            data: { status: 'CLOSED', closedAt: new Date() },
+          })
+          return
+        }
       }
     }
 

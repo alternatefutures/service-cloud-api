@@ -56,6 +56,14 @@ export class PhalaProvider implements DeploymentProvider {
     return !!(process.env.PHALA_API_KEY || process.env.PHALA_CLOUD_API_KEY)
   }
 
+  async getActiveDeploymentIds(): Promise<string[]> {
+    const active = await this.prisma.phalaDeployment.findMany({
+      where: { status: 'ACTIVE' },
+      select: { id: true },
+    })
+    return active.map(d => d.id)
+  }
+
   async deploy(serviceId: string, options: DeployOptions): Promise<DeploymentResult> {
     if (!options.composeContent) {
       throw new Error('Phala deployments require composeContent in DeployOptions')
@@ -119,7 +127,17 @@ export class PhalaProvider implements DeploymentProvider {
     }
 
     const orchestrator = getPhalaOrchestrator(this.prisma)
-    await orchestrator.stopPhalaDeployment(deployment.appId)
+    try {
+      await orchestrator.stopPhalaDeployment(deployment.appId)
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const alreadyGone = /not found|does not exist|already stopped|already deleted|no such|404/i.test(errMsg)
+      if (alreadyGone) {
+        log.warn({ appId: deployment.appId, err }, 'CVM already gone — proceeding to mark STOPPED in DB')
+      } else {
+        throw err
+      }
+    }
 
     await this.prisma.phalaDeployment.update({
       where: { id: deploymentId },
@@ -183,7 +201,17 @@ export class PhalaProvider implements DeploymentProvider {
     }
 
     const orchestrator = getPhalaOrchestrator(this.prisma)
-    await orchestrator.deletePhalaDeployment(deployment.appId)
+    try {
+      await orchestrator.deletePhalaDeployment(deployment.appId)
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      const alreadyGone = /not found|does not exist|already stopped|already deleted|no such|404/i.test(errMsg)
+      if (alreadyGone) {
+        log.warn({ appId: deployment.appId, err }, 'CVM already gone — proceeding to mark DELETED in DB')
+      } else {
+        throw err
+      }
+    }
 
     await this.prisma.phalaDeployment.update({
       where: { id: deploymentId },
@@ -287,13 +315,13 @@ export class PhalaProvider implements DeploymentProvider {
     } catch {
       return {
         provider: 'phala',
-        overall: deployment.status === 'ACTIVE' ? 'healthy' : 'unknown',
+        overall: 'unknown',
         containers: [{
           name: deployment.name,
-          status: deployment.status === 'ACTIVE' ? 'running' : 'unknown',
-          ready: deployment.status === 'ACTIVE',
+          status: 'unknown' as ContainerStatus,
+          ready: false,
           total: 1,
-          available: deployment.status === 'ACTIVE' ? 1 : 0,
+          available: 0,
           uris: deployment.appUrl ? [deployment.appUrl] : [],
         }],
         lastChecked: new Date(),

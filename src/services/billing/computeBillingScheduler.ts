@@ -319,6 +319,10 @@ export class ComputeBillingScheduler {
 
   // ========================================
   // STEP 2: PHALA PER-HOUR DEBITS
+  // Liveness of ACTIVE Phala deployments is verified by the provider-agnostic
+  // reconciler in staleDeploymentSweeper — not inline here. If a CVM is dead,
+  // the reconciler calls provider.close() which settles billing via
+  // processFinalPhalaBilling(). This method trusts DB status.
   // ========================================
 
   private async processPhalaDebits(stats: {
@@ -437,7 +441,10 @@ export class ComputeBillingScheduler {
     const billingApi = getBillingApiClient()
 
     const activeEscrows = await this.prisma.deploymentEscrow.findMany({
-      where: { status: 'ACTIVE' },
+      where: {
+        status: 'ACTIVE',
+        akashDeployment: { status: 'ACTIVE' },
+      },
       select: {
         orgBillingId: true,
         organizationId: true,
@@ -556,12 +563,12 @@ export class ComputeBillingScheduler {
         }
 
         if (onChainClosed) {
-          await this.prisma.akashDeployment.update({
-            where: { id: deployment.id },
+          const result = await this.prisma.akashDeployment.updateMany({
+            where: { id: deployment.id, status: 'ACTIVE' },
             data: { status: 'SUSPENDED' },
           })
 
-          if (deployment.escrow) {
+          if (result.count > 0 && deployment.escrow) {
             await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
             await escrowService.pauseEscrow(deployment.id)
           }
@@ -593,17 +600,33 @@ export class ComputeBillingScheduler {
           'phala_balance_low_pause'
         )
 
-        const { getPhalaOrchestrator } =
-          await import('../phala/orchestrator.js')
-        const orchestrator = getPhalaOrchestrator(this.prisma)
-        await orchestrator.stopPhalaDeployment(deployment.appId)
+        let providerStopped = false
+        try {
+          const { getPhalaOrchestrator } =
+            await import('../phala/orchestrator.js')
+          const orchestrator = getPhalaOrchestrator(this.prisma)
+          await orchestrator.stopPhalaDeployment(deployment.appId)
+          providerStopped = true
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          const alreadyGone = /not found|does not exist|already stopped|already deleted|no such|404/i.test(errMsg)
+          if (alreadyGone) {
+            log.warn({ appId: deployment.appId, err }, 'CVM already gone during pause — treating as stopped')
+            providerStopped = true
+          } else {
+            log.error({ deploymentId: deployment.id, err }, 'Phala stop failed — deployment stays ACTIVE')
+          }
+        }
 
-        await this.prisma.phalaDeployment.update({
-          where: { id: deployment.id },
-          data: { status: 'STOPPED' },
-        })
-
-        pausedServices.push(`Phala: ${deployment.name}`)
+        if (providerStopped) {
+          const result = await this.prisma.phalaDeployment.updateMany({
+            where: { id: deployment.id, status: 'ACTIVE' },
+            data: { status: 'STOPPED' },
+          })
+          if (result.count > 0) {
+            pausedServices.push(`Phala: ${deployment.name}`)
+          }
+        }
       } catch (error) {
         log.error(
           { deploymentId: deployment.id, err: error },

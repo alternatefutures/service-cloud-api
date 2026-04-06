@@ -507,6 +507,16 @@ export const akashMutations = {
           data: { stopReason: 'MANUAL_STOP', stoppedAt: new Date() },
         })
       }
+      // Refund any remaining escrow balance (settlement was done during pause)
+      try {
+        const escrowService = getEscrowService(context.prisma)
+        const refundCents = await escrowService.refundEscrow(id)
+        if (refundCents > 0) {
+          log.info(`Refunded $${(refundCents / 100).toFixed(2)} escrow for SUSPENDED→CLOSED deployment ${id}`)
+        }
+      } catch (error) {
+        log.warn(error, `Escrow refund failed for SUSPENDED→CLOSED deployment ${id}`)
+      }
       return formatDeployment(updated)
     }
 
