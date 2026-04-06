@@ -1650,7 +1650,7 @@ export const resolvers = {
         include: {
           project: { select: { userId: true, organizationId: true } },
           akashDeployments: {
-            where: { status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'] } },
+            where: { status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'] } },
             orderBy: { createdAt: 'desc' },
             take: 1,
           },

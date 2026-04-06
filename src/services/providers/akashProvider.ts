@@ -63,6 +63,14 @@ export class AkashProvider implements DeploymentProvider {
     return !!process.env.AKASH_MNEMONIC
   }
 
+  async getActiveDeploymentIds(): Promise<string[]> {
+    const active = await this.prisma.akashDeployment.findMany({
+      where: { status: 'ACTIVE' },
+      select: { id: true },
+    })
+    return active.map(d => d.id)
+  }
+
   async deploy(serviceId: string, options: DeployOptions): Promise<DeploymentResult> {
     const orchestrator = getAkashOrchestrator(this.prisma)
 

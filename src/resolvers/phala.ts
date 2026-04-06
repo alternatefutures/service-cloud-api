@@ -263,8 +263,18 @@ export const phalaMutations = {
     // If the CVM hasn't been provisioned yet (appId still 'pending'),
     // skip the CLI call — there's nothing to stop on Phala's side.
     if (deployment.appId && deployment.appId !== 'pending') {
-      const orchestrator = getPhalaOrchestrator(context.prisma)
-      await orchestrator.stopPhalaDeployment(deployment.appId)
+      try {
+        const orchestrator = getPhalaOrchestrator(context.prisma)
+        await orchestrator.stopPhalaDeployment(deployment.appId)
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error)
+        const alreadyGone = /not found|does not exist|already stopped|already deleted|no such|404/i.test(errMsg)
+        if (alreadyGone) {
+          log.warn({ appId: deployment.appId, err: error }, 'CVM already gone — proceeding to mark STOPPED in DB')
+        } else {
+          throw new GraphQLError(`Failed to stop CVM: ${errMsg}`)
+        }
+      }
     }
 
     const updated = await context.prisma.phalaDeployment.update({
@@ -335,8 +345,18 @@ export const phalaMutations = {
     }
 
     if (deployment.appId && deployment.appId !== 'pending') {
-      const orchestrator = getPhalaOrchestrator(context.prisma)
-      await orchestrator.deletePhalaDeployment(deployment.appId)
+      try {
+        const orchestrator = getPhalaOrchestrator(context.prisma)
+        await orchestrator.deletePhalaDeployment(deployment.appId)
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error)
+        const alreadyGone = /not found|does not exist|already stopped|already deleted|no such|404/i.test(errMsg)
+        if (alreadyGone) {
+          log.warn({ appId: deployment.appId, err: error }, 'CVM already gone — proceeding to mark DELETED in DB')
+        } else {
+          throw new GraphQLError(`Failed to delete CVM: ${errMsg}`)
+        }
+      }
     }
 
     const updated = await context.prisma.phalaDeployment.update({

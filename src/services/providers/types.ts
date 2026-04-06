@@ -176,7 +176,11 @@ export interface DeploymentProvider {
 
   /**
    * Permanently close/delete a deployment.
-   * This should clean up on-chain/provider resources and update the DB.
+   * BILLING CONTRACT: This method MUST settle all outstanding billing for the
+   * deployment before returning. This includes final prorated charges, escrow
+   * settlement, refunds, and any provider-specific billing cleanup. The
+   * provider-agnostic reconciler relies on this guarantee — when it detects a
+   * dead deployment and calls close(), billing is fully handled.
    */
   close(deploymentId: string): Promise<void>
 
@@ -186,10 +190,21 @@ export interface DeploymentProvider {
   getStatus(deploymentId: string): Promise<DeploymentStatusResult>
 
   /**
-   * Live per-container health from the provider API.
-   * Returns undefined if the deployment is not in a state that supports health checks.
+   * Return IDs of all deployments that the DB considers active/running.
+   * The provider-agnostic reconciler calls this to discover what to health-check.
+   * Must include any status where the provider could be consuming resources
+   * (i.e. the deployment is billable).
    */
-  getHealth?(deploymentId: string): Promise<DeploymentHealthResult | null>
+  getActiveDeploymentIds(): Promise<string[]>
+
+  /**
+   * Live per-container health from the provider API.
+   * REQUIRED: every provider MUST implement liveness checks. A provider that
+   * cannot report health is a billing liability — the reconciler uses this to
+   * detect dead deployments and stop ghost billing.
+   * Return { overall: 'unknown' } on transient errors (NOT 'healthy').
+   */
+  getHealth(deploymentId: string): Promise<DeploymentHealthResult | null>
 
   /**
    * Get deployment logs.
