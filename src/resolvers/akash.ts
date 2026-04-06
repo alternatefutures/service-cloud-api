@@ -517,7 +517,7 @@ export const akashMutations = {
       await orchestrator.closeDeployment(Number(deployment.dseq))
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error)
-      const alreadyGone = /deployment not found|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
+      const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
 
       if (alreadyGone) {
         log.warn(
