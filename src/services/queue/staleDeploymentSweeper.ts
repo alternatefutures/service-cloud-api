@@ -240,16 +240,14 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
  * linked AkashDeployment is in a terminal state should be settled and refunded.
  */
 async function reconcileOrphanedEscrows(prisma: PrismaClient): Promise<void> {
-  const TERMINAL_STATUSES = ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED']
+  const TERMINAL_STATUSES = ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'] as const
 
   const orphaned = await prisma.deploymentEscrow.findMany({
     where: {
       status: { in: ['ACTIVE', 'DEPLETED'] },
-      akashDeployment: { status: { in: TERMINAL_STATUSES } },
+      akashDeployment: { status: { in: [...TERMINAL_STATUSES] } },
     },
-    select: {
-      id: true,
-      akashDeploymentId: true,
+    include: {
       akashDeployment: { select: { closedAt: true } },
     },
   })
@@ -262,7 +260,7 @@ async function reconcileOrphanedEscrows(prisma: PrismaClient): Promise<void> {
 
   for (const esc of orphaned) {
     try {
-      const settledAt = esc.akashDeployment.closedAt || new Date()
+      const settledAt = esc.akashDeployment?.closedAt || new Date()
       await settleAkashEscrowToTime(prisma, esc.akashDeploymentId, settledAt)
       await escrowService.refundEscrow(esc.akashDeploymentId)
       log.info(`Reconciled orphaned escrow ${esc.id} for deployment ${esc.akashDeploymentId}`)
