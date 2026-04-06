@@ -543,7 +543,7 @@ export class ComputeBillingScheduler {
           onChainClosed = true
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
-          const alreadyGone = /deployment not found|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
+          const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
           if (alreadyGone) {
             log.warn({ dseq: deployment.dseq, err }, 'On-chain deployment already gone — treating as closed')
             onChainClosed = true
