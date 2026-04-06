@@ -542,10 +542,17 @@ export class ComputeBillingScheduler {
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
         } catch (err) {
-          log.error(
-            { dseq: deployment.dseq, err },
-            'On-chain close failed — deployment stays ACTIVE and billed until resolved'
-          )
+          const errMsg = err instanceof Error ? err.message : String(err)
+          const alreadyGone = /deployment not found|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
+          if (alreadyGone) {
+            log.warn({ dseq: deployment.dseq, err }, 'On-chain deployment already gone — treating as closed')
+            onChainClosed = true
+          } else {
+            log.error(
+              { dseq: deployment.dseq, err },
+              'On-chain close failed — deployment stays ACTIVE and billed until resolved'
+            )
+          }
         }
 
         if (onChainClosed) {

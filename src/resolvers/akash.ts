@@ -516,13 +516,23 @@ export const akashMutations = {
       const orchestrator = getAkashOrchestrator(context.prisma)
       await orchestrator.closeDeployment(Number(deployment.dseq))
     } catch (error) {
-      log.error(
-        { dseq: deployment.dseq?.toString(), err: error },
-        'On-chain close failed — cannot mark CLOSED or refund escrow while deployment may still be running'
-      )
-      throw new GraphQLError(
-        `Failed to close deployment on-chain (dseq=${deployment.dseq}). The deployment may still be running. Try again or contact support.`
-      )
+      const errMsg = error instanceof Error ? error.message : String(error)
+      const alreadyGone = /deployment not found|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
+
+      if (alreadyGone) {
+        log.warn(
+          { dseq: deployment.dseq?.toString(), err: error },
+          'On-chain deployment already gone — proceeding to mark CLOSED in DB'
+        )
+      } else {
+        log.error(
+          { dseq: deployment.dseq?.toString(), err: error },
+          'On-chain close failed — cannot mark CLOSED or refund escrow while deployment may still be running'
+        )
+        throw new GraphQLError(
+          `Failed to close deployment on-chain (dseq=${deployment.dseq}). The deployment may still be running. Try again or contact support.`
+        )
+      }
     }
 
     const updated = await context.prisma.akashDeployment.update({
