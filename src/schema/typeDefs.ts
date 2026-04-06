@@ -1771,6 +1771,10 @@ export const typeDefs = /* GraphQL */ `
     name: String!
   }
 
+  input UpdateProjectDataInput {
+    name: String
+  }
+
   type Mutation {
     # Auth - SDK token exchange
     """
@@ -1788,6 +1792,7 @@ export const typeDefs = /* GraphQL */ `
 
     # Projects
     createProject(data: CreateProjectDataInput!): Project!
+    updateProject(id: ID!, data: UpdateProjectDataInput!): Project!
     deleteProject(id: ID!): Boolean!
 
     # Sites
