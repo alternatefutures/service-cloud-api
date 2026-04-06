@@ -886,14 +886,16 @@ function cmdListTemplates() {
 
 async function cmdTestAll(opts: { includeGpu: boolean; preferProvider?: string; updateDb: boolean }) {
   const templates = getAllTemplates()
+  const production = templates.filter(t => !t.releaseStage || t.releaseStage === 'production')
   const toTest = opts.includeGpu
-    ? templates
-    : templates.filter(t => !t.resources.gpu)
+    ? production
+    : production.filter(t => !t.resources.gpu)
 
   console.log('\n' + '═'.repeat(70))
   console.log('  TEST-ALL: Deploy every template, verify providers')
   console.log('═'.repeat(70))
-  console.log(`  Templates total: ${templates.length}`)
+  const skipped = templates.length - production.length
+  console.log(`  Templates total: ${templates.length}${skipped ? ` (${skipped} non-production skipped)` : ''}`)
   console.log(`  Testing: ${toTest.length} (${opts.includeGpu ? 'including' : 'excluding'} GPU)`)
   if (opts.preferProvider) console.log(`  Prefer provider: ${opts.preferProvider}`)
   console.log(`  Results target: ${opts.updateDb ? 'database (compute_provider)' : 'lib/preferred-providers.json (legacy)'}`)
