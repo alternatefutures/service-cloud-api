@@ -1061,7 +1061,28 @@ export async function finalizeDeployment(
   deployment: any,
   serviceUrls: Record<string, { uris: string[] }>
 ): Promise<void> {
-  const organizationId = deployment.service?.project?.organizationId
+  let organizationId = deployment.service?.project?.organizationId
+  if (!organizationId) {
+    // Fallback: resolve org from user's membership (covers CLI-created projects missing orgId)
+    const userId = deployment.service?.createdByUserId || deployment.service?.project?.userId
+    if (userId) {
+      const membership = await prisma.organizationMember.findFirst({
+        where: { userId },
+        select: { organizationId: true },
+      })
+      if (membership) {
+        organizationId = membership.organizationId
+        // Backfill the project so this doesn't happen again
+        if (deployment.service?.project?.id) {
+          await prisma.project.update({
+            where: { id: deployment.service.project.id },
+            data: { organizationId },
+          }).catch(() => {})
+        }
+        log.warn({ deploymentId: deployment.id, organizationId }, 'Resolved organizationId from user membership (project was missing it)')
+      }
+    }
+  }
   if (!organizationId) {
     throw new Error(
       `Cannot activate Akash deployment ${deployment.id} without organizationId`
