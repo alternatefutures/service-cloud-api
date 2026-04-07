@@ -26,3 +26,4 @@ export {
 
 export { AkashProvider, createAkashProvider } from './akashProvider.js'
 export { PhalaProvider, createPhalaProvider } from './phalaProvider.js'
+export { ProviderVerificationScheduler } from './providerVerificationScheduler.js'

@@ -45,6 +45,7 @@ import {
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
+import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
@@ -65,6 +66,7 @@ const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
 const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
+const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
@@ -295,8 +297,9 @@ server.listen(port, () => {
   usageAggregator.start()
   computeBillingScheduler.start()
   providerRegistryScheduler.start()
+  providerVerificationScheduler.start()
   telemetryIngestionService.start()
-  log.info('billing + provider registry schedulers started')
+  log.info('billing + provider registry + verification schedulers started')
 
   startSslRenewalJob()
   log.info('SSL renewal job started')
@@ -323,6 +326,7 @@ async function gracefulShutdown(signal: string) {
   invoiceScheduler.stop()
   computeBillingScheduler.stop()
   providerRegistryScheduler.stop()
+  providerVerificationScheduler.stop()
 
   const forceExitTimeout = setTimeout(() => {
     log.warn('Graceful shutdown timed out after 15s — forcing exit')
