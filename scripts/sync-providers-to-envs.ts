@@ -33,10 +33,122 @@ function esc(s: string | null | undefined): string {
   return `'${s.replace(/'/g, "''")}'`
 }
 
+async function pullFromProduction() {
+  console.log('Pulling provider data from production into local DB...\n')
+  const prisma = new PrismaClient()
+
+  try {
+    const prodEnv = ENVS.find(e => e.name === 'production')!
+
+    // Pull compute_provider rows as JSON from production
+    const selectProviders = `SELECT json_agg(row_to_json(t)) FROM (SELECT address, "providerType", name, verified, blocked, block_reason, is_online, last_seen_online_at, gpu_models, gpu_available, gpu_total, min_price_uact, max_price_uact, attributes, last_tested_at FROM compute_provider WHERE last_tested_at IS NOT NULL OR gpu_total > 0 OR verified = true ORDER BY address) t`
+    const providerCmd = `KUBECONFIG=${KUBECONFIG} kubectl exec -i postgres-0 -n ${prodEnv.namespace} -- psql -U alternatefutures -d ${prodEnv.database} -t -A -c "${selectProviders}" 2>&1`
+    console.log('  Fetching providers from production...')
+    const providerJson = execSync(providerCmd, { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024 }).trim()
+
+    if (!providerJson || providerJson === '' || providerJson === 'null') {
+      console.log('  No providers found in production.')
+      return
+    }
+
+    const providers = JSON.parse(providerJson) as any[]
+    console.log(`  Found ${providers.length} provider(s) in production`)
+
+    for (const p of providers) {
+      await prisma.computeProvider.upsert({
+        where: { address: p.address },
+        create: {
+          address: p.address,
+          providerType: p.providerType,
+          name: p.name,
+          verified: p.verified,
+          blocked: p.blocked,
+          blockReason: p.block_reason,
+          isOnline: p.is_online,
+          lastSeenOnlineAt: p.last_seen_online_at ? new Date(p.last_seen_online_at) : null,
+          gpuModels: p.gpu_models || [],
+          gpuAvailable: p.gpu_available || 0,
+          gpuTotal: p.gpu_total || 0,
+          minPriceUact: p.min_price_uact != null ? BigInt(p.min_price_uact) : null,
+          maxPriceUact: p.max_price_uact != null ? BigInt(p.max_price_uact) : null,
+          attributes: p.attributes ?? null,
+          lastTestedAt: p.last_tested_at ? new Date(p.last_tested_at) : null,
+        },
+        update: {
+          verified: p.verified,
+          blocked: p.blocked,
+          blockReason: p.block_reason,
+          isOnline: p.is_online,
+          lastSeenOnlineAt: p.last_seen_online_at ? new Date(p.last_seen_online_at) : null,
+          gpuModels: p.gpu_models || [],
+          gpuAvailable: p.gpu_available || 0,
+          gpuTotal: p.gpu_total || 0,
+          minPriceUact: p.min_price_uact != null ? BigInt(p.min_price_uact) : null,
+          maxPriceUact: p.max_price_uact != null ? BigInt(p.max_price_uact) : null,
+          attributes: p.attributes ?? null,
+          lastTestedAt: p.last_tested_at ? new Date(p.last_tested_at) : null,
+        },
+      })
+    }
+    console.log(`  ✓ Upserted ${providers.length} providers into local DB`)
+
+    // Pull template results
+    const selectResults = `SELECT json_agg(row_to_json(t)) FROM (SELECT ptr.template_id, ptr.passed, ptr.price_uact, ptr.duration_ms, ptr.error_message, ptr.tested_at, cp.address as provider_address FROM provider_template_result ptr JOIN compute_provider cp ON cp.id = ptr.provider_id) t`
+    const resultsCmd = `KUBECONFIG=${KUBECONFIG} kubectl exec -i postgres-0 -n ${prodEnv.namespace} -- psql -U alternatefutures -d ${prodEnv.database} -t -A -c "${selectResults}" 2>&1`
+    console.log('  Fetching template results from production...')
+    const resultsJson = execSync(resultsCmd, { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024 }).trim()
+
+    if (resultsJson && resultsJson !== '' && resultsJson !== 'null') {
+      const tResults = JSON.parse(resultsJson) as any[]
+      console.log(`  Found ${tResults.length} template result(s)`)
+
+      for (const tr of tResults) {
+        const localProvider = await prisma.computeProvider.findUnique({
+          where: { address: tr.provider_address },
+          select: { id: true },
+        })
+        if (!localProvider) continue
+
+        await prisma.providerTemplateResult.upsert({
+          where: { providerId_templateId: { providerId: localProvider.id, templateId: tr.template_id } },
+          create: {
+            providerId: localProvider.id,
+            templateId: tr.template_id,
+            passed: tr.passed,
+            priceUact: tr.price_uact != null ? BigInt(tr.price_uact) : null,
+            durationMs: tr.duration_ms,
+            errorMessage: tr.error_message,
+            testedAt: new Date(tr.tested_at),
+          },
+          update: {
+            passed: tr.passed,
+            priceUact: tr.price_uact != null ? BigInt(tr.price_uact) : null,
+            durationMs: tr.duration_ms,
+            errorMessage: tr.error_message,
+            testedAt: new Date(tr.tested_at),
+          },
+        })
+      }
+      console.log(`  ✓ Upserted ${tResults.length} template results into local DB`)
+    }
+
+    const verified = await prisma.computeProvider.count({ where: { verified: true } })
+    console.log(`\n  Pull complete. Local DB now has ${verified} verified provider(s).`)
+  } finally {
+    await prisma.$disconnect()
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2)
   const stagingOnly = args.includes('--staging-only')
   const prodOnly = args.includes('--prod-only')
+  const pullFromProd = args.includes('--pull-from-prod')
+
+  if (pullFromProd) {
+    await pullFromProduction()
+    return
+  }
 
   const targets = ENVS.filter(e => {
     if (stagingOnly) return e.name === 'staging'

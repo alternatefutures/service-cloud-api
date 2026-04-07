@@ -26,8 +26,11 @@ import { join, resolve } from 'path'
 
 // ── Load env from admin/cloud/secrets/.env.local ──────────────────────
 
+import { fileURLToPath } from 'url'
+const __script_dir = import.meta.dir ?? (() => { const { dirname } = require('path'); return dirname(fileURLToPath(import.meta.url)); })()
+
 const ENV_PATH = resolve(
-  import.meta.dir,
+  __script_dir,
   '../../admin/cloud/secrets/.env.local'
 )
 
@@ -56,7 +59,7 @@ function loadEnvFile(path: string): void {
 loadEnvFile(ENV_PATH)
 
 // Also load service-cloud-api/.env for DATABASE_URL etc.
-loadEnvFile(resolve(import.meta.dir, '../.env'))
+loadEnvFile(resolve(__script_dir, '../.env'))
 
 // ── Import template system (pure functions, no side effects) ──────────
 
