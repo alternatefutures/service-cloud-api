@@ -10,8 +10,8 @@
  */
 
 import { PrismaClient } from '@prisma/client'
-import { execSync } from 'child_process'
-import { writeFileSync, unlinkSync } from 'fs'
+import { execFileSync } from 'child_process'
+import { writeFileSync, readFileSync, unlinkSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -42,9 +42,11 @@ async function pullFromProduction() {
 
     // Pull compute_provider rows as JSON from production
     const selectProviders = `SELECT json_agg(row_to_json(t)) FROM (SELECT address, "providerType", name, verified, blocked, block_reason, is_online, last_seen_online_at, gpu_models, gpu_available, gpu_total, min_price_uact, max_price_uact, attributes, last_tested_at FROM compute_provider WHERE last_tested_at IS NOT NULL OR gpu_total > 0 OR verified = true ORDER BY address) t`
-    const providerCmd = `KUBECONFIG=${KUBECONFIG} kubectl exec -i postgres-0 -n ${prodEnv.namespace} -- psql -U alternatefutures -d ${prodEnv.database} -t -A -c "${selectProviders}" 2>&1`
     console.log('  Fetching providers from production...')
-    const providerJson = execSync(providerCmd, { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024 }).trim()
+    const providerJson = execFileSync('kubectl', [
+      'exec', '-i', 'postgres-0', '-n', prodEnv.namespace, '--',
+      'psql', '-U', 'alternatefutures', '-d', prodEnv.database, '-t', '-A', '-c', selectProviders,
+    ], { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024, env: { ...process.env, KUBECONFIG } }).trim()
 
     if (!providerJson || providerJson === '' || providerJson === 'null') {
       console.log('  No providers found in production.')
@@ -94,9 +96,11 @@ async function pullFromProduction() {
 
     // Pull template results
     const selectResults = `SELECT json_agg(row_to_json(t)) FROM (SELECT ptr.template_id, ptr.passed, ptr.price_uact, ptr.duration_ms, ptr.error_message, ptr.tested_at, cp.address as provider_address FROM provider_template_result ptr JOIN compute_provider cp ON cp.id = ptr.provider_id) t`
-    const resultsCmd = `KUBECONFIG=${KUBECONFIG} kubectl exec -i postgres-0 -n ${prodEnv.namespace} -- psql -U alternatefutures -d ${prodEnv.database} -t -A -c "${selectResults}" 2>&1`
     console.log('  Fetching template results from production...')
-    const resultsJson = execSync(resultsCmd, { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024 }).trim()
+    const resultsJson = execFileSync('kubectl', [
+      'exec', '-i', 'postgres-0', '-n', prodEnv.namespace, '--',
+      'psql', '-U', 'alternatefutures', '-d', prodEnv.database, '-t', '-A', '-c', selectResults,
+    ], { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024, env: { ...process.env, KUBECONFIG } }).trim()
 
     if (resultsJson && resultsJson !== '' && resultsJson !== 'null') {
       const tResults = JSON.parse(resultsJson) as any[]
@@ -249,11 +253,14 @@ ON CONFLICT (provider_id, template_id) DO UPDATE SET
       console.log(`  Generated ${sqlLines.length} SQL statements (${(sqlContent.length / 1024).toFixed(1)} KB)`)
 
       try {
-        // Pipe SQL file through kubectl exec
-        const cmd = `KUBECONFIG=${KUBECONFIG} kubectl exec -i postgres-0 -n ${env.namespace} -- psql -U alternatefutures -d ${env.database} < "${tmpFile}" 2>&1 | tail -5`
+        const sqlInput = readFileSync(tmpFile, 'utf-8')
         console.log(`  Executing on ${env.name}...`)
-        const output = execSync(cmd, { encoding: 'utf-8', timeout: 120_000, maxBuffer: 10 * 1024 * 1024 })
-        console.log(`  ${output.trim()}`)
+        const fullOutput = execFileSync('kubectl', [
+          'exec', '-i', 'postgres-0', '-n', env.namespace, '--',
+          'psql', '-U', 'alternatefutures', '-d', env.database,
+        ], { encoding: 'utf-8', timeout: 120_000, maxBuffer: 10 * 1024 * 1024, input: sqlInput, env: { ...process.env, KUBECONFIG } })
+        const output = fullOutput.trim().split('\n').slice(-5).join('\n')
+        console.log(`  ${output}`)
         console.log(`  ✓ Sync to ${env.name} complete`)
       } catch (e: any) {
         console.error(`  ✗ Sync to ${env.name} failed: ${(e.stderr || e.message || '').slice(0, 500)}`)
