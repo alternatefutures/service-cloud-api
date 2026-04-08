@@ -71,6 +71,9 @@ export interface VerificationSummary {
   uniqueProviders: number
   results: TemplateTestResult[]
   providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }>
+  runId: string
+  costUakt: bigint
+  costUact: bigint
 }
 
 export interface WalletBalance {
@@ -449,6 +452,21 @@ export async function runVerificationSuite(
 
   log.info({ total: templates.length, testing: toTest.length, includeGpu, cheapestOnly }, 'Starting verification suite')
 
+  // Snapshot wallet balance before the run
+  let balanceBefore: WalletBalance | null = null
+  try { balanceBefore = await checkBalance() } catch { /* non-fatal */ }
+
+  // Create a VerificationRun record to track this run
+  const run = await prisma.verificationRun.create({
+    data: {
+      startedAt: new Date(),
+      templatesTotal: toTest.length,
+      templatesPassed: 0,
+      status: 'running',
+    },
+  })
+  log.info({ runId: run.id }, 'VerificationRun record created')
+
   const results: TemplateTestResult[] = []
   const providerTally: Record<string, { passed: string[]; failed: string[]; prices: string[] }> = {}
 
@@ -462,62 +480,104 @@ export async function runVerificationSuite(
     }
   }
 
-  for (let i = 0; i < toTest.length; i++) {
-    const t = toTest[i]
-    log.info({ index: i + 1, total: toTest.length, templateId: t.id }, 'Testing template')
+  let runError: string | undefined
 
-    const result = await testSingleTemplate(t.id)
-    recordResult(result)
-    log.info({ templateId: t.id, passed: result.passed, provider: result.provider }, 'Template result')
+  try {
+    for (let i = 0; i < toTest.length; i++) {
+      const t = toTest[i]
+      log.info({ index: i + 1, total: toTest.length, templateId: t.id }, 'Testing template')
 
-    // Test remaining bidders if comprehensive mode
-    if (!cheapestOnly && result.allBidders && result.allBidders.length > 1) {
-      const testedProviders = new Set<string>()
-      if (result.provider) testedProviders.add(result.provider)
+      const result = await testSingleTemplate(t.id)
+      recordResult(result)
+      log.info({ templateId: t.id, passed: result.passed, provider: result.provider }, 'Template result')
 
-      for (const bidder of result.allBidders.filter(b => !testedProviders.has(b.provider))) {
-        await sleep(INTER_BIDDER_DELAY_MS)
-        log.info({ templateId: t.id, provider: bidder.provider }, 'Re-testing with additional bidder')
+      if (!cheapestOnly && result.allBidders && result.allBidders.length > 1) {
+        const testedProviders = new Set<string>()
+        if (result.provider) testedProviders.add(result.provider)
 
-        const bidderResult = await testSingleTemplate(t.id, bidder.provider)
-        recordResult(bidderResult)
-        if (bidderResult.provider) testedProviders.add(bidderResult.provider)
+        for (const bidder of result.allBidders.filter(b => !testedProviders.has(b.provider))) {
+          await sleep(INTER_BIDDER_DELAY_MS)
+          log.info({ templateId: t.id, provider: bidder.provider }, 'Re-testing with additional bidder')
 
-        log.info({ templateId: t.id, passed: bidderResult.passed, provider: bidderResult.provider }, 'Bidder result')
+          const bidderResult = await testSingleTemplate(t.id, bidder.provider)
+          recordResult(bidderResult)
+          if (bidderResult.provider) testedProviders.add(bidderResult.provider)
+
+          log.info({ templateId: t.id, passed: bidderResult.passed, provider: bidderResult.provider }, 'Bidder result')
+        }
       }
-    }
 
-    if (i < toTest.length - 1) await sleep(INTER_TEMPLATE_DELAY_MS)
+      if (i < toTest.length - 1) await sleep(INTER_TEMPLATE_DELAY_MS)
+    }
+  } catch (err: any) {
+    runError = err.message || String(err)
   }
 
-  // Persist results
+  // Persist provider/template results
   await persistResults(prisma, results, providerTally)
 
-  const templateResults = new Map<string, { passedProviders: string[] }>()
+  const templateResultMap = new Map<string, { passedProviders: string[] }>()
   for (const r of results) {
-    if (!templateResults.has(r.templateId)) templateResults.set(r.templateId, { passedProviders: [] })
-    if (r.passed && r.provider) templateResults.get(r.templateId)!.passedProviders.push(r.provider)
+    if (!templateResultMap.has(r.templateId)) templateResultMap.set(r.templateId, { passedProviders: [] })
+    if (r.passed && r.provider) templateResultMap.get(r.templateId)!.passedProviders.push(r.provider)
   }
-  const templatesPassed = Array.from(templateResults.values()).filter(v => v.passedProviders.length > 0).length
+  const templatesPassed = Array.from(templateResultMap.values()).filter(v => v.passedProviders.length > 0).length
+
+  // Snapshot wallet balance after the run and compute cost delta
+  let costUakt = BigInt(0)
+  let costUact = BigInt(0)
+  try {
+    const balanceAfter = await checkBalance()
+    if (balanceBefore) {
+      costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
+      costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
+      log.info({ costUakt: costUakt.toString(), costUact: costUact.toString() }, 'Run cost computed from balance delta')
+    }
+  } catch { /* non-fatal */ }
+
+  // Finalize the VerificationRun record
+  const passedCount = results.filter(r => r.passed).length
+  const failedCount = results.filter(r => !r.passed).length
+  await prisma.verificationRun.update({
+    where: { id: run.id },
+    data: {
+      completedAt: new Date(),
+      templatesPassed,
+      deployments: results.length,
+      passed: passedCount,
+      failed: failedCount,
+      uniqueProviders: Object.keys(providerTally).length,
+      costUakt,
+      costUact,
+      status: runError ? 'failed' : 'completed',
+      error: runError?.slice(0, 1000) || null,
+    },
+  })
 
   const summary: VerificationSummary = {
     templatesTotal: toTest.length,
     templatesPassed,
     deployments: results.length,
-    passed: results.filter(r => r.passed).length,
-    failed: results.filter(r => !r.passed).length,
+    passed: passedCount,
+    failed: failedCount,
     uniqueProviders: Object.keys(providerTally).length,
     results,
     providerTally,
+    runId: run.id,
+    costUakt,
+    costUact,
   }
 
   log.info({
+    runId: run.id,
     templatesTotal: summary.templatesTotal,
     templatesPassed: summary.templatesPassed,
     deployments: summary.deployments,
     passed: summary.passed,
     failed: summary.failed,
     uniqueProviders: summary.uniqueProviders,
+    costUakt: costUakt.toString(),
+    costUact: costUact.toString(),
   }, 'Verification suite complete')
 
   return summary
