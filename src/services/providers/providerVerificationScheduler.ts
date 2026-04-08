@@ -88,15 +88,17 @@ export class ProviderVerificationScheduler {
         return
       }
 
-      // Run the full verification suite
       const summary = await runVerificationSuite(this.prisma)
 
       log.info({
+        runId: summary.runId,
         durationMs: Date.now() - start,
         templatesPassed: summary.templatesPassed,
         templatesTotal: summary.templatesTotal,
         deployments: summary.deployments,
         uniqueProviders: summary.uniqueProviders,
+        costUakt: summary.costUakt.toString(),
+        costUact: summary.costUact.toString(),
       }, 'Verification run complete')
 
       // Sync results to staging

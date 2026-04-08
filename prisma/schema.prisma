@@ -1295,3 +1295,30 @@ model ProviderTemplateResult {
   @@index([passed])
   @@map("provider_template_result")
 }
+
+model VerificationRun {
+  id              String    @id @default(cuid())
+
+  startedAt       DateTime  @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+
+  // Run results
+  templatesTotal  Int       @map("templates_total")
+  templatesPassed Int       @map("templates_passed")
+  deployments     Int       @default(0)
+  passed          Int       @default(0)
+  failed          Int       @default(0)
+  uniqueProviders Int       @default(0) @map("unique_providers")
+
+  // Cost (balance delta)
+  costUakt        BigInt    @default(0) @map("cost_uakt")
+  costUact        BigInt    @default(0) @map("cost_uact")
+
+  // Status
+  status          String    @default("running") // running | completed | failed
+  error           String?
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("verification_run")
+}
