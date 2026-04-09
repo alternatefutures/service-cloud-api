@@ -9,6 +9,7 @@ import { deploymentEvents } from '../services/events/index.js'
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js'
 import { getBillingApiClient } from '../services/billing/billingApiClient.js'
 import { chatResolvers } from './chat.js'
+import { feedbackMutations } from './feedback.js'
 import { domainQueries, domainMutations } from './domain.js'
 import { authQueries, authMutations } from './auth.js'
 import {
@@ -1765,6 +1766,9 @@ export const resolvers = {
 
     // Service connectivity mutations (env vars, ports, links)
     ...serviceConnectivityMutations,
+
+    // Feedback mutations
+    ...feedbackMutations,
 
     // Storage tracking mutation (billing is now in service-auth)
     triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {

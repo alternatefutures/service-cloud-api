@@ -1074,6 +1074,32 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
+  # FEEDBACK & BUG REPORTS
+  # ============================================
+
+  enum FeedbackCategory {
+    BUG
+    FEEDBACK
+    FEATURE_REQUEST
+  }
+
+  type FeedbackReport {
+    id: ID!
+    title: String!
+    category: FeedbackCategory!
+    location: String
+    description: String!
+    createdAt: Date!
+  }
+
+  input SubmitFeedbackInput {
+    title: String!
+    category: FeedbackCategory!
+    location: String
+    description: String!
+  }
+
+  # ============================================
   # SUBSCRIPTION HEALTH MONITORING
   # ============================================
 
@@ -1891,6 +1917,9 @@ export const typeDefs = /* GraphQL */ `
     # Service Linking
     linkServices(sourceServiceId: ID!, targetServiceId: ID!, alias: String): ServiceLink!
     unlinkServices(sourceServiceId: ID!, targetServiceId: ID!): Boolean!
+
+    # Feedback
+    submitFeedback(input: SubmitFeedbackInput!): FeedbackReport!
   }
 
   # ============================================

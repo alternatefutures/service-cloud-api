@@ -47,6 +47,7 @@ model User {
   messages              Message[]
   pinnedContent         PinnedContent[]
   storageSnapshots      StorageSnapshot[]
+  feedbackReports       FeedbackReport[]
   customer              Customer?
 
   createdAt DateTime @default(now())
@@ -1294,6 +1295,37 @@ model ProviderTemplateResult {
   @@index([templateId])
   @@index([passed])
   @@map("provider_template_result")
+}
+
+// ============================================
+// FEEDBACK & BUG REPORTS
+// ============================================
+
+enum FeedbackCategory {
+  BUG
+  FEEDBACK
+  FEATURE_REQUEST
+}
+
+model FeedbackReport {
+  id          String           @id @default(cuid())
+
+  userId      String           @map("user_id")
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  title       String
+  category    FeedbackCategory
+  location    String?
+  description String
+
+  userAgent   String?          @map("user_agent")
+
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([category])
+  @@index([createdAt])
+  @@map("feedback_report")
 }
 
 model VerificationRun {
