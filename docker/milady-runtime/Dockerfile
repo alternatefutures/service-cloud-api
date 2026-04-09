@@ -14,6 +14,13 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gosu && \
     rm -rf /var/lib/apt/lists/*
 
+# Override upstream state paths to match our Akash persistent storage mount.
+# Upstream v2.0.10 defaults to /data/.milady; our template mounts at /home/node/.milady.
+ENV MILADY_STATE_DIR="/home/node/.milady"
+ENV MILADY_CONFIG_PATH="/home/node/.milady/milady.json"
+ENV PGLITE_DATA_DIR="/home/node/.milady/workspace/.eliza/.elizadb"
+ENV MILADY_API_BIND="0.0.0.0"
+
 # Clear the baked-in MILADY_API_TOKEN from the base image's .env so the
 # dashboard is accessible on first load. Users configure their own keys
 # through the UI.

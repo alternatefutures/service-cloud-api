@@ -29,6 +29,9 @@ const BID_POLL_MAX_ATTEMPTS = 10
 const SERVICE_POLL_INTERVAL_MS = 5000
 const SERVICE_POLL_MAX_ATTEMPTS = 24
 
+/** Default Akash deposit in uact (0.5 ACT — the chain minimum). */
+export const DEFAULT_DEPOSIT_UACT = 500_000
+
 function getAkashEnv(): Record<string, string> {
   if (!process.env.AKASH_MNEMONIC) {
     throw new Error('AKASH_MNEMONIC is not set')
@@ -60,6 +63,17 @@ function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
     timeout,
     maxBuffer: 10 * 1024 * 1024,
   })
+}
+
+/**
+ * Non-blocking version of runAkash for use in request handlers.
+ * Uses execAsync to avoid freezing the Node.js event loop.
+ */
+async function runAkashAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
+  const { execAsync } = await import('../queue/asyncExec.js')
+  const env = getAkashEnv()
+  log.info(`Running (async): akash ${args.join(' ')}`)
+  return execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
 }
 
 /**
@@ -168,11 +182,12 @@ export class AkashOrchestrator {
   constructor(private prisma: PrismaClient) {}
 
   /**
-   * Get the Akash wallet address
+   * Get the Akash wallet address.
+   * Uses async exec to avoid blocking the event loop in request handlers.
    */
   async getAccountAddress(): Promise<string> {
     const keyName = process.env.AKASH_KEY_NAME || 'default'
-    const output = runAkash(['keys', 'show', keyName, '-a'], 15_000)
+    const output = await runAkashAsync(['keys', 'show', keyName, '-a'], 15_000)
     return output.trim()
   }
 
@@ -695,7 +710,7 @@ export class AkashOrchestrator {
    * Close a deployment
    */
   async closeDeployment(dseq: number): Promise<void> {
-    runAkash([
+    await runAkashAsync([
       'tx',
       'deployment',
       'close',
@@ -871,7 +886,7 @@ export class AkashOrchestrator {
       skipEnvInjection?: boolean
     } = {}
   ): Promise<string> {
-    const deposit = options.deposit || 5000000 // 5 AKT default
+    const deposit = options.deposit || DEFAULT_DEPOSIT_UACT
 
     const service = await this.prisma.service.findUnique({
       where: { id: serviceId },
@@ -893,6 +908,9 @@ export class AkashOrchestrator {
       },
     })
 
+    const { isQStashEnabled, publishJob } =
+      await import('../queue/qstashClient.js')
+
     if (existingDeployments.length > 0) {
       log.info(
         `Closing ${existingDeployments.length} existing deployment(s) for service ${service.name}...`
@@ -901,9 +919,7 @@ export class AkashOrchestrator {
       for (const existing of existingDeployments) {
         try {
           const existingDseq = Number(existing.dseq)
-          log.info(
-            `Closing previous deployment dseq=${existingDseq}...`
-          )
+          log.info(`Closing previous deployment dseq=${existingDseq} on-chain...`)
           await this.closeDeployment(existingDseq)
 
           await this.prisma.akashDeployment.update({
@@ -957,8 +973,6 @@ export class AkashOrchestrator {
     )
 
     // Enqueue the first step — QStash or in-process depending on environment
-    const { isQStashEnabled, publishJob } =
-      await import('../queue/qstashClient.js')
     const { handleAkashStep } = await import('../queue/webhookHandler.js')
 
     if (isQStashEnabled()) {
@@ -988,7 +1002,7 @@ export class AkashOrchestrator {
     functionId: string,
     sourceCode: string,
     functionName: string,
-    deposit = 5000000
+    deposit = DEFAULT_DEPOSIT_UACT
   ): Promise<string> {
     const func = await this.prisma.aFFunction.findUnique({
       where: { id: functionId },

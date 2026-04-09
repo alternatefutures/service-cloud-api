@@ -12,6 +12,7 @@ import { tmpdir } from 'os'
 import { publishJob, isQStashEnabled } from './qstashClient.js'
 import { deploymentEvents } from '../events/deploymentEvents.js'
 import { providerSelector } from '../akash/providerSelector.js'
+import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
@@ -271,7 +272,7 @@ export async function handleSubmitTx(
   try {
     const deposit = deployment.depositUakt
       ? Number(deployment.depositUakt)
-      : 5000000
+      : DEFAULT_DEPOSIT_UACT
     const output = await runAkashAsync([
       'tx',
       'deployment',

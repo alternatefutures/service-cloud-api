@@ -6,7 +6,7 @@
  */
 
 import { GraphQLError } from 'graphql'
-import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
+import { getAkashOrchestrator, DEFAULT_DEPOSIT_UACT } from '../services/akash/orchestrator.js'
 import { getEscrowService } from '../services/billing/escrowService.js'
 import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
@@ -441,7 +441,7 @@ export const akashMutations = {
       const orchestrator = getAkashOrchestrator(context.prisma)
 
       const deploymentId = await orchestrator.deployService(func.serviceId, {
-        deposit: input.depositUakt || 5000000,
+        deposit: input.depositUakt || DEFAULT_DEPOSIT_UACT,
       })
 
       // Fetch the created deployment

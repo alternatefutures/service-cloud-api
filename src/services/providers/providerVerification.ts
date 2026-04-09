@@ -18,6 +18,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { PrismaClient, ComputeProviderType } from '@prisma/client'
 import { getAllTemplates } from '../../templates/registry.js'
+import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
 import { generateSDLFromTemplate } from '../../templates/sdl.js'
 import { createLogger } from '../../lib/logger.js'
 
@@ -246,7 +247,7 @@ async function testSingleTemplate(
     for (let attempt = 1; attempt <= TX_RETRIES; attempt++) {
       const txResult = await execCli('akash', [
         'tx', 'deployment', 'create', sdlPath,
-        '--deposit', '5000000uact', '-o', 'json', '-y',
+        '--deposit', `${DEFAULT_DEPOSIT_UACT}uact`, '-o', 'json', '-y',
       ])
       if (txResult.exitCode !== 0) return mkFail(txResult.stderr.trim().slice(0, 300))
       try { txJson = extractJson(txResult.stdout) as any } catch { txJson = {} }
