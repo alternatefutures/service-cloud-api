@@ -13,43 +13,65 @@ const messageService = (prisma: PrismaClient) => new MessageService(prisma)
 export const chatResolvers = {
   Query: {
     /**
-     * Get agent by ID
+     * Get agent by ID — requires authentication, scoped to owner
      */
     agent: async (_: any, { id }: { id: string }, context: Context) => {
-      return context.prisma.agent.findUnique({
+      if (!context.userId) {
+        throw new Error('Authentication required')
+      }
+
+      const agent = await context.prisma.agent.findUnique({
         where: { id },
         include: {
           user: true,
           afFunction: true,
         },
       })
+
+      if (agent && agent.userId !== context.userId) {
+        throw new Error('Unauthorized')
+      }
+
+      return agent
     },
 
     /**
-     * Get agent by slug
+     * Get agent by slug — requires authentication, scoped to owner
      */
     agentBySlug: async (
       _: any,
       { slug }: { slug: string },
       context: Context
     ) => {
-      return context.prisma.agent.findUnique({
+      if (!context.userId) {
+        throw new Error('Authentication required')
+      }
+
+      const agent = await context.prisma.agent.findUnique({
         where: { slug },
         include: {
           user: true,
           afFunction: true,
         },
       })
+
+      if (agent && agent.userId !== context.userId) {
+        throw new Error('Unauthorized')
+      }
+
+      return agent
     },
 
     /**
-     * Get all agents (optionally filter by user)
+     * Get all agents for the authenticated user
      */
     agents: async (_: any, __: any, context: Context) => {
-      const where = context.userId ? { userId: context.userId } : {}
+      if (!context.userId) {
+        throw new Error('Authentication required')
+      }
 
       return context.prisma.agent.findMany({
-        where,
+        where: { userId: context.userId },
         include: {
           user: true,
           afFunction: true,
@@ -264,11 +286,14 @@ export const chatResolvers = {
     },
   },
 
-  // Field resolvers
+  // Field resolvers — all enforce ownership through the authenticated user
   Agent: {
     chats: async (parent: any, _: any, context: Context) => {
+      if (!context.userId || parent.userId !== context.userId) {
+        return []
+      }
       return context.prisma.chat.findMany({
-        where: { agentId: parent.id },
+        where: { agentId: parent.id, userId: context.userId },
         orderBy: { lastMessageAt: 'desc' },
       })
     },
@@ -276,6 +301,9 @@ export const chatResolvers = {
 
   Chat: {
     messages: async (parent: any, _: any, context: Context) => {
+      if (!context.userId || parent.userId !== context.userId) {
+        return []
+      }
       return context.prisma.message.findMany({
         where: { chatId: parent.id },
         orderBy: { createdAt: 'asc' },

@@ -711,17 +711,18 @@ export const resolvers = {
         throw new GraphQLError('Not authenticated')
       }
 
-      // Scope projects by org or user
+      const ownershipFilter = context.organizationId
+        ? {
+            OR: [
+              { organizationId: context.organizationId },
+              { userId: context.userId, organizationId: null },
+            ],
+          }
+        : { userId: context.userId }
+
       const projectWhere = projectId
-        ? { id: projectId }
-        : context.organizationId
-          ? {
-              OR: [
-                { organizationId: context.organizationId },
-                { userId: context.userId, organizationId: null },
-              ],
-            }
-          : { userId: context.userId }
+        ? { id: projectId, ...ownershipFilter }
+        : ownershipFilter
 
       const projectIds = (
         await context.prisma.project.findMany({
@@ -830,17 +831,18 @@ export const resolvers = {
         throw new GraphQLError('Not authenticated')
       }
 
-      // Build project filter: specific project, org-scoped, or user-owned
+      const ownershipFilter = context.organizationId
+        ? {
+            OR: [
+              { organizationId: context.organizationId },
+              { userId: context.userId, organizationId: null },
+            ],
+          }
+        : { userId: context.userId }
+
       const projectWhere = projectId
-        ? { id: projectId }
-        : context.organizationId
-          ? {
-              OR: [
-                { organizationId: context.organizationId },
-                { userId: context.userId, organizationId: null },
-              ],
-            }
-          : { userId: context.userId }
+        ? { id: projectId, ...ownershipFilter }
+        : ownershipFilter
 
       const projects = await context.prisma.project.findMany({
         where: projectWhere,
