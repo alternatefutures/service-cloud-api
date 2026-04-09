@@ -2,6 +2,7 @@ import { GraphQLError } from 'graphql'
 import type { Context } from './types.js'
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_FEEDBACK_WEBHOOK_URL
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL
 
 export interface SubmitFeedbackInput {
   title: string
@@ -16,13 +17,42 @@ const CATEGORY_META: Record<string, { emoji: string; color: number }> = {
   FEATURE_REQUEST: { emoji: '✨', color: 0x8b5cf6 },
 }
 
+async function fetchUserFromAuth(
+  token: string,
+): Promise<{ email?: string; displayName?: string }> {
+  if (!AUTH_SERVICE_URL) return {}
+
+  try {
+    const res = await fetch(`${AUTH_SERVICE_URL}/account/profile`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) return {}
+    const data = (await res.json()) as {
+      email?: string
+      displayName?: string
+    }
+    return { email: data.email, displayName: data.displayName }
+  } catch {
+    return {}
+  }
+}
+
 async function postToDiscord(
-  report: { title: string; category: string; location?: string | null; description: string; createdAt: Date },
-  user: { email?: string | null; username?: string | null },
+  report: {
+    title: string
+    category: string
+    location?: string | null
+    description: string
+    createdAt: Date
+  },
+  user: { email?: string | null; displayName?: string | null },
 ) {
   if (!DISCORD_WEBHOOK_URL) return
 
-  const meta = CATEGORY_META[report.category] ?? { emoji: '📝', color: 0x6b7280 }
+  const meta = CATEGORY_META[report.category] ?? {
+    emoji: '📝',
+    color: 0x6b7280,
+  }
 
   const embed = {
     title: `${meta.emoji} [${report.category.replace('_', ' ')}] ${report.title}`,
@@ -34,11 +64,15 @@ async function postToDiscord(
     fields: [
       {
         name: 'User',
-        value: user.username ?? user.email ?? 'unknown',
+        value: user.displayName ?? user.email ?? 'unknown',
         inline: true,
       },
-      ...(user.email ? [{ name: 'Email', value: user.email, inline: true }] : []),
-      ...(report.location ? [{ name: 'Location', value: report.location, inline: false }] : []),
+      ...(user.email
+        ? [{ name: 'Email', value: user.email, inline: true }]
+        : []),
+      ...(report.location
+        ? [{ name: 'Location', value: report.location, inline: false }]
+        : []),
     ],
     timestamp: report.createdAt.toISOString(),
     footer: { text: 'Alternate Clouds Feedback' },
@@ -70,31 +104,39 @@ export const feedbackMutations = {
     const location = input.location?.trim() || null
 
     if (!title || title.length > 200) {
-      throw new GraphQLError('Title is required and must be 200 characters or less')
+      throw new GraphQLError(
+        'Title is required and must be 200 characters or less',
+      )
     }
     if (!description || description.length > 10000) {
-      throw new GraphQLError('Description is required and must be 10,000 characters or less')
+      throw new GraphQLError(
+        'Description is required and must be 10,000 characters or less',
+      )
     }
     if (location && location.length > 500) {
       throw new GraphQLError('Location must be 500 characters or less')
     }
 
     const userAgent = context.request?.headers?.get('user-agent') ?? null
+    const authToken =
+      context.request?.headers?.get('authorization')?.replace('Bearer ', '') ??
+      ''
 
-    const report = await context.prisma.feedbackReport.create({
-      data: {
-        userId: context.userId,
-        title,
-        category: input.category,
-        location,
-        description,
-        userAgent,
-      },
-      include: { user: true },
-    })
+    const [report, authUser] = await Promise.all([
+      context.prisma.feedbackReport.create({
+        data: {
+          userId: context.userId,
+          title,
+          category: input.category,
+          location,
+          description,
+          userAgent,
+        },
+      }),
+      fetchUserFromAuth(authToken),
+    ])
 
-    // Fire-and-forget — don't block the response on Discord delivery
-    postToDiscord(report, report.user)
+    postToDiscord(report, authUser)
 
     return report
   },
