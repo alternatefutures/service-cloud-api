@@ -64,7 +64,7 @@ echo "════════════════════════�
 echo ""
 echo "1. Open: https://secrets.alternatefutures.ai"
 echo "2. Create your admin account"
-echo "3. Create a new project (e.g., 'AlternateFutures Production')"
+echo "3. Create a new project (e.g., 'Alternate Clouds Production')"
 echo ""
 read -p "Press Enter when you've created your account and project..."
 

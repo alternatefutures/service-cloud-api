@@ -1,6 +1,6 @@
 # Runtime Routing Implementation
 
-Complete implementation of request routing and proxying for Alternate Futures Functions (ALT-7).
+Complete implementation of request routing and proxying for Alternate Clouds Functions (ALT-7).
 
 ## Overview
 

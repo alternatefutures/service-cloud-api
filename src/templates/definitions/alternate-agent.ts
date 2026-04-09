@@ -17,7 +17,7 @@ export const alternateAgent: Template = {
     {
       key: 'AF_API_KEY',
       default: null,
-      description: 'AlternateFutures PAT for AI inference billing',
+      description: 'Alternate Clouds PAT for AI inference billing',
       required: true,
       secret: true,
       platformInjected: 'apiKey',
@@ -25,7 +25,7 @@ export const alternateAgent: Template = {
     {
       key: 'AF_ORG_ID',
       default: null,
-      description: 'AlternateFutures organization ID for billing',
+      description: 'Alternate Clouds organization ID for billing',
       required: true,
       platformInjected: 'orgId',
     },

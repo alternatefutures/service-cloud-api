@@ -51,7 +51,7 @@ export const minecraftServer: Template = {
     },
     {
       key: 'MOTD',
-      default: 'A Minecraft Server on Alternate Futures',
+      default: 'A Minecraft Server on Alternate Clouds',
       description: 'Message of the day shown in the server list',
       required: false,
     },

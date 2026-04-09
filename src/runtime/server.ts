@@ -1,5 +1,5 @@
 /**
- * Alternate Futures Function Runtime Server
+ * Alternate Clouds Function Runtime Server
  *
  * DEPRECATED: This server is a routing stub only.
  * Actual function execution is handled by Akash deployments
@@ -197,7 +197,7 @@ const server = createServer(handleRequest)
 const PORT = process.env.RUNTIME_PORT || 3000
 
 server.listen(PORT, () => {
-  log.info('Alternate Futures Function Runtime')
+  log.info('Alternate Clouds Function Runtime')
   log.info(`Listening on http://localhost:${PORT}`)
   log.info('RouterCache TTL: 5 minutes')
   log.info('Proxy Timeout: 30 seconds')

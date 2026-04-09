@@ -33,7 +33,7 @@ Describe any alternative solutions or features you've considered.
 
 ## Alignment with Mission
 
-How does this feature support Alternate Futures' goals of:
+How does this feature support Alternate Clouds' goals of:
 - **Privacy**: Does it enhance user privacy?
 - **Censorship Resistance**: Does it strengthen censorship resistance?
 - **Decentralization**: Does it promote decentralization?

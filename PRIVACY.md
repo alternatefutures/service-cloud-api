@@ -4,9 +4,9 @@
 
 ## Our Privacy Commitment
 
-Alternate Futures is built on the principles of **privacy, decentralization, and censorship resistance**. We believe in giving users control over their data and minimizing data collection to only what is essential for service operation.
+Alternate Clouds is built on the principles of **privacy, decentralization, and censorship resistance**. We believe in giving users control over their data and minimizing data collection to only what is essential for service operation.
 
-This document describes how the Alternate Futures Service Cloud API handles user data.
+This document describes how the Alternate Clouds Service Cloud API handles user data.
 
 ## Core Privacy Principles
 
@@ -141,7 +141,7 @@ We do NOT use your data for:
 
 ### Data Location
 
-Alternate Futures can be deployed:
+Alternate Clouds can be deployed:
 
 - **On decentralized infrastructure** (Akash Network)
 - **Self-hosted** (full control over data location)
@@ -278,14 +278,14 @@ Contact privacy@alternatefutures.com to object to specific data processing activ
 
 ## Children's Privacy
 
-Alternate Futures is not intended for users under 13 years of age. We do not knowingly collect data from children. If you believe a child has provided us with personal data, contact privacy@alternatefutures.com.
+Alternate Clouds is not intended for users under 13 years of age. We do not knowingly collect data from children. If you believe a child has provided us with personal data, contact privacy@alternatefutures.com.
 
 ## GDPR Compliance (EU Users)
 
 For users in the European Union:
 
 - **Legal Basis**: Contractual necessity, legitimate interest, consent (where applicable)
-- **Data Controller**: Alternate Futures
+- **Data Controller**: Alternate Clouds
 - **Data Protection Officer**: privacy@alternatefutures.com
 - **EU Representative**: [SPECIFY IF APPLICABLE]
 - **Supervisory Authority**: [SPECIFY BASED ON LOCATION]
@@ -327,7 +327,7 @@ If data is transferred internationally:
 
 ## Privacy for Self-Hosted Deployments
 
-If you self-host Alternate Futures:
+If you self-host Alternate Clouds:
 
 - **You are the data controller**
 - You are responsible for GDPR/CCPA compliance
@@ -378,4 +378,4 @@ This software is open source under GNU GPLv3. You can:
 
 ---
 
-**Alternate Futures**: Privacy-focused, censorship-resistant, open-source serverless platform.
+**Alternate Clouds**: Privacy-focused, censorship-resistant, open-source serverless platform.

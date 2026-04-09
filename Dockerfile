@@ -1,4 +1,4 @@
-# Dockerfile for Alternate Futures Backend (Multi-stage, K3s-optimized)
+# Dockerfile for Alternate Clouds Backend (Multi-stage, K3s-optimized)
 # Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies

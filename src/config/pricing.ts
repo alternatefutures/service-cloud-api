@@ -1,5 +1,5 @@
 /**
- * Pricing Configuration for Alternate Futures Platform (2026-02-14)
+ * Pricing Configuration for Alternate Clouds Platform (2026-02-14)
  *
  * Pricing model:
  *   - IPFS pinning: flat $0.01/GB (loss-leader, rounded to nearest GB)

@@ -2,7 +2,7 @@
 
 ## Our Commitment
 
-Alternate Futures is committed to privacy, security, and censorship resistance. We take security vulnerabilities seriously and appreciate the security research community's efforts to responsibly disclose issues.
+Alternate Clouds is committed to privacy, security, and censorship resistance. We take security vulnerabilities seriously and appreciate the security research community's efforts to responsibly disclose issues.
 
 ## Supported Versions
 
@@ -62,7 +62,7 @@ We maintain a Security Hall of Fame for researchers who responsibly disclose vul
 
 ## Security Best Practices for Deployers
 
-If you're deploying Alternate Futures infrastructure:
+If you're deploying Alternate Clouds infrastructure:
 
 ### Required Security Measures
 

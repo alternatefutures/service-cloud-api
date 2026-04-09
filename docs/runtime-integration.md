@@ -1,6 +1,6 @@
 # Function Runtime Integration Guide
 
-Complete guide for integrating RuntimeRouter into the Alternate Futures Function Runtime (ALT-7 Item 7).
+Complete guide for integrating RuntimeRouter into the Alternate Clouds Function Runtime (ALT-7 Item 7).
 
 ## Overview
 

@@ -1,4 +1,4 @@
-// Prisma Schema for AlternateFutures Platform
+// Prisma Schema for Alternate Clouds Platform
 generator client {
   provider      = "prisma-client-js"
   engineType    = "binary"

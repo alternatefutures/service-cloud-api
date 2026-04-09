@@ -1,6 +1,6 @@
-# Contributing to Alternate Futures
+# Contributing to Alternate Clouds
 
-Thank you for your interest in contributing to Alternate Futures! We're building a privacy-focused, censorship-resistant, open-source serverless platform, and we welcome contributions from the community.
+Thank you for your interest in contributing to Alternate Clouds! We're building a privacy-focused, censorship-resistant, open-source serverless platform, and we welcome contributions from the community.
 
 ## Table of Contents
 
@@ -394,7 +394,7 @@ Contributors will be:
 
 ## License
 
-By contributing to Alternate Futures, you agree that your contributions will be licensed under the [GNU General Public License v3.0](LICENSE).
+By contributing to Alternate Clouds, you agree that your contributions will be licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## Questions?
 
@@ -406,4 +406,4 @@ If you have questions not covered here:
 
 ---
 
-**Thank you for contributing to Alternate Futures!** Together, we're building a more private, censorship-resistant internet.
+**Thank you for contributing to Alternate Clouds!** Together, we're building a more private, censorship-resistant internet.
