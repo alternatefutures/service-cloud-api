@@ -873,6 +873,7 @@ export const resolvers = {
         status: string
         kind: string
         serviceName: string
+        serviceId: string | null
         serviceSlug: string | null
         serviceType: string
         projectId: string | null
@@ -911,6 +912,7 @@ export const resolvers = {
           status: statusMap[dep.status] || dep.status,
           kind: 'SITE',
           serviceName: dep.site?.name || 'Site',
+          serviceId: dep.site?.serviceId || null,
           serviceSlug: dep.site?.slug || null,
           serviceType: 'SITE',
           projectId: dep.site?.projectId || null,
@@ -930,7 +932,7 @@ export const resolvers = {
           afFunction: { projectId: { in: projectIds } },
         },
         include: {
-          afFunction: { select: { name: true, slug: true, projectId: true, status: true } },
+          afFunction: { select: { name: true, slug: true, projectId: true, status: true, serviceId: true } },
         },
         orderBy: { createdAt: 'desc' },
         take: limit,
@@ -943,6 +945,7 @@ export const resolvers = {
           status: dep.afFunction?.status === 'ACTIVE' ? 'ACTIVE' : 'READY',
           kind: 'FUNCTION',
           serviceName: dep.afFunction?.name || 'Function',
+          serviceId: dep.afFunction?.serviceId || null,
           serviceSlug: dep.afFunction?.slug || null,
           serviceType: 'FUNCTION',
           projectId: dep.afFunction?.projectId || null,
@@ -993,6 +996,7 @@ export const resolvers = {
           status: akashStatusMap[dep.status] || dep.status,
           kind: 'AKASH',
           serviceName: dep.service?.name || 'Service',
+          serviceId: dep.serviceId,
           serviceSlug: dep.service?.slug || null,
           serviceType: dep.service?.type || 'FUNCTION',
           projectId: dep.service?.projectId || null,
@@ -1035,6 +1039,7 @@ export const resolvers = {
           status: phalaStatusMap[dep.status] || dep.status,
           kind: 'PHALA',
           serviceName: dep.service?.name || dep.name,
+          serviceId: dep.serviceId,
           serviceSlug: dep.service?.slug || null,
           serviceType: dep.service?.type || 'VM',
           projectId: dep.service?.projectId || null,
