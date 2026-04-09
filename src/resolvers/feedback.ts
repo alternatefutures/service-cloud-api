@@ -65,13 +65,30 @@ export const feedbackMutations = {
       throw new GraphQLError('Authentication required')
     }
 
+    const title = input.title.trim()
+    const description = input.description.trim()
+    const location = input.location?.trim() || null
+
+    if (!title || title.length > 200) {
+      throw new GraphQLError('Title is required and must be 200 characters or less')
+    }
+    if (!description || description.length > 10000) {
+      throw new GraphQLError('Description is required and must be 10,000 characters or less')
+    }
+    if (location && location.length > 500) {
+      throw new GraphQLError('Location must be 500 characters or less')
+    }
+
+    const userAgent = context.request?.headers?.get('user-agent') ?? null
+
     const report = await context.prisma.feedbackReport.create({
       data: {
         userId: context.userId,
-        title: input.title,
+        title,
         category: input.category,
-        location: input.location ?? null,
-        description: input.description,
+        location,
+        description,
+        userAgent,
       },
       include: { user: true },
     })
