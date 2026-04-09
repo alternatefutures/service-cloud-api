@@ -1027,6 +1027,7 @@ export const typeDefs = /* GraphQL */ `
     status: String!
     kind: String!                 # SITE, FUNCTION, AKASH, PHALA
     serviceName: String!
+    serviceId: ID
     serviceSlug: String           # slug used for subdomain URL (slug.apps.alternatefutures.ai)
     serviceType: String!          # SITE, FUNCTION, VM, DATABASE, CRON, BUCKET
     projectId: String
