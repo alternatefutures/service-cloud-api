@@ -41,69 +41,77 @@ async function pullFromProduction() {
     const prodEnv = ENVS.find(e => e.name === 'production')!
 
     // Pull compute_provider rows as JSON from production
-    const selectProviders = `SELECT json_agg(row_to_json(t)) FROM (SELECT address, "providerType", name, verified, blocked, block_reason, is_online, last_seen_online_at, gpu_models, gpu_available, gpu_total, min_price_uact, max_price_uact, attributes, last_tested_at FROM compute_provider WHERE last_tested_at IS NOT NULL OR gpu_total > 0 OR verified = true ORDER BY address) t`
-    console.log('  Fetching providers from production...')
-    const providerJson = execFileSync('kubectl', [
+    // One JSON object per line — resilient to kubectl connection drops.
+    // Excludes `attributes` (huge JSON, already populated by hourly registry scan).
+    const selectProviders = `SELECT row_to_json(t) FROM (SELECT address, "providerType", name, verified, blocked, block_reason, is_online, last_seen_online_at, gpu_models, gpu_available, gpu_total, min_price_uact, max_price_uact, last_tested_at FROM compute_provider WHERE last_tested_at IS NOT NULL OR gpu_total > 0 OR verified = true ORDER BY address) t`
+    const kArgs = (sql: string) => [
+      '--insecure-skip-tls-verify', '--request-timeout=120s',
       'exec', '-i', 'postgres-0', '-n', prodEnv.namespace, '--',
-      'psql', '-U', 'alternatefutures', '-d', prodEnv.database, '-t', '-A', '-c', selectProviders,
-    ], { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024, env: { ...process.env, KUBECONFIG } }).trim()
+      'psql', '-U', 'alternatefutures', '-d', prodEnv.database, '-t', '-A', '-c', sql,
+    ]
+    const kOpts = { encoding: 'utf-8' as const, timeout: 180_000, maxBuffer: 20 * 1024 * 1024, env: { ...process.env, KUBECONFIG } }
+    const runKubectl = (sql: string): string => {
+      try {
+        return execFileSync('kubectl', kArgs(sql), kOpts).trim()
+      } catch (e: any) {
+        if (e.stdout) {
+          console.log('  WARN: kubectl error stream reported issue — using stdout')
+          return String(e.stdout).trim()
+        }
+        throw e
+      }
+    }
 
-    if (!providerJson || providerJson === '' || providerJson === 'null') {
+    console.log('  Fetching providers from production...')
+    const providerRaw = runKubectl(selectProviders)
+
+    if (!providerRaw || providerRaw === '') {
       console.log('  No providers found in production.')
       return
     }
 
-    const providers = JSON.parse(providerJson) as any[]
+    const providers: any[] = []
+    for (const line of providerRaw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try { providers.push(JSON.parse(trimmed)) } catch { /* skip truncated */ }
+    }
     console.log(`  Found ${providers.length} provider(s) in production`)
 
     for (const p of providers) {
+      const shared = {
+        verified: p.verified,
+        blocked: p.blocked,
+        blockReason: p.block_reason,
+        isOnline: p.is_online,
+        lastSeenOnlineAt: p.last_seen_online_at ? new Date(p.last_seen_online_at) : null,
+        gpuModels: p.gpu_models || [],
+        gpuAvailable: p.gpu_available || 0,
+        gpuTotal: p.gpu_total || 0,
+        minPriceUact: p.min_price_uact != null ? BigInt(p.min_price_uact) : null,
+        maxPriceUact: p.max_price_uact != null ? BigInt(p.max_price_uact) : null,
+        lastTestedAt: p.last_tested_at ? new Date(p.last_tested_at) : null,
+      }
       await prisma.computeProvider.upsert({
         where: { address: p.address },
-        create: {
-          address: p.address,
-          providerType: p.providerType,
-          name: p.name,
-          verified: p.verified,
-          blocked: p.blocked,
-          blockReason: p.block_reason,
-          isOnline: p.is_online,
-          lastSeenOnlineAt: p.last_seen_online_at ? new Date(p.last_seen_online_at) : null,
-          gpuModels: p.gpu_models || [],
-          gpuAvailable: p.gpu_available || 0,
-          gpuTotal: p.gpu_total || 0,
-          minPriceUact: p.min_price_uact != null ? BigInt(p.min_price_uact) : null,
-          maxPriceUact: p.max_price_uact != null ? BigInt(p.max_price_uact) : null,
-          attributes: p.attributes ?? null,
-          lastTestedAt: p.last_tested_at ? new Date(p.last_tested_at) : null,
-        },
-        update: {
-          verified: p.verified,
-          blocked: p.blocked,
-          blockReason: p.block_reason,
-          isOnline: p.is_online,
-          lastSeenOnlineAt: p.last_seen_online_at ? new Date(p.last_seen_online_at) : null,
-          gpuModels: p.gpu_models || [],
-          gpuAvailable: p.gpu_available || 0,
-          gpuTotal: p.gpu_total || 0,
-          minPriceUact: p.min_price_uact != null ? BigInt(p.min_price_uact) : null,
-          maxPriceUact: p.max_price_uact != null ? BigInt(p.max_price_uact) : null,
-          attributes: p.attributes ?? null,
-          lastTestedAt: p.last_tested_at ? new Date(p.last_tested_at) : null,
-        },
+        create: { address: p.address, providerType: p.providerType, name: p.name, ...shared },
+        update: shared,
       })
     }
     console.log(`  ✓ Upserted ${providers.length} providers into local DB`)
 
-    // Pull template results
-    const selectResults = `SELECT json_agg(row_to_json(t)) FROM (SELECT ptr.template_id, ptr.passed, ptr.price_uact, ptr.duration_ms, ptr.error_message, ptr.tested_at, cp.address as provider_address FROM provider_template_result ptr JOIN compute_provider cp ON cp.id = ptr.provider_id) t`
+    // One JSON object per line (not json_agg) — resilient to connection drops
+    const selectResults = `SELECT row_to_json(t) FROM (SELECT ptr.template_id, ptr.passed, ptr.price_uact, ptr.duration_ms, ptr.error_message, ptr.tested_at, cp.address as provider_address FROM provider_template_result ptr JOIN compute_provider cp ON cp.id = ptr.provider_id) t`
     console.log('  Fetching template results from production...')
-    const resultsJson = execFileSync('kubectl', [
-      'exec', '-i', 'postgres-0', '-n', prodEnv.namespace, '--',
-      'psql', '-U', 'alternatefutures', '-d', prodEnv.database, '-t', '-A', '-c', selectResults,
-    ], { encoding: 'utf-8', timeout: 60_000, maxBuffer: 10 * 1024 * 1024, env: { ...process.env, KUBECONFIG } }).trim()
+    const resultsRaw = runKubectl(selectResults)
 
-    if (resultsJson && resultsJson !== '' && resultsJson !== 'null') {
-      const tResults = JSON.parse(resultsJson) as any[]
+    if (resultsRaw && resultsRaw !== '') {
+      const tResults: any[] = []
+      for (const line of resultsRaw.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try { tResults.push(JSON.parse(trimmed)) } catch { /* skip truncated line */ }
+      }
       console.log(`  Found ${tResults.length} template result(s)`)
 
       for (const tr of tResults) {
