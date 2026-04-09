@@ -1,6 +1,6 @@
 # Route Configuration API
 
-This document describes the native routing/proxy feature for Alternate Futures Functions. This feature allows you to configure route mappings directly in your function configuration without needing external packages.
+This document describes the native routing/proxy feature for Alternate Clouds Functions. This feature allows you to configure route mappings directly in your function configuration without needing external packages.
 
 ## Overview
 

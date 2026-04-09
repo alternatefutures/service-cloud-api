@@ -1,10 +1,10 @@
 # Governance
 
-This document describes the governance structure and decision-making processes for the Alternate Futures project.
+This document describes the governance structure and decision-making processes for the Alternate Clouds project.
 
 ## Mission
 
-Alternate Futures is committed to building a **privacy-focused, censorship-resistant, and open-source** serverless platform. All governance decisions should align with these core values:
+Alternate Clouds is committed to building a **privacy-focused, censorship-resistant, and open-source** serverless platform. All governance decisions should align with these core values:
 
 1. **Privacy First**: User privacy and data protection are paramount
 2. **Censorship Resistance**: Platform should resist censorship and promote free expression

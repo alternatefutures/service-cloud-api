@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./assets/hero-logo.svg" alt="Alternate Futures" width="600" />
+  <img src="./assets/hero-logo.svg" alt="Alternate Clouds" width="600" />
 </div>
 
 <div align="center">
@@ -16,7 +16,7 @@
 
 **Decentralized serverless platform that runs on itself**
 
-A GraphQL API server powering the Alternate Futures platform - serverless functions infrastructure built with GraphQL Yoga, Prisma, and PostgreSQL. Deploy your backend to distributed compute networks like Akash while managing everything through a unified API.
+A GraphQL API server powering the Alternate Clouds platform - serverless functions infrastructure built with GraphQL Yoga, Prisma, and PostgreSQL. Deploy your backend to distributed compute networks like Akash while managing everything through a unified API.
 
 ---
 
@@ -339,7 +339,7 @@ prisma/
 
 ## Dogfooding
 
-This backend can be deployed as an Alternate Futures Function to run on itself!
+This backend can be deployed as an Alternate Clouds Function to run on itself!
 
 See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for details on self-hosting the platform.
 

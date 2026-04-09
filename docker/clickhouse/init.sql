@@ -1,5 +1,5 @@
 -- ============================================
--- ClickHouse Schema for AlternateFutures APM
+-- ClickHouse Schema for Alternate Clouds APM
 -- Multi-tenant observability storage
 -- ============================================
 

@@ -88,11 +88,11 @@ export class AgentService {
     }
 
     if (userInput.includes('deploy') || userInput.includes('site')) {
-      return `To deploy a site on Alternate Futures, you can use our deployment API or the web interface. Would you like me to walk you through the deployment process?`
+      return `To deploy a site on Alternate Clouds, you can use our deployment API or the web interface. Would you like me to walk you through the deployment process?`
     }
 
     if (userInput.includes('function')) {
-      return `Alternate Futures Functions allow you to run serverless code on our decentralized infrastructure. You can deploy JavaScript/TypeScript functions that respond to HTTP requests. Would you like to know more about creating a function?`
+      return `Alternate Clouds Functions allow you to run serverless code on our decentralized infrastructure. You can deploy JavaScript/TypeScript functions that respond to HTTP requests. Would you like to know more about creating a function?`
     }
 
     if (userInput.includes('storage') || userInput.includes('ipfs')) {
@@ -108,7 +108,7 @@ export class AgentService {
     }
 
     // Default contextual response
-    return `I understand you're asking about "${lastUserMessage.content}". Based on our conversation, here's what I can tell you:\n\nAlternate Futures is a decentralized platform for deploying sites and serverless functions with built-in storage on IPFS, Arweave, and Filecoin.\n\nCould you provide more details about what specifically you'd like to know?`
+    return `I understand you're asking about "${lastUserMessage.content}". Based on our conversation, here's what I can tell you:\n\nAlternate Clouds is a decentralized platform for deploying sites and serverless functions with built-in storage on IPFS, Arweave, and Filecoin.\n\nCould you provide more details about what specifically you'd like to know?`
   }
 
   /**

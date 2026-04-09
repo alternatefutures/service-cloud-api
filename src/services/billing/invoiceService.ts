@@ -286,7 +286,7 @@ export class InvoiceService {
       .font('Instrument Sans SemiBold')
       .fontSize(16)
       .fillColor('#0026ff')
-      .text('Alternate Futures', 110, 50)
+      .text('Alternate Clouds', 110, 50)
       .font('Instrument Sans')
       .fontSize(9)
       .fillColor('#666666')

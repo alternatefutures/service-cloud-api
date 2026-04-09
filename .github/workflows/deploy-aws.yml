@@ -105,7 +105,7 @@ jobs:
               \"title\": \"✅ service-cloud-api deployed\",
               \"description\": \"Commit: \`${GITHUB_SHA::7}\`\nHealth: ${{ steps.verify.outputs.healthy == 'true' && 'passing' || 'pending' }}\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
               \"color\": 3066993,
-              \"footer\": {\"text\": \"AlternateFutures Deploy\"},
+              \"footer\": {\"text\": \"Alternate Clouds Deploy\"},
               \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
             }]
           }" "$DISCORD_WEBHOOK_URL"
@@ -121,7 +121,7 @@ jobs:
               \"title\": \"❌ service-cloud-api deploy FAILED\",
               \"description\": \"Commit: \`${GITHUB_SHA::7}\`\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
               \"color\": 15548997,
-              \"footer\": {\"text\": \"AlternateFutures Deploy\"},
+              \"footer\": {\"text\": \"Alternate Clouds Deploy\"},
               \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
             }]
           }" "$DISCORD_WEBHOOK_URL"

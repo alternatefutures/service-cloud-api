@@ -44,6 +44,6 @@ jobs:
             ghcr.io/alternatefutures/otel-collector:${{ github.sha }}
           labels: |
             org.opencontainers.image.title=OpenTelemetry Collector
-            org.opencontainers.image.description=Custom OTEL Collector for Alternate Futures
+            org.opencontainers.image.description=Custom OTEL Collector for Alternate Clouds
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

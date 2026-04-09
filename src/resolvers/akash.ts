@@ -2,7 +2,7 @@
  * GraphQL resolvers for Akash deployments
  * 
  * Akash is a deployment target for all service types in the Service Registry.
- * This follows the Alternate Futures ecosystem architecture.
+ * This follows the Alternate Clouds ecosystem architecture.
  */
 
 import { GraphQLError } from 'graphql'

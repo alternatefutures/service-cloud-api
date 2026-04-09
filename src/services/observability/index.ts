@@ -1,7 +1,7 @@
 /**
  * Observability Services
  *
- * Multi-tenant APM platform for AlternateFutures customers.
+ * Multi-tenant APM platform for Alternate Clouds customers.
  */
 
 export {

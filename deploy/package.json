@@ -1,7 +1,7 @@
 {
   "name": "@alternatefutures/backend",
   "version": "0.1.0",
-  "description": "AlternateFutures GraphQL Backend API",
+  "description": "Alternate Clouds GraphQL Backend API",
   "private": true,
   "type": "module",
   "scripts": {
