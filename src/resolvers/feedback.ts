@@ -23,23 +23,18 @@ async function fetchUserFromAuth(
   if (!AUTH_SERVICE_URL) return {}
 
   try {
-    const url = `${AUTH_SERVICE_URL}/account`
-    console.log('[feedback] fetching user from:', url)
-    const res = await fetch(url, {
+    const res = await fetch(`${AUTH_SERVICE_URL}/account`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-    console.log('[feedback] auth response status:', res.status)
     if (!res.ok) return {}
     const data = (await res.json()) as {
       user?: { email?: string; displayName?: string }
     }
-    console.log('[feedback] auth user data:', JSON.stringify(data.user))
     return {
       email: data.user?.email,
       displayName: data.user?.displayName,
     }
-  } catch (err) {
-    console.error('[feedback] fetchUserFromAuth error:', err)
+  } catch {
     return {}
   }
 }
@@ -128,9 +123,6 @@ export const feedbackMutations = {
     const authToken =
       context.request?.headers?.get('authorization')?.replace('Bearer ', '') ??
       ''
-
-    console.log('[feedback] AUTH_SERVICE_URL:', AUTH_SERVICE_URL)
-    console.log('[feedback] authToken present:', !!authToken, 'length:', authToken.length)
 
     const [report, authUser] = await Promise.all([
       context.prisma.feedbackReport.create({
