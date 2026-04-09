@@ -138,4 +138,4 @@ npx prisma studio      # Browse database
 
 ---
 
-MIT License
+AGPL-3.0-only
