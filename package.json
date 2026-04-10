@@ -120,12 +120,13 @@
       "effect": ">=3.20.0",
       "socket.io-parser": ">=4.2.6",
       "defu": ">=6.1.5",
-      "picomatch": ">=2.3.2",
+      "picomatch": ">=4.0.4",
       "lodash": ">=4.18.0",
       "bn.js": ">=5.2.3",
       "ajv": ">=8.18.0",
       "yaml": ">=2.8.3",
-      "brace-expansion": ">=5.0.5"
+      "brace-expansion": ">=5.0.5",
+      "@smithy/config-resolver": ">=4.4.0"
     }
   },
   "packageManager": "pnpm@10.22.0+sha512.bf049efe995b28f527fd2b41ae0474ce29186f7edcb3bf545087bd61fbbebb2bf75362d1307fda09c2d288e1e499787ac12d4fcb617a974718a6051f2eee741c"
