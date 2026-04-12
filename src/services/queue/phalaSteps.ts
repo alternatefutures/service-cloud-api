@@ -3,9 +3,10 @@
  */
 
 import type { PrismaClient, PhalaDeploymentStatus } from '@prisma/client'
-import { writeFileSync, rmSync, mkdtempSync } from 'fs'
+import { writeFileSync, rmSync, mkdtempSync, accessSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { getSshKeyPath } from '../phala/orchestrator.js'
 import { publishJob, isQStashEnabled } from './qstashClient.js'
 import { deploymentEvents } from '../events/deploymentEvents.js'
 import { execAsync } from './asyncExec.js'
@@ -167,6 +168,15 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
     const deployArgs = ['deploy', '-n', deployment.name, '-c', composePath]
     if (deployment.cvmSize) deployArgs.push('--instance-type', deployment.cvmSize)
     if (Object.keys(envVars).length > 0) deployArgs.push('-e', envPath)
+
+    const sshPubKeyPath = `${getSshKeyPath()}.pub`
+    try {
+      accessSync(sshPubKeyPath)
+      deployArgs.push('--ssh-pubkey', sshPubKeyPath, '--dev-os')
+    } catch {
+      log.warn('No SSH public key at %s — shell access will not be available for this CVM', sshPubKeyPath)
+    }
+
     deployArgs.push('--json')
 
     log.info(

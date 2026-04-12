@@ -8,17 +8,32 @@
  * Never log the API key.
  */
 
-import { spawn } from 'child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { spawn, execFileSync } from 'child_process'
+import { mkdtempSync, writeFileSync, rmSync, accessSync } from 'fs'
 import { join } from 'path'
-import { tmpdir } from 'os'
+import { tmpdir, homedir } from 'os'
 import type { PrismaClient } from '@prisma/client'
 import type { PhalaDeploymentStatus } from '@prisma/client'
+import type { ShellSession } from '../providers/types.js'
 import { getPhalaHourlyRate, applyMargin } from '../../config/pricing.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('phala-orchestrator')
+
+/**
+ * macOS ships LibreSSL which fails Phala's TLS-tunneled SSH.
+ * Prefer Homebrew OpenSSL when available; fall back to system binary.
+ */
+function resolveOpenSslBin(): string {
+  const brewPath = '/opt/homebrew/opt/openssl@3/bin/openssl'
+  try {
+    accessSync(brewPath)
+    return brewPath
+  } catch {
+    return 'openssl'
+  }
+}
 
 const PHALA_CLI_TIMEOUT_MS = 120_000
 const POLL_INTERVAL_MS = 5000
@@ -245,6 +260,140 @@ export class PhalaOrchestrator {
       return null
     }
   }
+
+  async getCvmRuntimeConfig(appId: string): Promise<{ hostname: string; default_gateway_domain: string; ssh_authorized_keys: string[] } | null> {
+    try {
+      const output = await runPhalaAsync(['runtime-config', appId, '--json'], 15_000)
+      const result = extractJson(output) as Record<string, unknown>
+      if (!result?.success) return null
+      return {
+        hostname: result.hostname as string,
+        default_gateway_domain: result.default_gateway_domain as string,
+        ssh_authorized_keys: (result.ssh_authorized_keys as string[]) ?? [],
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Spawn an interactive SSH shell into a running CVM.
+   * Uses the gateway info from runtime-config and a platform SSH keypair.
+   */
+  async getShell(appId: string, command?: string): Promise<ShellSession> {
+    const sshKeyPath = getSshKeyPath()
+    try {
+      accessSync(sshKeyPath)
+    } catch {
+      throw new Error(
+        `Platform SSH key not found at ${sshKeyPath}. ` +
+        'Set PHALA_SSH_KEY_PATH or generate a key with: ssh-keygen -t ed25519 -f ~/.ssh/af_phala_ed25519'
+      )
+    }
+
+    const config = await this.getCvmRuntimeConfig(appId)
+    const gateway = config?.default_gateway_domain
+    if (!gateway) {
+      throw new Error(`Cannot determine CVM gateway for SSH (appId: ${appId})`)
+    }
+
+    const opensslBin = resolveOpenSslBin()
+    const sshTarget = `root@${appId}-22.${gateway}`
+    const sshArgs = [
+      '-o', `ProxyCommand=${opensslBin} s_client -quiet -connect %h:%p 2>/dev/null`,
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'UserKnownHostsFile=/dev/null',
+      '-o', 'ConnectTimeout=30',
+      '-p', '443',
+      '-i', sshKeyPath,
+      sshTarget,
+    ]
+
+    if (command && command !== '/bin/bash' && command !== '/bin/sh') {
+      sshArgs.push(command)
+    }
+
+    log.info(`Spawning Phala SSH: ssh ${sshArgs.join(' ')}`)
+
+    let pty: any
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      pty = require('node-pty')
+    } catch {
+      log.warn('node-pty not available, falling back to spawn-based SSH')
+      return this.getShellFallback(sshArgs)
+    }
+
+    let sshBinPath = 'ssh'
+    try {
+      sshBinPath = execFileSync('which', ['ssh'], { encoding: 'utf-8' }).trim()
+    } catch { /* fall through with bare name */ }
+
+    const ptyProcess = pty.spawn(sshBinPath, sshArgs, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      env: { ...process.env },
+    })
+
+    let killed = false
+
+    return {
+      write(data: Buffer | string) {
+        if (!killed) ptyProcess.write(typeof data === 'string' ? data : data.toString())
+      },
+      onData(callback: (data: Buffer) => void) {
+        ptyProcess.onData((data: string) => callback(Buffer.from(data)))
+      },
+      onExit(callback: (code: number | null) => void) {
+        ptyProcess.onExit(({ exitCode }: { exitCode: number }) => {
+          killed = true
+          callback(exitCode)
+        })
+      },
+      resize(cols: number, rows: number) {
+        if (!killed) ptyProcess.resize(cols, rows)
+      },
+      kill() {
+        if (!killed) { killed = true; ptyProcess.kill() }
+      },
+    }
+  }
+
+  private getShellFallback(sshArgs: string[]): ShellSession {
+    const child = spawn('ssh', sshArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    })
+
+    let killed = false
+
+    return {
+      write(data: Buffer | string) {
+        if (!killed) child.stdin?.write(data)
+      },
+      onData(callback: (data: Buffer) => void) {
+        child.stdout?.on('data', (chunk: Buffer) => callback(chunk))
+        child.stderr?.on('data', (chunk: Buffer) => callback(chunk))
+      },
+      onExit(callback: (code: number | null) => void) {
+        child.on('close', (code) => { killed = true; callback(code) })
+      },
+      resize() { /* no PTY resize without node-pty */ },
+      kill() {
+        if (!killed) { killed = true; child.kill('SIGTERM') }
+      },
+    }
+  }
+}
+
+/**
+ * Resolve the platform SSH private key path for Phala CVM access.
+ * Set PHALA_SSH_KEY_PATH to override the default location.
+ */
+export function getSshKeyPath(): string {
+  return process.env.PHALA_SSH_KEY_PATH || join(homedir(), '.ssh', 'af_phala_ed25519')
 }
 
 let orchestratorInstance: PhalaOrchestrator | null = null
