@@ -23,6 +23,8 @@ import type {
   ContainerStatus,
   OverallHealth,
   LogOptions,
+  ShellOptions,
+  ShellSession,
   ProviderCapabilities,
   ProviderStatus,
 } from './types.js'
@@ -369,6 +371,17 @@ export class PhalaProvider implements DeploymentProvider {
     return (await orchestrator.getPhalaLogs(deployment.appId, opts?.tail)) ?? ''
   }
 
+  async getShell(deploymentId: string, opts?: ShellOptions): Promise<ShellSession> {
+    const deployment = await this.prisma.phalaDeployment.findUnique({
+      where: { id: deploymentId },
+    })
+    if (!deployment) throw new Error(`Phala deployment not found: ${deploymentId}`)
+    if (deployment.status !== 'ACTIVE') throw new Error(`Phala deployment is not active (status: ${deployment.status})`)
+
+    const orchestrator = getPhalaOrchestrator(this.prisma)
+    return orchestrator.getShell(deployment.appId, opts?.command)
+  }
+
   getCapabilities(): ProviderCapabilities {
     return {
       supportsStop: true,
@@ -376,7 +389,7 @@ export class PhalaProvider implements DeploymentProvider {
       supportsTEE: true,
       supportsPersistentStorage: true,
       supportsWebSocket: true,
-      supportsShell: false,
+      supportsShell: true,
       configFormat: 'compose',
       billingModel: 'hourly',
     }
