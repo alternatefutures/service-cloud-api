@@ -552,6 +552,8 @@ export const typeDefs = /* GraphQL */ `
     policy: DeploymentPolicyInput
     # Optional resource overrides (CPU, memory, storage, GPU) — overrides template defaults
     resourceOverrides: ResourceOverrideInput
+    # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
+    baseImage: String
   }
 
   """
@@ -567,6 +569,8 @@ export const typeDefs = /* GraphQL */ `
     policy: DeploymentPolicyInput
     # Optional resource overrides (CPU, memory, storage, GPU) — overrides template defaults
     resourceOverrides: ResourceOverrideInput
+    # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
+    baseImage: String
   }
 
   """
