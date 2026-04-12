@@ -20,6 +20,7 @@ import { providerSelector } from './providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
+import type { TemplateGpu } from '../../templates/index.js'
 
 const log = createLogger('akash-orchestrator')
 
@@ -1101,7 +1102,7 @@ export class AkashOrchestrator {
                 gpu: resourceOverrides.gpu === null
                   ? null
                   : resourceOverrides.gpu
-                    ? { units: resourceOverrides.gpu.units, vendor: resourceOverrides.gpu.vendor as 'nvidia' | 'amd', model: resourceOverrides.gpu.model }
+                    ? { units: resourceOverrides.gpu.units, vendor: resourceOverrides.gpu.vendor as TemplateGpu['vendor'], model: resourceOverrides.gpu.model }
                     : undefined,
               }
             : undefined,

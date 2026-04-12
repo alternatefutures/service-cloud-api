@@ -15,7 +15,7 @@ import {
   generateComposeFromTemplate,
   getEnvKeysFromTemplate,
 } from '../templates/index.js'
-import type { TemplateResources } from '../templates/index.js'
+import type { TemplateResources, TemplateGpu } from '../templates/index.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
@@ -328,7 +328,7 @@ export const phalaMutations = {
       gpu: ro?.gpu === null
         ? undefined
         : ro?.gpu
-          ? { units: ro.gpu.units, vendor: ro.gpu.vendor as 'nvidia' | 'amd', model: ro.gpu.model }
+          ? { units: ro.gpu.units, vendor: ro.gpu.vendor as TemplateGpu['vendor'], model: ro.gpu.model }
           : template.resources.gpu,
     }
 

@@ -239,6 +239,17 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
     const output = await runPhalaAsync(['cvms', 'get', deployment.appId, '--json'], 15_000)
     const status = extractJson(output) as Record<string, unknown>
 
+    log.info(
+      {
+        deploymentId,
+        attempt,
+        cvmStatus: status?.status,
+        appId: deployment.appId,
+        outputPreview: output.slice(0, 300),
+      },
+      'POLL_STATUS: CVM status check result'
+    )
+
     if (status?.status === 'running') {
       const urls = (status.public_urls || status.publicUrls || []) as Array<{ app?: string } | string>
       const first = urls[0]

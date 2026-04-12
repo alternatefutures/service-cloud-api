@@ -7,6 +7,7 @@ export type {
   TemplateCompanion,
   TemplateComponent,
   TemplateEnvVar,
+  TemplateGpu,
   TemplateResources,
   TemplatePort,
   TemplateHealthCheck,

@@ -135,4 +135,5 @@ export const MAX_RETRY_COUNT = 3
 export const BID_POLL_MAX_ATTEMPTS = 10
 // Bumped from 24 → 60: large images (700MB+)
 export const URL_POLL_MAX_ATTEMPTS = 60
-export const PHALA_POLL_MAX_ATTEMPTS = 60
+// Bumped from 60 → 180: TDX CVMs pull Docker images inside the enclave; 3GB+ images can take 10-15 min
+export const PHALA_POLL_MAX_ATTEMPTS = 180
