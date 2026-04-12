@@ -112,6 +112,46 @@ function escapeYamlString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
 }
 
+// ─── Raw Service Compose Generator ──────────────────────────────
+
+export interface RawServiceConfig {
+  dockerImage: string
+  ports: Array<{ containerPort: number; publicPort?: number | null }>
+  envVars: Array<{ key: string; value: string }>
+  startCommand?: string | null
+}
+
+/**
+ * Generate docker-compose.yml for a raw (non-template) service.
+ * Uses the service's own dockerImage, ports, and env vars.
+ */
+export function generateComposeFromService(config: RawServiceConfig): string {
+  const envEntries = config.envVars
+  const envBlock = envEntries.length > 0
+    ? `    environment:\n${envEntries.map(e => `      - ${e.key}=${escapeYamlString(e.value)}`).join('\n')}\n`
+    : ''
+
+  const portMappings = config.ports
+    .filter(p => p.publicPort != null)
+    .map(p => `      - "${p.publicPort}:${p.containerPort}"`)
+  if (portMappings.length === 0) {
+    const defaultPort = config.ports[0]?.containerPort ?? 80
+    portMappings.push(`      - "${defaultPort}:${defaultPort}"`)
+  }
+  const portBlock = `    ports:\n${portMappings.join('\n')}\n`
+
+  const commandBlock = config.startCommand
+    ? `    command: ["sh", "-c", "${escapeYamlString(config.startCommand)}"]\n`
+    : ''
+
+  return `services:
+  app:
+    image: ${config.dockerImage}
+${envBlock}${commandBlock}${portBlock}    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+`
+}
+
 // ─── Composite Compose Generator ────────────────────────────────
 
 /**
