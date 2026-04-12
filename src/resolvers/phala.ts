@@ -13,6 +13,7 @@ import type { DeploymentPolicyInput } from '../services/policy/types.js'
 import {
   getTemplateById,
   generateComposeFromTemplate,
+  generateComposeFromService,
   getEnvKeysFromTemplate,
 } from '../templates/index.js'
 import type { TemplateResources, TemplateGpu } from '../templates/index.js'
@@ -308,31 +309,75 @@ export const phalaMutations = {
 
     const template = service.templateId ? getTemplateById(service.templateId) : null
 
-    if (!template) {
-      throw new GraphQLError(
-        'Phala deployment currently requires a template-based service. ' +
-        'Raw service deployment to Phala is not yet supported.'
-      )
-    }
-
     const envOverrides: Record<string, string> = {}
     for (const ev of service.envVars) {
       envOverrides[ev.key] = ev.value
     }
 
     const ro = input.resourceOverrides
-    const templateResources: TemplateResources = {
-      cpu: ro?.cpu ?? template.resources.cpu,
-      memory: ro?.memory ?? template.resources.memory,
-      storage: ro?.storage ?? template.resources.storage,
-      gpu: ro?.gpu === null
-        ? undefined
-        : ro?.gpu
-          ? { units: ro.gpu.units, vendor: ro.gpu.vendor as TemplateGpu['vendor'], model: ro.gpu.model }
-          : template.resources.gpu,
+
+    let resolvedResources: TemplateResources
+    let composeContent: string
+    let envKeys: string[]
+    let mergedEnv: Record<string, string> = {}
+
+    if (template) {
+      // ── Template-based service ──
+      resolvedResources = {
+        cpu: ro?.cpu ?? template.resources.cpu,
+        memory: ro?.memory ?? template.resources.memory,
+        storage: ro?.storage ?? template.resources.storage,
+        gpu: ro?.gpu === null
+          ? undefined
+          : ro?.gpu
+            ? { units: ro.gpu.units, vendor: ro.gpu.vendor as TemplateGpu['vendor'], model: ro.gpu.model }
+            : template.resources.gpu,
+      }
+
+      composeContent = generateComposeFromTemplate(template, {
+        serviceName: service.slug,
+        envOverrides,
+      })
+
+      envKeys = getEnvKeysFromTemplate(template, envOverrides)
+
+      for (const v of template.envVars) {
+        if (v.default !== null) mergedEnv[v.key] = v.default
+      }
+      Object.assign(mergedEnv, envOverrides)
+    } else {
+      // ── Raw service (custom Docker image) ──
+      if (!service.dockerImage) {
+        throw new GraphQLError(
+          'Service has no Docker image configured. Set a Docker image before deploying.'
+        )
+      }
+
+      resolvedResources = {
+        cpu: ro?.cpu ?? 1,
+        memory: ro?.memory ?? '2Gi',
+        storage: ro?.storage ?? '20Gi',
+        gpu: ro?.gpu === null
+          ? undefined
+          : ro?.gpu
+            ? { units: ro.gpu.units, vendor: ro.gpu.vendor as TemplateGpu['vendor'], model: ro.gpu.model }
+            : undefined,
+      }
+
+      composeContent = generateComposeFromService({
+        dockerImage: service.dockerImage,
+        ports: service.ports,
+        envVars: service.envVars.map(ev => ({ key: ev.key, value: ev.value })),
+      })
+
+      envKeys = service.envVars.map(ev => ev.key)
+      mergedEnv = { ...envOverrides }
     }
 
-    log.info({ templateResources, hasOverrides: !!ro, gpuDisabled: ro?.gpu === null }, 'Resolved template resources for Phala deploy')
+    log.info(
+      { resolvedResources, hasOverrides: !!ro, gpuDisabled: ro?.gpu === null, isTemplate: !!template },
+      'Resolved resources for Phala deploy'
+    )
 
     let policyId: string | undefined
     if (input.policy) {
@@ -357,7 +402,7 @@ export const phalaMutations = {
     }
 
     const phalaInstance = await resolvePhalaInstanceType(
-      templateResources,
+      resolvedResources,
       input.policy?.acceptableGpuModels,
       input.policy?.gpuUnits
     )
@@ -369,19 +414,6 @@ export const phalaMutations = {
     await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
       dailyCostCents: estimatedDailyCostCents,
     })
-
-    const composeContent = generateComposeFromTemplate(template, {
-      serviceName: service.slug,
-      envOverrides,
-    })
-
-    const envKeys = getEnvKeysFromTemplate(template, envOverrides)
-
-    const mergedEnv: Record<string, string> = {}
-    for (const v of template.envVars) {
-      if (v.default !== null) mergedEnv[v.key] = v.default
-    }
-    Object.assign(mergedEnv, envOverrides)
 
     const orchestrator = getPhalaOrchestrator(context.prisma)
 
