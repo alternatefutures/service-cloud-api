@@ -239,7 +239,13 @@ export async function listPhalaInstanceTypes(): Promise<PhalaInstanceType[]> {
     )
 
     const payload = extractJson(output) as PhalaInstanceTypeResponse
-    const types = (payload.result ?? []).flatMap(family => family.items ?? [])
+    const families = payload.result ?? []
+    const types = families.flatMap(family => family.items ?? [])
+
+    log.info(
+      { familyCount: families.length, typeCount: types.length, gpuCount: types.filter(t => t.requires_gpu).length, ids: types.map(t => t.id) },
+      'Fetched live Phala instance types'
+    )
 
     if (types.length > 0) {
       cachedInstanceTypes = { types, fetchedAt: Date.now() }
@@ -252,6 +258,7 @@ export async function listPhalaInstanceTypes(): Promise<PhalaInstanceType[]> {
     )
   }
 
+  log.info({ fallbackCount: FALLBACK_INSTANCE_TYPES.length }, 'Using fallback instance types')
   return FALLBACK_INSTANCE_TYPES
 }
 
@@ -263,11 +270,24 @@ export async function resolvePhalaInstanceType(
   const types = await listPhalaInstanceTypes()
   const requestedGpu = resources.gpu
 
+  log.info(
+    {
+      totalTypes: types.length,
+      gpuTypes: types.filter(t => t.requires_gpu).length,
+      cpuTypes: types.filter(t => !t.requires_gpu).length,
+      requestedGpu: requestedGpu ? { model: requestedGpu.model, units: requestedGpu.units } : null,
+      acceptableGpuModels,
+      policyGpuUnits,
+    },
+    'resolvePhalaInstanceType: starting resolution'
+  )
+
   if (requestedGpu) {
     const normalizedModel = normalizeGpuModel(requestedGpu.model)
     const requiredUnits = policyGpuUnits ?? requestedGpu.units ?? 1
 
     let gpuTypes = types.filter(type => type.requires_gpu)
+    log.info({ beforeFilter: gpuTypes.length, normalizedModel, requiredUnits }, 'GPU types before filtering')
 
     // Policy multi-select GPU filtering takes precedence over single-model selection
     if (acceptableGpuModels && acceptableGpuModels.length > 0) {
@@ -280,26 +300,30 @@ export async function resolvePhalaInstanceType(
           typeModel && acceptableNormalized.some(m => typeModel.startsWith(m))
         )
       })
+      log.info({ afterPolicyFilter: gpuTypes.length, acceptableNormalized }, 'GPU types after policy model filter')
     } else if (normalizedModel) {
       gpuTypes = gpuTypes.filter(type =>
         normalizeGpuModel(type.id)?.startsWith(normalizedModel)
       )
+      log.info({ afterModelFilter: gpuTypes.length, normalizedModel }, 'GPU types after single-model filter')
     }
 
     gpuTypes = gpuTypes.filter(
       type => inferGpuCountFromId(type.id) >= requiredUnits
     )
+    log.info({ afterUnitsFilter: gpuTypes.length, requiredUnits, candidates: gpuTypes.map(t => t.id) }, 'GPU types after units filter')
 
     if (gpuTypes.length === 0) {
       const modelsDesc = acceptableGpuModels?.length
         ? acceptableGpuModels.join(', ')
         : (requestedGpu.model ?? 'any')
-      throw new Error(
-        `No Phala GPU instance matches: models=[${modelsDesc}], units=${requiredUnits}`
-      )
+      const errMsg = `No Phala GPU instance matches: models=[${modelsDesc}], units=${requiredUnits}`
+      log.error({ modelsDesc, requiredUnits, availableGpuIds: types.filter(t => t.requires_gpu).map(t => t.id) }, errMsg)
+      throw new Error(errMsg)
     }
 
     const selected = [...gpuTypes].sort(compareByCostThenSize)[0]
+    log.info({ selected: selected.id, hourlyRate: selected.hourly_rate, vcpu: selected.vcpu }, 'Resolved Phala GPU instance type')
 
     return {
       cvmSize: selected.id,
@@ -320,13 +344,16 @@ export async function resolvePhalaInstanceType(
     )
     .sort(compareByCostThenSize)
 
+  log.info({ requiredCpu, requiredMemoryMb, candidates: cpuCandidates.length }, 'CPU instance type resolution')
+
   if (cpuCandidates.length === 0) {
-    throw new Error(
-      `No Phala CPU instance type can satisfy ${requiredCpu} vCPU / ${resources.memory} memory`
-    )
+    const errMsg = `No Phala CPU instance type can satisfy ${requiredCpu} vCPU / ${resources.memory} memory`
+    log.error({ requiredCpu, requiredMemoryMb, availableCpuTypes: types.filter(t => !t.requires_gpu).map(t => ({ id: t.id, vcpu: t.vcpu, mem: t.memory_mb })) }, errMsg)
+    throw new Error(errMsg)
   }
 
   const selected = cpuCandidates[0]
+  log.info({ selected: selected.id, hourlyRate: selected.hourly_rate, vcpu: selected.vcpu }, 'Resolved Phala CPU instance type')
 
   return {
     cvmSize: selected.id,

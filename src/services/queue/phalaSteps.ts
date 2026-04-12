@@ -26,6 +26,14 @@ const PHALA_TERMINAL_STATES = new Set<string>([
   'ACTIVE', 'FAILED', 'STOPPED', 'DELETED', 'PERMANENTLY_FAILED',
 ])
 
+const NON_RETRYABLE_ERRORS = [
+  'No available resources match your requirements',
+  'No Phala GPU instance matches',
+  'No Phala CPU instance type can satisfy',
+  'insufficient balance',
+  'quota exceeded',
+]
+
 function getPhalaEnv(): Record<string, string> {
   const key = process.env.PHALA_API_KEY || process.env.PHALA_CLOUD_API_KEY
   if (!key) throw new Error('PHALA_API_KEY or PHALA_CLOUD_API_KEY is not set')
@@ -161,8 +169,23 @@ export async function handleDeployCvm(prisma: PrismaClient, deploymentId: string
     if (Object.keys(envVars).length > 0) deployArgs.push('-e', envPath)
     deployArgs.push('--json')
 
+    log.info(
+      {
+        deploymentId,
+        cliArgs: `npx phala ${deployArgs.join(' ')}`,
+        cvmSize: deployment.cvmSize,
+        gpuModel: (deployment as any).gpuModel ?? null,
+        envVarCount: Object.keys(envVars).length,
+        composeLength: deployment.composeContent.length,
+      },
+      'DEPLOY_CVM: executing phala deploy'
+    )
+
     const output = await runPhalaAsync(deployArgs)
+    log.info({ deploymentId, outputLength: output.length, outputPreview: output.slice(0, 500) }, 'DEPLOY_CVM: CLI output')
+
     const result = extractJson(output) as Record<string, unknown>
+    log.info({ deploymentId, success: result?.success, appId: result?.app_id || result?.appId, error: result?.error }, 'DEPLOY_CVM: parsed result')
 
     if (!result?.success) {
       throw new Error(String(result?.error || result?.message || 'Deploy failed'))
@@ -301,6 +324,41 @@ export async function handlePhalaFailure(prisma: PrismaClient, payload: PhalaHan
   })
 
   emitProgress(deploymentId, 'HANDLE_FAILURE', PHALA_STEP_NUMBERS.HANDLE_FAILURE, retryCount, `Deployment failed: ${errorMessage}`, errorMessage)
+
+  const isNonRetryable = NON_RETRYABLE_ERRORS.some(pattern =>
+    errorMessage.toLowerCase().includes(pattern.toLowerCase())
+  )
+
+  if (isNonRetryable) {
+    log.info(`Non-retryable error for ${deploymentId}: ${errorMessage}`)
+
+    if (deployment.appId && deployment.appId !== 'pending') {
+      try {
+        await runPhalaAsync(['cvms', 'delete', deployment.appId, '--force'], 30_000)
+      } catch (delErr) {
+        log.warn({ detail: delErr instanceof Error ? delErr.message : delErr }, 'Failed to delete CVM on non-retryable failure')
+      }
+    }
+
+    const userMessage = errorMessage.includes('No available resources')
+      ? `No Confidential GPU capacity available for the requested instance type. Try deploying to Standard compute instead, or try again later.`
+      : errorMessage
+
+    await prisma.phalaDeployment.update({
+      where: { id: deploymentId },
+      data: { status: 'PERMANENTLY_FAILED', errorMessage: userMessage },
+    })
+
+    if (deployment.service?.type === 'FUNCTION' && deployment.service?.afFunction) {
+      await prisma.aFFunction.update({
+        where: { id: deployment.service.afFunction.id },
+        data: { status: 'FAILED' },
+      })
+    }
+
+    deploymentEvents.emitStatus({ deploymentId, status: 'PERMANENTLY_FAILED', timestamp: new Date() })
+    return
+  }
 
   if (retryCount < MAX_RETRY_COUNT) {
     // If the user manually stopped/deleted any deployment for this service, stop retrying
