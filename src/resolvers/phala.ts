@@ -273,6 +273,7 @@ export const phalaMutations = {
           storage?: string
           gpu?: { units: number; vendor: string; model?: string } | null
         }
+        baseImage?: string
       }
     },
     context: Context
@@ -346,12 +347,9 @@ export const phalaMutations = {
       }
       Object.assign(mergedEnv, envOverrides)
     } else {
-      // ── Raw service (custom Docker image) ──
-      if (!service.dockerImage) {
-        throw new GraphQLError(
-          'Service has no Docker image configured. Set a Docker image before deploying.'
-        )
-      }
+      // ── Raw service (custom Docker image or user-selected base) ──
+      const dockerImage = service.dockerImage || input.baseImage || 'ubuntu:24.04'
+      const needsKeepAlive = !service.dockerImage
 
       resolvedResources = {
         cpu: ro?.cpu ?? 1,
@@ -365,9 +363,10 @@ export const phalaMutations = {
       }
 
       composeContent = generateComposeFromService({
-        dockerImage: service.dockerImage,
+        dockerImage,
         ports: service.ports,
         envVars: service.envVars.map(ev => ({ key: ev.key, value: ev.value })),
+        startCommand: needsKeepAlive ? 'sleep infinity' : undefined,
       })
 
       envKeys = service.envVars.map(ev => ev.key)

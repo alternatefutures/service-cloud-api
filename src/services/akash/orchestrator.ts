@@ -891,6 +891,7 @@ export class AkashOrchestrator {
         storage?: string
         gpu?: { units: number; vendor: string; model?: string } | null
       }
+      baseImage?: string
     } = {}
   ): Promise<string> {
     const deposit = options.deposit || DEFAULT_DEPOSIT_UACT
@@ -946,7 +947,7 @@ export class AkashOrchestrator {
 
     // Prepare SDL content
     let sdlContent =
-      options.sdlContent || (await this.generateSDLForService(service, options.resourceOverrides))
+      options.sdlContent || (await this.generateSDLForService(service, options.resourceOverrides, options.baseImage))
     if (!options.skipEnvInjection) {
       sdlContent = await this.injectPersistedEnvVars(
         service.id,
@@ -1041,7 +1042,7 @@ export class AkashOrchestrator {
     memory?: string
     storage?: string
     gpu?: { units: number; vendor: string; model?: string } | null
-  }): Promise<string> {
+  }, baseImage?: string): Promise<string> {
     if (service.type === 'FUNCTION') {
       if (!service.afFunction?.sourceCode) {
         throw new Error('Function has no source code')
@@ -1113,15 +1114,16 @@ export class AkashOrchestrator {
       )
     }
 
-    // Priority 2: Custom Docker image with explicit containerPort
-    if (service.dockerImage) {
+    // Priority 2: Custom Docker image or user-selected base image
+    const effectiveImage = service.dockerImage || baseImage
+    if (effectiveImage) {
       const port = service.containerPort || 80
       log.info(
-        `Generating SDL for custom Docker image '${service.dockerImage}' (port ${port}) for service '${service.slug}'`
+        `Generating SDL for Docker image '${effectiveImage}' (port ${port}) for service '${service.slug}'`
       )
       return this.generateCustomDockerSDL(
         service.slug,
-        service.dockerImage,
+        effectiveImage,
         port
       )
     }

@@ -287,7 +287,7 @@ export const akashMutations = {
    */
   deployToAkash: async (
     _: unknown,
-    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null } } },
+    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }; baseImage?: string } },
     context: Context
   ) => {
     if (!context.userId) {
@@ -365,6 +365,7 @@ export const akashMutations = {
         deposit: input.depositUakt,
         sdlContent: input.sdlContent,
         resourceOverrides: input.resourceOverrides ?? undefined,
+        baseImage: input.baseImage,
       })
 
       if (policyId) {
