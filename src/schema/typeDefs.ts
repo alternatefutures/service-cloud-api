@@ -199,6 +199,8 @@ export const typeDefs = /* GraphQL */ `
     id: ID!
     name: String!
     slug: String!
+    serviceId: ID
+    service: Service
     project: Project!
     deployments: [Deployment!]!
     domains: [Domain!]!
@@ -263,6 +265,8 @@ export const typeDefs = /* GraphQL */ `
     status: FunctionStatus!
     project: Project!
     siteId: String
+    serviceId: ID
+    service: Service
     currentDeployment: AFFunctionDeployment
     deployments: [AFFunctionDeployment!]!
     akashDeployments: [AkashDeployment!]!
@@ -317,6 +321,20 @@ export const typeDefs = /* GraphQL */ `
     sourceCode: String
     routes: JSON
     status: FunctionStatus
+  }
+
+  """
+  Generic input for creating a Service registry entry.
+  Used for template-based services and raw compute services
+  that don't need a specialized AFFunction or Site record.
+  """
+  input CreateServiceInput {
+    name: String!
+    projectId: ID!
+    type: ServiceType
+    templateId: String
+    dockerImage: String
+    containerPort: Int
   }
 
   """
@@ -528,6 +546,19 @@ export const typeDefs = /* GraphQL */ `
     depositUakt: Int
     # Optional custom SDL content (if not provided, will be auto-generated based on service type)
     sdlContent: String
+    # Optional source code for functions (will be saved before deployment)
+    sourceCode: String
+    # Optional deployment policy (budget, GPU, runtime constraints)
+    policy: DeploymentPolicyInput
+  }
+
+  """
+  Input for deploying a service to Phala Cloud (TEE). Supports any service type
+  that has a templateId (template-based) or custom compose content.
+  """
+  input DeployToPhalaInput {
+    # The canonical service ID from the Service registry
+    serviceId: ID!
     # Optional source code for functions (will be saved before deployment)
     sourceCode: String
     # Optional deployment policy (budget, GPU, runtime constraints)
@@ -1822,6 +1853,9 @@ export const typeDefs = /* GraphQL */ `
     updateProject(id: ID!, data: UpdateProjectDataInput!): Project!
     deleteProject(id: ID!): Boolean!
 
+    # Services
+    createService(input: CreateServiceInput!): Service!
+
     # Sites
     createSite(data: SiteDataInput!): Site!
     deleteSite(where: SiteWhereInput!): Site!
@@ -1903,6 +1937,8 @@ export const typeDefs = /* GraphQL */ `
     deployCompositeTemplate(input: DeployCompositeTemplateInput!): CompositeDeploymentResult!
 
     # Phala Deployments
+    # General-purpose: deploy any service to Phala Cloud (TEE)
+    deployToPhala(input: DeployToPhalaInput!): PhalaDeployment!
     stopPhalaDeployment(id: ID!): PhalaDeployment!
     deletePhalaDeployment(id: ID!): PhalaDeployment!
 

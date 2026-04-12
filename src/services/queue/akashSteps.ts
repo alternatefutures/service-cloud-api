@@ -29,9 +29,52 @@ import {
   type AkashPollUrlsPayload,
   type AkashHandleFailurePayload,
 } from './types.js'
+import { Resolver } from 'dns/promises'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('akash-steps')
+
+const IP_V4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
+
+/**
+ * Resolve all unique hostnames found in serviceUrls to IPv4/IPv6 addresses.
+ * Mutates `parsed` in-place, adding an `ips` array to each service entry.
+ */
+async function resolveServiceIps(
+  parsed: Record<string, { uris: string[]; ips?: string[] }>
+): Promise<void> {
+  const seen = new Map<string, string[]>()
+
+  for (const svc of Object.values(parsed)) {
+    const ips: string[] = []
+    for (const uri of svc.uris) {
+      const host = uri.includes(':') ? uri.split(':')[0] : uri
+      if (!host) continue
+      if (IP_V4_RE.test(host)) {
+        if (!ips.includes(host)) ips.push(host)
+        continue
+      }
+      if (seen.has(host)) {
+        for (const ip of seen.get(host)!) if (!ips.includes(ip)) ips.push(ip)
+        continue
+      }
+      const resolved: string[] = []
+      const resolver = new Resolver()
+      resolver.setServers(['8.8.8.8', '1.1.1.1'])
+      try {
+        const v4 = await resolver.resolve4(host)
+        resolved.push(...v4)
+      } catch { /* no A record */ }
+      try {
+        const v6 = await resolver.resolve6(host)
+        resolved.push(...v6)
+      } catch { /* no AAAA record */ }
+      seen.set(host, resolved)
+      for (const ip of resolved) if (!ips.includes(ip)) ips.push(ip)
+    }
+    if (ips.length > 0) svc.ips = ips
+  }
+}
 
 const AKASH_CLI_TIMEOUT_MS = 120_000
 
@@ -972,7 +1015,7 @@ export async function handlePollUrls(
     }
     const services = result.services || {}
     const forwardedPorts = result.forwarded_ports || {}
-    const parsed: Record<string, { uris: string[] }> = {}
+    const parsed: Record<string, { uris: string[]; ips?: string[] }> = {}
     for (const [k, v] of Object.entries(services)) {
       const uris = v.uris || []
       if (forwardedPorts[k]?.length) {
@@ -1017,6 +1060,12 @@ export async function handlePollUrls(
       return
     }
 
+    try {
+      await resolveServiceIps(parsed)
+    } catch (dnsErr) {
+      log.warn({ err: dnsErr }, 'DNS resolution for provider IPs failed (non-fatal)')
+    }
+
     await finalizeDeploymentOrFail(prisma, deployment, parsed)
   } catch (err) {
     if (attempt >= URL_POLL_MAX_ATTEMPTS) {
@@ -1038,7 +1087,7 @@ export async function handlePollUrls(
 async function finalizeDeploymentOrFail(
   prisma: PrismaClient,
   deployment: any,
-  serviceUrls: Record<string, { uris: string[] }>
+  serviceUrls: Record<string, { uris: string[]; ips?: string[] }>
 ): Promise<void> {
   try {
     await finalizeDeployment(prisma, deployment, serviceUrls)
@@ -1060,7 +1109,7 @@ async function finalizeDeploymentOrFail(
 export async function finalizeDeployment(
   prisma: PrismaClient,
   deployment: any,
-  serviceUrls: Record<string, { uris: string[] }>
+  serviceUrls: Record<string, { uris: string[]; ips?: string[] }>
 ): Promise<void> {
   let organizationId = deployment.service?.project?.organizationId
   if (!organizationId) {

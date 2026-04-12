@@ -4,6 +4,18 @@
 import { GraphQLError } from 'graphql'
 import { getPhalaOrchestrator } from '../services/phala/index.js'
 import { processFinalPhalaBilling } from '../services/billing/deploymentSettlement.js'
+import { assertSubscriptionActive } from './subscriptionCheck.js'
+import { assertDeployBalance } from './balanceCheck.js'
+import { BILLING_CONFIG } from '../config/billing.js'
+import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
+import { validatePolicyInput } from '../services/policy/validator.js'
+import type { DeploymentPolicyInput } from '../services/policy/types.js'
+import {
+  getTemplateById,
+  generateComposeFromTemplate,
+  getEnvKeysFromTemplate,
+} from '../templates/index.js'
+import type { TemplateResources } from '../templates/index.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
@@ -240,6 +252,161 @@ export const phalaFieldResolvers = {
 }
 
 export const phalaMutations = {
+  /**
+   * Deploy an existing service to Phala Cloud (TEE).
+   * For template-based services: generates compose from template.
+   * Mirrors deployToAkash but routes through the Phala orchestrator.
+   */
+  deployToPhala: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        serviceId: string
+        sourceCode?: string
+        policy?: DeploymentPolicyInput
+      }
+    },
+    context: Context
+  ) => {
+    if (!context.userId) {
+      throw new GraphQLError('Not authenticated')
+    }
+
+    await assertSubscriptionActive(context.organizationId)
+
+    const service = await context.prisma.service.findUnique({
+      where: { id: input.serviceId },
+      include: {
+        project: true,
+        afFunction: true,
+        site: true,
+        envVars: true,
+        ports: true,
+      },
+    })
+
+    if (!service) {
+      throw new GraphQLError('Service not found')
+    }
+
+    assertProjectAccess(context, service.project, 'Not authorized to deploy this service')
+
+    if (input.sourceCode && service.type === 'FUNCTION' && service.afFunction) {
+      await context.prisma.aFFunction.update({
+        where: { id: service.afFunction.id },
+        data: { sourceCode: input.sourceCode },
+      })
+    }
+
+    const template = service.templateId ? getTemplateById(service.templateId) : null
+
+    if (!template) {
+      throw new GraphQLError(
+        'Phala deployment currently requires a template-based service. ' +
+        'Raw service deployment to Phala is not yet supported.'
+      )
+    }
+
+    const envOverrides: Record<string, string> = {}
+    for (const ev of service.envVars) {
+      envOverrides[ev.key] = ev.value
+    }
+
+    const templateResources: TemplateResources = {
+      cpu: template.resources.cpu,
+      memory: template.resources.memory,
+      storage: template.resources.storage,
+      gpu: template.resources.gpu,
+    }
+
+    let policyId: string | undefined
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+      const policyRecord = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      policyId = policyRecord.id
+    }
+
+    const phalaInstance = await resolvePhalaInstanceType(
+      templateResources,
+      input.policy?.acceptableGpuModels,
+      input.policy?.gpuUnits
+    )
+
+    const estimatedDailyCostCents = Math.max(
+      BILLING_CONFIG.phala.minBalanceCentsToLaunch,
+      Math.ceil(phalaInstance.hourlyRateUsd * 24 * 100)
+    )
+    await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
+      dailyCostCents: estimatedDailyCostCents,
+    })
+
+    const composeContent = generateComposeFromTemplate(template, {
+      serviceName: service.slug,
+      envOverrides,
+    })
+
+    const envKeys = getEnvKeysFromTemplate(template, envOverrides)
+
+    const mergedEnv: Record<string, string> = {}
+    for (const v of template.envVars) {
+      if (v.default !== null) mergedEnv[v.key] = v.default
+    }
+    Object.assign(mergedEnv, envOverrides)
+
+    const orchestrator = getPhalaOrchestrator(context.prisma)
+
+    try {
+      const deploymentId = await orchestrator.deployServicePhala(service.id, {
+        composeContent,
+        env: mergedEnv,
+        envKeys,
+        name: `af-${service.slug}-${Date.now().toString(36)}`,
+        cvmSize: phalaInstance.cvmSize,
+        gpuModel: phalaInstance.gpuModel ?? undefined,
+        hourlyRateUsd: phalaInstance.hourlyRateUsd,
+      })
+
+      if (policyId) {
+        await context.prisma.phalaDeployment.update({
+          where: { id: deploymentId },
+          data: { policyId },
+        })
+      }
+
+      const deployment = await context.prisma.phalaDeployment.findUnique({
+        where: { id: deploymentId },
+        include: { policy: true },
+      })
+
+      if (!deployment) {
+        throw new GraphQLError('Phala deployment record not found after creation')
+      }
+
+      return deployment
+    } catch (error: any) {
+      throw new GraphQLError(
+        `Phala deployment failed: ${error.message || 'Unknown error'}`
+      )
+    }
+  },
+
   stopPhalaDeployment: async (
     _: unknown,
     { id }: { id: string },

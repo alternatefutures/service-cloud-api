@@ -63,6 +63,7 @@
     "node-cron": "^4.2.1",
     "node-pty": "^1.1.0",
     "pdfkit": "^0.17.2",
+    "phala": "^1.1.17",
     "pino": "^10.3.1",
     "stripe": "^19.3.1",
     "svg-to-pdfkit": "^0.1.8",

@@ -1459,6 +1459,40 @@ export const resolvers = {
     },
 
     // Functions
+    createService: async (
+      _: unknown,
+      {
+        input,
+      }: { input: { name: string; projectId: string; type?: string; templateId?: string; dockerImage?: string; containerPort?: number } },
+      context: Context
+    ) => {
+      requireAuth(context)
+
+      const project = await context.prisma.project.findUnique({
+        where: { id: input.projectId },
+        select: { id: true, slug: true, userId: true, organizationId: true },
+      })
+      if (!project) throw new GraphQLError('Project not found')
+      assertProjectAccess(context, project, 'Not authorized to create a service in this project')
+
+      const slug = generateSlug(input.name)
+      const serviceType = (input.type as any) || 'FUNCTION'
+
+      return context.prisma.service.create({
+        data: {
+          type: serviceType,
+          name: input.name,
+          slug,
+          projectId: input.projectId,
+          templateId: input.templateId ?? null,
+          dockerImage: input.dockerImage ?? null,
+          containerPort: input.containerPort ?? null,
+          createdByUserId: context.userId ?? null,
+          internalHostname: generateInternalHostname(slug, project.slug),
+        },
+      })
+    },
+
     createAFFunction: async (
       _: unknown,
       {
@@ -1853,6 +1887,12 @@ export const resolvers = {
   },
 
   Site: {
+    service: (parent: any, _: unknown, context: Context) => {
+      if (!parent.serviceId) return null
+      return context.prisma.service.findUnique({
+        where: { id: parent.serviceId },
+      })
+    },
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
@@ -1946,6 +1986,12 @@ export const resolvers = {
   },
 
   AFFunction: {
+    service: (parent: any, _: unknown, context: Context) => {
+      if (!parent.serviceId) return null
+      return context.prisma.service.findUnique({
+        where: { id: parent.serviceId },
+      })
+    },
     project: (parent: any, _: unknown, context: Context) => {
       return context.prisma.project.findUnique({
         where: { id: parent.projectId },
