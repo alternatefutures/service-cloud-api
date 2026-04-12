@@ -550,6 +550,8 @@ export const typeDefs = /* GraphQL */ `
     sourceCode: String
     # Optional deployment policy (budget, GPU, runtime constraints)
     policy: DeploymentPolicyInput
+    # Optional resource overrides (CPU, memory, storage, GPU) — overrides template defaults
+    resourceOverrides: ResourceOverrideInput
   }
 
   """
@@ -563,6 +565,8 @@ export const typeDefs = /* GraphQL */ `
     sourceCode: String
     # Optional deployment policy (budget, GPU, runtime constraints)
     policy: DeploymentPolicyInput
+    # Optional resource overrides (CPU, memory, storage, GPU) — overrides template defaults
+    resourceOverrides: ResourceOverrideInput
   }
 
   """

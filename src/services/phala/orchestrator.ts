@@ -130,6 +130,19 @@ export class PhalaOrchestrator {
     const envKeys = options.envKeys || []
     const cvmSize = options.cvmSize || 'tdx.large'
 
+    log.info(
+      {
+        serviceId,
+        serviceName: service.slug,
+        cvmSize,
+        gpuModel: options.gpuModel ?? null,
+        envKeyCount: envKeys.length,
+        composeLength: options.composeContent.length,
+        hourlyRateUsd: options.hourlyRateUsd,
+      },
+      'deployServicePhala: starting deployment'
+    )
+
     // Resolve billing context
     let orgBillingId: string | null = null
     let organizationId: string | null = service.project?.organizationId ?? null

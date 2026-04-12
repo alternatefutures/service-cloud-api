@@ -266,6 +266,12 @@ export const phalaMutations = {
         serviceId: string
         sourceCode?: string
         policy?: DeploymentPolicyInput
+        resourceOverrides?: {
+          cpu?: number
+          memory?: string
+          storage?: string
+          gpu?: { units: number; vendor: string; model?: string } | null
+        }
       }
     },
     context: Context
@@ -314,12 +320,19 @@ export const phalaMutations = {
       envOverrides[ev.key] = ev.value
     }
 
+    const ro = input.resourceOverrides
     const templateResources: TemplateResources = {
-      cpu: template.resources.cpu,
-      memory: template.resources.memory,
-      storage: template.resources.storage,
-      gpu: template.resources.gpu,
+      cpu: ro?.cpu ?? template.resources.cpu,
+      memory: ro?.memory ?? template.resources.memory,
+      storage: ro?.storage ?? template.resources.storage,
+      gpu: ro?.gpu === null
+        ? undefined
+        : ro?.gpu
+          ? { units: ro.gpu.units, vendor: ro.gpu.vendor as 'nvidia' | 'amd', model: ro.gpu.model }
+          : template.resources.gpu,
     }
+
+    log.info({ templateResources, hasOverrides: !!ro, gpuDisabled: ro?.gpu === null }, 'Resolved template resources for Phala deploy')
 
     let policyId: string | undefined
     if (input.policy) {
@@ -372,6 +385,11 @@ export const phalaMutations = {
 
     const orchestrator = getPhalaOrchestrator(context.prisma)
 
+    log.info(
+      { serviceId: service.id, cvmSize: phalaInstance.cvmSize, gpuModel: phalaInstance.gpuModel, hourlyRate: phalaInstance.hourlyRateUsd },
+      'Starting Phala deployment'
+    )
+
     try {
       const deploymentId = await orchestrator.deployServicePhala(service.id, {
         composeContent,
@@ -401,8 +419,15 @@ export const phalaMutations = {
 
       return deployment
     } catch (error: any) {
+      const msg = error.message || 'Unknown error'
+      if (msg.includes('No available resources')) {
+        throw new GraphQLError(
+          `No Confidential GPU capacity available for ${phalaInstance.cvmSize}. ` +
+          `Try deploying to Standard compute instead, or try again later.`
+        )
+      }
       throw new GraphQLError(
-        `Phala deployment failed: ${error.message || 'Unknown error'}`
+        `Phala deployment failed: ${msg}`
       )
     }
   },

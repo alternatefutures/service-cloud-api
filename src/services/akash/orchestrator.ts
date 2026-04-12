@@ -884,6 +884,12 @@ export class AkashOrchestrator {
       deposit?: number
       sdlContent?: string
       skipEnvInjection?: boolean
+      resourceOverrides?: {
+        cpu?: number
+        memory?: string
+        storage?: string
+        gpu?: { units: number; vendor: string; model?: string } | null
+      }
     } = {}
   ): Promise<string> {
     const deposit = options.deposit || DEFAULT_DEPOSIT_UACT
@@ -939,7 +945,7 @@ export class AkashOrchestrator {
 
     // Prepare SDL content
     let sdlContent =
-      options.sdlContent || (await this.generateSDLForService(service))
+      options.sdlContent || (await this.generateSDLForService(service, options.resourceOverrides))
     if (!options.skipEnvInjection) {
       sdlContent = await this.injectPersistedEnvVars(
         service.id,
@@ -1029,6 +1035,11 @@ export class AkashOrchestrator {
     dockerImage?: string | null
     site?: { id: string } | null
     afFunction?: { id: string; sourceCode: string | null } | null
+  }, resourceOverrides?: {
+    cpu?: number
+    memory?: string
+    storage?: string
+    gpu?: { units: number; vendor: string; model?: string } | null
   }): Promise<string> {
     if (service.type === 'FUNCTION') {
       if (!service.afFunction?.sourceCode) {
@@ -1077,9 +1088,24 @@ export class AkashOrchestrator {
         }
 
         log.info(
+          { templateId: service.templateId, hasResourceOverrides: !!resourceOverrides },
           `Generating SDL from template '${service.templateId}' for service '${service.slug}'`
         )
-        return generateSDLFromTemplate(template, { serviceName: service.slug })
+        return generateSDLFromTemplate(template, {
+          serviceName: service.slug,
+          resourceOverrides: resourceOverrides
+            ? {
+                cpu: resourceOverrides.cpu,
+                memory: resourceOverrides.memory,
+                storage: resourceOverrides.storage,
+                gpu: resourceOverrides.gpu === null
+                  ? null
+                  : resourceOverrides.gpu
+                    ? { units: resourceOverrides.gpu.units, vendor: resourceOverrides.gpu.vendor as 'nvidia' | 'amd', model: resourceOverrides.gpu.model }
+                    : undefined,
+              }
+            : undefined,
+        })
       }
       log.warn(
         `Service '${service.slug}' has templateId '${service.templateId}' but template not found. Falling back.`
