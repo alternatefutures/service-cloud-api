@@ -30,8 +30,8 @@ const BID_POLL_MAX_ATTEMPTS = 10
 const SERVICE_POLL_INTERVAL_MS = 5000
 const SERVICE_POLL_MAX_ATTEMPTS = 24
 
-/** Default Akash deposit in uact (0.5 ACT — the chain minimum). */
-export const DEFAULT_DEPOSIT_UACT = 500_000
+/** Default Akash deposit in uact (1 ACT — buffer for bid/lease process). */
+export const DEFAULT_DEPOSIT_UACT = 1_000_000
 
 function getAkashEnv(): Record<string, string> {
   if (!process.env.AKASH_MNEMONIC) {
@@ -354,6 +354,26 @@ export class AkashOrchestrator {
   }
 
   /**
+   * Top up an existing deployment's on-chain escrow.
+   * Used after CREATE_LEASE when the actual price is known, to ensure
+   * at least 1 hour of runway beyond the initial deposit.
+   */
+  async topUpDeploymentDeposit(dseq: number, amountUact: number): Promise<void> {
+    if (amountUact <= 0) return
+    log.info({ dseq, amountUact }, 'Topping up deployment escrow')
+    await runAkashAsync([
+      'tx',
+      'deployment',
+      'deposit',
+      `${amountUact}uact`,
+      '--dseq',
+      String(dseq),
+      '-y',
+    ])
+    log.info({ dseq, amountUact }, 'Deployment escrow topped up')
+  }
+
+  /**
    * Get bids for a deployment
    */
   async getBids(
@@ -489,7 +509,7 @@ export class AkashOrchestrator {
     dseq: number,
     provider: string
   ): Promise<Record<string, { uris: string[] }>> {
-    const output = runProviderServices(
+    const output = await runProviderServicesAsync(
       ['lease-status', '--dseq', String(dseq), '--provider', provider],
       15_000
     )
@@ -520,18 +540,18 @@ export class AkashOrchestrator {
    * Get per-container health from lease-status. Returns richer data than
    * getServices, including replica counts and container state.
    */
-  getLeaseHealth(
+  async getLeaseHealth(
     dseq: number,
     provider: string
-  ): Array<{
+  ): Promise<Array<{
     name: string
     ready: boolean
     total: number
     available: number
     readyReplicas: number
     uris: string[]
-  }> {
-    const output = runProviderServices(
+  }>> {
+    const output = await runProviderServicesAsync(
       ['lease-status', '--dseq', String(dseq), '--provider', provider],
       15_000
     )

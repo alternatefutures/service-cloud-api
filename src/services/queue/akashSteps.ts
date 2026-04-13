@@ -12,7 +12,7 @@ import { tmpdir } from 'os'
 import { publishJob, isQStashEnabled } from './qstashClient.js'
 import { deploymentEvents } from '../events/deploymentEvents.js'
 import { providerSelector } from '../akash/providerSelector.js'
-import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
+import { DEFAULT_DEPOSIT_UACT, getAkashOrchestrator } from '../akash/orchestrator.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
@@ -817,6 +817,27 @@ export async function handleCreateLease(
     ])
 
     await new Promise(r => setTimeout(r, 6000))
+
+    // Top up on-chain escrow based on actual bid price so the deployment
+    // has at least 1 hour of runway. The initial deposit (1 ACT) may not
+    // be enough for expensive GPU leases.
+    if (payload.priceAmount) {
+      const pricePerBlock = parseInt(payload.priceAmount, 10) || 0
+      const BLOCKS_PER_HOUR = 600
+      const hourlyUact = pricePerBlock * BLOCKS_PER_HOUR
+      const needed = hourlyUact - DEFAULT_DEPOSIT_UACT
+      if (needed > 0) {
+        try {
+          const orchestrator = getAkashOrchestrator(prisma)
+          await orchestrator.topUpDeploymentDeposit(Number(deployment.dseq), needed)
+        } catch (topUpErr) {
+          log.warn(
+            { dseq: String(deployment.dseq), needed, err: topUpErr instanceof Error ? topUpErr.message : topUpErr },
+            'Post-lease escrow top-up failed — monitor will catch up'
+          )
+        }
+      }
+    }
 
     const gpuModel = await resolveProviderGpuModel(
       provider,

@@ -449,6 +449,8 @@ export class ComputeBillingScheduler {
         orgBillingId: true,
         organizationId: true,
         dailyRateCents: true,
+        lastBilledAt: true,
+        createdAt: true,
       },
     })
 
@@ -458,6 +460,8 @@ export class ComputeBillingScheduler {
         orgBillingId: true,
         organizationId: true,
         hourlyRateCents: true,
+        lastBilledAt: true,
+        createdAt: true,
       },
     })
 
@@ -485,21 +489,50 @@ export class ComputeBillingScheduler {
       orgBurnRates.set(p.orgBillingId, existing)
     }
 
+    // Build a map of unbilled cost per orgBillingId by summing up cost accrued
+    // since the last billing for each active deployment.
+    const unbilledCostByOrg = new Map<string, number>()
+    const now = new Date()
+
+    for (const e of activeEscrows) {
+      const lastBilled = e.lastBilledAt || e.createdAt || now
+      const hoursSince = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
+      const unbilledCents = (e.dailyRateCents / 24) * hoursSince
+      unbilledCostByOrg.set(e.orgBillingId, (unbilledCostByOrg.get(e.orgBillingId) || 0) + unbilledCents)
+    }
+
+    for (const p of activePhala) {
+      if (!p.orgBillingId || !p.hourlyRateCents) continue
+      const lastBilled = p.lastBilledAt || p.createdAt || now
+      const hoursSince = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
+      const unbilledCents = p.hourlyRateCents * hoursSince
+      unbilledCostByOrg.set(p.orgBillingId, (unbilledCostByOrg.get(p.orgBillingId) || 0) + unbilledCents)
+    }
+
     for (const [orgBillingId, { hourlyCostCents, orgId }] of orgBurnRates) {
       try {
         const balanceInfo = await billingApi.getOrgBalance(orgBillingId)
+        const unbilledCents = unbilledCostByOrg.get(orgBillingId) || 0
+        const effectiveBalanceCents = balanceInfo.balanceCents - Math.ceil(unbilledCents)
         const thresholdCents = hourlyCostCents * BILLING_CONFIG.thresholds.lowBalanceHours
 
-        if (balanceInfo.balanceCents < thresholdCents) {
+        if (effectiveBalanceCents < thresholdCents) {
           log.warn(
-            { orgId, balanceCents: balanceInfo.balanceCents, hourlyCostCents, thresholdCents },
-            'Org balance below hourly threshold — suspending deployments'
+            {
+              orgId,
+              balanceCents: balanceInfo.balanceCents,
+              unbilledCents: Math.ceil(unbilledCents),
+              effectiveBalanceCents,
+              hourlyCostCents,
+              thresholdCents,
+            },
+            'Org effective balance below hourly threshold — suspending deployments'
           )
 
           await this.pauseOrgDeployments(
             orgBillingId,
             orgId,
-            balanceInfo.balanceCents,
+            effectiveBalanceCents,
             hourlyCostCents * 24
           )
           stats.orgsPaused++

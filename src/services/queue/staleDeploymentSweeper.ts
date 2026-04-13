@@ -127,7 +127,11 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
  * Because provider.close() settles all billing (interface contract), no
  * provider-specific billing logic is needed here.
  */
-const CONSECUTIVE_FAILURE_THRESHOLD = 3
+// 404 from provider = definitively dead, close immediately (1 check).
+// Transient errors (unknown) get more chances before closing.
+const UNHEALTHY_THRESHOLD = 1
+const UNKNOWN_THRESHOLD = 3
+const EXCEPTION_THRESHOLD = 3
 const failureCounters = new Map<string, number>()
 
 function isDefinitelyDead(health: { overall: string }): boolean {
@@ -155,10 +159,10 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
             const count = (failureCounters.get(counterKey) ?? 0) + 1
             failureCounters.set(counterKey, count)
 
-            if (count >= CONSECUTIVE_FAILURE_THRESHOLD) {
+            if (count >= UNHEALTHY_THRESHOLD) {
               log.warn(
                 { provider: provider.name, deploymentId: id, failures: count, health: health?.overall },
-                'Deployment confirmed dead after consecutive failures — closing'
+                'Deployment confirmed dead (unhealthy/404) — closing immediately'
               )
               try {
                 await provider.close(id)
@@ -172,7 +176,7 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
               failureCounters.delete(counterKey)
             } else {
               log.debug(
-                { provider: provider.name, deploymentId: id, failures: count, threshold: CONSECUTIVE_FAILURE_THRESHOLD },
+                { provider: provider.name, deploymentId: id, failures: count, threshold: UNHEALTHY_THRESHOLD },
                 'Deployment unhealthy — tracking consecutive failures'
               )
             }
@@ -180,7 +184,7 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
             const count = (failureCounters.get(counterKey) ?? 0) + 1
             failureCounters.set(counterKey, count)
 
-            if (count >= CONSECUTIVE_FAILURE_THRESHOLD * 2) {
+            if (count >= UNKNOWN_THRESHOLD) {
               log.warn(
                 { provider: provider.name, deploymentId: id, failures: count },
                 'Deployment returned unknown health for too many consecutive checks — closing'
@@ -207,7 +211,7 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
             'Health check threw — counting as failure'
           )
 
-          if (count >= CONSECUTIVE_FAILURE_THRESHOLD) {
+          if (count >= EXCEPTION_THRESHOLD) {
             log.warn(
               { provider: provider.name, deploymentId: id, failures: count },
               'Health check exceptions exceeded threshold — closing'

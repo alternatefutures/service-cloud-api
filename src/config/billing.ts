@@ -29,7 +29,7 @@ export const BILLING_CONFIG = {
   thresholds: {
     /** Suspend when balance cannot cover this many hours of total burn. */
     lowBalanceHours: 1,
-    checkIntervalCron: '15 * * * *',
+    checkIntervalCron: '*/10 * * * *',
     failClosedAboveCentsPerDay: 500,
   },
 } as const
