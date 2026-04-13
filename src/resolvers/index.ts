@@ -1123,7 +1123,7 @@ export const resolvers = {
 
         return {
           balanceCents: balance.balanceCents,
-          totalDailyBurnCents: totalHourlyBurnCents * 24,
+          totalDailyBurnCents: Math.round(totalHourlyBurnCents * 24),
           runwayHours,
           runwayFormatted,
         }

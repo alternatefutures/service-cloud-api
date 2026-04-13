@@ -721,6 +721,12 @@ export const akashFieldResolvers = {
       })
       return deployments.map(formatDeployment)
     },
+    akashDeploymentCount: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
+      return context.prisma.akashDeployment.count({
+        where: { serviceId },
+      })
+    },
     activeAkashDeployment: async (parent: any, _: unknown, context: Context) => {
       const serviceId = parent.parentServiceId || parent.id
       const deployment = await context.prisma.akashDeployment.findFirst({

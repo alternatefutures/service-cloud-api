@@ -123,6 +123,7 @@ export const typeDefs = /* GraphQL */ `
     
     # Akash deployments for this service (or parent if companion)
     akashDeployments: [AkashDeployment!]!
+    akashDeploymentCount: Int!
     activeAkashDeployment: AkashDeployment
     # Phala deployments for this service (or parent if companion)
     phalaDeployments: [PhalaDeployment!]!

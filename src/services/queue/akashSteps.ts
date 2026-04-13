@@ -727,19 +727,25 @@ async function resolveProviderGpuModel(
   deploymentId: string
 ): Promise<string | null> {
   try {
+    // First try: if our SDL requests a specific (non-wildcard) model, use that.
+    // When a specific model is in the SDL, only providers with that GPU can bid,
+    // so we can trust the SDL value without querying the provider.
     const deployment = await prisma.akashDeployment.findUnique({
       where: { id: deploymentId },
       select: { sdlContent: true },
     })
     if (deployment?.sdlContent) {
       const modelMatch = deployment.sdlContent.match(
-        /gpu:[\s\S]*?model:\s*(\S+)/m
+        /gpu:[\s\S]*?model:\s*"?([^"\s]+)"?/m
       )
-      if (modelMatch?.[1] && modelMatch[1] !== 'nvidia') {
-        return modelMatch[1]
+      const model = modelMatch?.[1]
+      if (model && model !== 'nvidia' && model !== '*') {
+        return model
       }
     }
 
+    // Fallback: query the provider's on-chain attributes for their actual GPU model.
+    // This path is used when the SDL has model: "*" (any GPU) or no model specified.
     const output = await runAkashAsync(
       ['query', 'provider', 'get', providerAddr, '-o', 'json'],
       15_000

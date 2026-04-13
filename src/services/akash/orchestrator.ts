@@ -1160,7 +1160,8 @@ export class AkashOrchestrator {
       return this.generateCustomDockerSDL(
         service.slug,
         effectiveImage,
-        port
+        port,
+        resourceOverrides
       )
     }
 
@@ -1294,7 +1295,13 @@ export class AkashOrchestrator {
   private generateCustomDockerSDL(
     name: string,
     image: string,
-    containerPort: number
+    containerPort: number,
+    resourceOverrides?: {
+      cpu?: number
+      memory?: string
+      storage?: string
+      gpu?: { units: number; vendor: string; model?: string } | null
+    }
   ): string {
     const needsKeepAlive = /^(ubuntu|debian|alpine|centos|fedora|busybox|amazonlinux|rockylinux|almalinux)(:|$)/i.test(image)
 
@@ -1305,6 +1312,26 @@ export class AkashOrchestrator {
       - "echo 'Container ready on port ${containerPort}'; tail -f /dev/null"
 `
       : ''
+
+    const cpu = resourceOverrides?.cpu ?? 0.5
+    const memory = resourceOverrides?.memory ?? '512Mi'
+    const storage = resourceOverrides?.storage ?? '1Gi'
+    const gpu = resourceOverrides?.gpu
+
+    let gpuBlock = ''
+    if (gpu && gpu.units > 0) {
+      const hasSpecificModel = gpu.model && gpu.model !== '*'
+      const modelLine = hasSpecificModel
+        ? `
+                - model: ${gpu.model}`
+        : ''
+      gpuBlock = `
+        gpu:
+          units: ${gpu.units}
+          attributes:
+            vendor:
+              ${gpu.vendor}:${modelLine}`
+    }
 
     return `---
 version: "2.0"
@@ -1323,11 +1350,11 @@ profiles:
     ${name}:
       resources:
         cpu:
-          units: 0.5
+          units: ${cpu}
         memory:
-          size: 512Mi
+          size: ${memory}
         storage:
-          size: 1Gi
+          size: ${storage}${gpuBlock}
 
   placement:
     dcloud:
@@ -1337,7 +1364,7 @@ profiles:
       pricing:
         ${name}:
           denom: uact
-          amount: 1000
+          amount: ${gpu && gpu.units > 0 ? 10000 : 1000}
 
 deployment:
   ${name}:
