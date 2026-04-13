@@ -10,7 +10,7 @@ import { getAkashOrchestrator, DEFAULT_DEPOSIT_UACT } from '../services/akash/or
 import { getEscrowService } from '../services/billing/escrowService.js'
 import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
-import { assertDeployBalance } from './balanceCheck.js'
+import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
@@ -338,6 +338,37 @@ export const akashMutations = {
         )
       }
 
+      // For time-limited deployments, validate and reserve funds upfront
+      let reservedCents = 0
+      if (input.policy.runtimeMinutes && input.policy.runtimeMinutes > 0 && context.organizationId) {
+        const hourlyCostCents = estimatedDailyCostCents / 24
+        const requestedHours = input.policy.runtimeMinutes / 60
+
+        const check = await checkTimeLimitedDeployBalance(
+          context.organizationId,
+          'akash',
+          context.prisma,
+          hourlyCostCents,
+          requestedHours
+        )
+
+        if (!check.allowed) {
+          throw new GraphQLError(
+            check.reason ?? 'Insufficient balance for time-limited deployment.',
+            {
+              extensions: {
+                code: 'INSUFFICIENT_BALANCE',
+                maxAffordableHours: check.maxAffordableHours,
+                reservationCents: check.reservationCents,
+                effectiveBalanceCents: check.effectiveBalanceCents,
+              },
+            }
+          )
+        }
+
+        reservedCents = check.reservationCents
+      }
+
       const policyRecord = await context.prisma.deploymentPolicy.create({
         data: {
           acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
@@ -349,6 +380,7 @@ export const akashMutations = {
           expiresAt: input.policy.runtimeMinutes
             ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
             : null,
+          reservedCents,
         },
       })
       policyId = policyRecord.id
@@ -506,7 +538,7 @@ export const akashMutations = {
       if (deployment.policyId) {
         await context.prisma.deploymentPolicy.update({
           where: { id: deployment.policyId },
-          data: { stopReason: 'MANUAL_STOP', stoppedAt: new Date() },
+          data: { stopReason: 'MANUAL_STOP', stoppedAt: new Date(), reservedCents: 0 },
         })
       }
       // Refund any remaining escrow balance (settlement was done during pause)
@@ -580,7 +612,7 @@ export const akashMutations = {
     if (deployment.policyId) {
       await context.prisma.deploymentPolicy.update({
         where: { id: deployment.policyId },
-        data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt, reservedCents: 0 },
       })
     }
 

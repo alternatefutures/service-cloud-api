@@ -1357,6 +1357,7 @@ export async function handleFailure(
             expiresAt: existingPolicy.runtimeMinutes
               ? new Date(Date.now() + existingPolicy.runtimeMinutes * 60_000)
               : null,
+            reservedCents: existingPolicy.reservedCents,
             totalSpentUsd: existingPolicy.totalSpentUsd,
           },
         })

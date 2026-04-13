@@ -114,6 +114,7 @@ export const typeDefs = /* GraphQL */ `
     createdByUserId: ID
     parentServiceId: ID
     sdlServiceName: String
+    shutdownPriority: Int!
     createdAt: Date!
     updatedAt: Date!
 
@@ -1501,6 +1502,7 @@ export const typeDefs = /* GraphQL */ `
     maxMonthlyUsd: Float
     runtimeMinutes: Int
     expiresAt: Date
+    reservedCents: Int!
     stopReason: PolicyStopReason
     stoppedAt: Date
     totalSpentUsd: Float!
@@ -1885,6 +1887,7 @@ export const typeDefs = /* GraphQL */ `
 
     # Services
     createService(input: CreateServiceInput!): Service!
+    updateServicePriority(serviceId: ID!, shutdownPriority: Int!): Service!
 
     # Sites
     createSite(data: SiteDataInput!): Site!

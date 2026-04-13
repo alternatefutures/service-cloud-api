@@ -5,7 +5,7 @@ import { GraphQLError } from 'graphql'
 import { getPhalaOrchestrator } from '../services/phala/index.js'
 import { processFinalPhalaBilling } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
-import { assertDeployBalance } from './balanceCheck.js'
+import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
 import { BILLING_CONFIG } from '../config/billing.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
@@ -384,6 +384,52 @@ export const phalaMutations = {
       if (!validation.allowed) {
         throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
       }
+
+      // Reservation check deferred until after we know the hourly cost
+      policyId = undefined // will be set below after instance resolution
+    }
+
+    const phalaInstance = await resolvePhalaInstanceType(
+      resolvedResources,
+      input.policy?.acceptableGpuModels,
+      input.policy?.gpuUnits
+    )
+
+    const hourlyCostCents = Math.ceil(phalaInstance.hourlyRateUsd * 100)
+    const estimatedDailyCostCents = Math.max(
+      BILLING_CONFIG.phala.minBalanceCentsToLaunch,
+      hourlyCostCents * 24
+    )
+
+    // Now create the policy (deferred from above so we know the hourly cost)
+    if (input.policy) {
+      let reservedCents = 0
+      if (input.policy.runtimeMinutes && input.policy.runtimeMinutes > 0 && context.organizationId) {
+        const requestedHours = input.policy.runtimeMinutes / 60
+        const check = await checkTimeLimitedDeployBalance(
+          context.organizationId,
+          'phala',
+          context.prisma,
+          hourlyCostCents,
+          requestedHours
+        )
+
+        if (!check.allowed) {
+          throw new GraphQLError(
+            check.reason ?? 'Insufficient balance for time-limited deployment.',
+            {
+              extensions: {
+                code: 'INSUFFICIENT_BALANCE',
+                maxAffordableHours: check.maxAffordableHours,
+                reservationCents: check.reservationCents,
+                effectiveBalanceCents: check.effectiveBalanceCents,
+              },
+            }
+          )
+        }
+        reservedCents = check.reservationCents
+      }
+
       const policyRecord = await context.prisma.deploymentPolicy.create({
         data: {
           acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
@@ -395,21 +441,12 @@ export const phalaMutations = {
           expiresAt: input.policy.runtimeMinutes
             ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
             : null,
+          reservedCents,
         },
       })
       policyId = policyRecord.id
     }
 
-    const phalaInstance = await resolvePhalaInstanceType(
-      resolvedResources,
-      input.policy?.acceptableGpuModels,
-      input.policy?.gpuUnits
-    )
-
-    const estimatedDailyCostCents = Math.max(
-      BILLING_CONFIG.phala.minBalanceCentsToLaunch,
-      Math.ceil(phalaInstance.hourlyRateUsd * 24 * 100)
-    )
     await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
       dailyCostCents: estimatedDailyCostCents,
     })
@@ -509,7 +546,7 @@ export const phalaMutations = {
     if (deployment.policyId) {
       await context.prisma.deploymentPolicy.update({
         where: { id: deployment.policyId },
-        data: { stopReason: 'MANUAL_STOP', stoppedAt },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt, reservedCents: 0 },
       })
     }
 
@@ -591,7 +628,7 @@ export const phalaMutations = {
     if (deployment.policyId) {
       await context.prisma.deploymentPolicy.update({
         where: { id: deployment.policyId },
-        data: { stopReason: 'MANUAL_STOP', stoppedAt: deletedAt },
+        data: { stopReason: 'MANUAL_STOP', stoppedAt: deletedAt, reservedCents: 0 },
       })
     }
 
