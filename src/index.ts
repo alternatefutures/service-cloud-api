@@ -33,6 +33,7 @@ import helmet from 'helmet'
 import { initInfisical } from './config/infisical.js'
 import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
 import { AkashOrchestrator } from './services/akash/orchestrator.js'
+import { startHealthPrewarmer } from './services/providers/akashProvider.js'
 import {
   registerProvider,
   createAkashProvider,
@@ -69,6 +70,7 @@ const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const escrowHealthMonitor = new EscrowHealthMonitor(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
+let healthPrewarmerInterval: ReturnType<typeof setInterval> | null = null
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret) {
@@ -322,6 +324,7 @@ server.listen(port, () => {
   orchestrator.resumePendingBackfills()
 
   startStaleDeploymentSweeper(prisma)
+  healthPrewarmerInterval = startHealthPrewarmer(prisma)
 })
 
 async function gracefulShutdown(signal: string) {
@@ -332,6 +335,7 @@ async function gracefulShutdown(signal: string) {
   escrowHealthMonitor.stop()
   providerRegistryScheduler.stop()
   providerVerificationScheduler.stop()
+  if (healthPrewarmerInterval) clearInterval(healthPrewarmerInterval)
 
   const forceExitTimeout = setTimeout(() => {
     log.warn('Graceful shutdown timed out after 15s — forcing exit')

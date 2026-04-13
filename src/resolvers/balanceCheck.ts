@@ -55,6 +55,41 @@ export async function getExistingDailyBurn(
   return (await getOrgHourlyBurnCents(prisma, orgBillingId)) * 24
 }
 
+/**
+ * Compute unbilled cost across all active deployments for an org.
+ * This is the cost accrued since last billing that hasn't been debited yet.
+ */
+async function getOrgUnbilledCents(
+  prisma: PrismaClient,
+  orgBillingId: string
+): Promise<number> {
+  const now = new Date()
+
+  const [akashEscrows, phalaDeployments] = await Promise.all([
+    prisma.deploymentEscrow.findMany({
+      where: { orgBillingId, status: 'ACTIVE' },
+      select: { dailyRateCents: true, lastBilledAt: true, createdAt: true },
+    }),
+    prisma.phalaDeployment.findMany({
+      where: { orgBillingId, status: 'ACTIVE', hourlyRateCents: { not: null } },
+      select: { hourlyRateCents: true, lastBilledAt: true, createdAt: true },
+    }),
+  ])
+
+  let total = 0
+  for (const e of akashEscrows) {
+    const lastBilled = e.lastBilledAt || e.createdAt || now
+    const hours = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
+    total += (e.dailyRateCents / 24) * hours
+  }
+  for (const p of phalaDeployments) {
+    const lastBilled = p.lastBilledAt || p.createdAt || now
+    const hours = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
+    total += (p.hourlyRateCents ?? 0) * hours
+  }
+  return Math.ceil(total)
+}
+
 export async function assertDeployBalance(
   organizationId: string | undefined,
   provider: 'akash' | 'phala',
@@ -64,6 +99,7 @@ export async function assertDeployBalance(
   if (!organizationId) return
 
   const projectedDailyCost = estimate?.dailyCostCents ?? 0
+  const projectedHourlyCost = projectedDailyCost / 24
   const isExpensive = projectedDailyCost > BILLING_CONFIG.thresholds.failClosedAboveCentsPerDay
 
   try {
@@ -71,30 +107,36 @@ export async function assertDeployBalance(
     const orgBilling = await client.getOrgBilling(organizationId)
     const balance = await client.getOrgBalance(orgBilling.orgBillingId)
 
-    let existingBurn = 0
+    let existingHourlyBurn = 0
+    let unbilledCents = 0
     if (prisma) {
-      existingBurn = await getExistingDailyBurn(prisma, orgBilling.orgBillingId)
+      existingHourlyBurn = await getOrgHourlyBurnCents(prisma, orgBilling.orgBillingId)
+      unbilledCents = await getOrgUnbilledCents(prisma, orgBilling.orgBillingId)
     }
 
+    const effectiveBalanceCents = balance.balanceCents - unbilledCents
+    const totalHourlyWithNew = existingHourlyBurn + projectedHourlyCost
     const requiredCents = Math.max(
       BILLING_CONFIG[provider].minBalanceCentsToLaunch,
-      existingBurn + projectedDailyCost
+      totalHourlyWithNew * BILLING_CONFIG.thresholds.lowBalanceHours
     )
 
-    if (balance.balanceCents < requiredCents) {
-      const balanceStr = `$${(balance.balanceCents / 100).toFixed(2)}`
+    if (effectiveBalanceCents < requiredCents) {
+      const balanceStr = `$${(effectiveBalanceCents / 100).toFixed(2)}`
       const requiredStr = `$${(requiredCents / 100).toFixed(2)}`
-      const burnStr = existingBurn > 0 ? ` (existing daily burn: $${(existingBurn / 100).toFixed(2)})` : ''
+      const burnStr = existingHourlyBurn > 0 ? ` (existing hourly burn: $${(existingHourlyBurn / 100).toFixed(2)})` : ''
 
       throw new GraphQLError(
-        `Insufficient balance to deploy. Need ${requiredStr} for 1 day of compute${burnStr}, current balance is ${balanceStr}.`,
+        `Insufficient balance to deploy. Need ${requiredStr} for 1 hour of compute${burnStr}, effective balance is ${balanceStr}.`,
         {
           extensions: {
             code: 'INSUFFICIENT_BALANCE',
             balanceCents: balance.balanceCents,
+            effectiveBalanceCents,
             requiredCents,
-            existingDailyBurnCents: existingBurn,
-            projectedDailyCostCents: projectedDailyCost,
+            existingHourlyBurnCents: existingHourlyBurn,
+            projectedHourlyCostCents: projectedHourlyCost,
+            unbilledCents,
           },
         }
       )

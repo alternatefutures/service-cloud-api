@@ -158,6 +158,27 @@ export class AkashProvider implements DeploymentProvider {
     }
   }
 
+  private static healthCache = new Map<string, { result: DeploymentHealthResult; fetchedAt: number }>()
+  private static HEALTH_CACHE_TTL_MS = 15_000
+  private static HEALTH_CACHE_MAX_SIZE = 100
+
+  private static pruneHealthCache() {
+    if (AkashProvider.healthCache.size <= AkashProvider.HEALTH_CACHE_MAX_SIZE) return
+    const now = Date.now()
+    for (const [key, entry] of AkashProvider.healthCache) {
+      if (now - entry.fetchedAt > AkashProvider.HEALTH_CACHE_TTL_MS) {
+        AkashProvider.healthCache.delete(key)
+      }
+    }
+    if (AkashProvider.healthCache.size > AkashProvider.HEALTH_CACHE_MAX_SIZE) {
+      const oldest = [...AkashProvider.healthCache.entries()]
+        .sort((a, b) => a[1].fetchedAt - b[1].fetchedAt)
+      while (AkashProvider.healthCache.size > AkashProvider.HEALTH_CACHE_MAX_SIZE && oldest.length) {
+        AkashProvider.healthCache.delete(oldest.shift()![0])
+      }
+    }
+  }
+
   async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {
     const deployment = await this.prisma.akashDeployment.findUnique({
       where: { id: deploymentId },
@@ -184,9 +205,15 @@ export class AkashProvider implements DeploymentProvider {
       }
     }
 
+    const cached = AkashProvider.healthCache.get(deploymentId)
+    const now = Date.now()
+    if (cached && now - cached.fetchedAt < AkashProvider.HEALTH_CACHE_TTL_MS) {
+      return cached.result
+    }
+
     try {
       const orchestrator = getAkashOrchestrator(this.prisma)
-      const raw = orchestrator.getLeaseHealth(
+      const raw = await orchestrator.getLeaseHealth(
         Number(deployment.dseq),
         deployment.provider
       )
@@ -220,15 +247,73 @@ export class AkashProvider implements DeploymentProvider {
       else if (anyWaiting) overall = 'starting'
       else overall = 'unhealthy'
 
-      return { provider: 'akash', overall, containers, lastChecked: new Date() }
+      const result: DeploymentHealthResult = { provider: 'akash', overall, containers, lastChecked: new Date() }
+      AkashProvider.healthCache.set(deploymentId, { result, fetchedAt: now })
+      AkashProvider.pruneHealthCache()
+      return result
     } catch (err) {
-      log.warn(`getHealth failed for ${deploymentId}: ${(err as Error).message?.slice(0, 200)}`)
+      const msg = (err as Error).message ?? ''
+      log.warn(`getHealth failed for ${deploymentId}: ${msg.slice(0, 200)}`)
+      AkashProvider.healthCache.delete(deploymentId)
+      const isGone = msg.includes('404') || msg.includes('not found')
+
+      if (isGone && deployment.status === 'ACTIVE') {
+        // Lease is gone on the provider — auto-close to prevent ghost billing.
+        // Fire-and-forget so getHealth returns immediately.
+        this.autoCloseGhostDeployment(deploymentId, deployment.dseq.toString()).catch(e => {
+          log.error({ deploymentId, err: e }, 'autoCloseGhostDeployment failed')
+        })
+      }
+
       return {
         provider: 'akash',
-        overall: 'unknown',
+        overall: isGone ? 'unhealthy' : 'unknown',
         containers: [],
         lastChecked: new Date(),
       }
+    }
+  }
+
+  /**
+   * Close a deployment that the provider reports as gone (404) but our DB
+   * still considers ACTIVE. Settles billing and refunds escrow so we never
+   * charge for a non-existent lease.
+   */
+  private async autoCloseGhostDeployment(deploymentId: string, dseq: string): Promise<void> {
+    // Double-check DB status under a fresh read to avoid race conditions
+    const current = await this.prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { status: true },
+    })
+    if (!current || current.status !== 'ACTIVE') return
+
+    log.warn({ deploymentId, dseq }, 'Auto-closing ghost deployment (lease gone on provider)')
+
+    const closedAt = new Date()
+
+    // Try to close on-chain too (may already be closed, that's fine)
+    try {
+      const orchestrator = getAkashOrchestrator(this.prisma)
+      await orchestrator.closeDeployment(Number(dseq))
+    } catch (closeErr) {
+      const closeMsg = (closeErr as Error).message ?? ''
+      const alreadyGone = /deployment not found|deployment closed|not active|does not exist/i.test(closeMsg)
+      if (!alreadyGone) {
+        log.error({ deploymentId, dseq, err: closeErr }, 'On-chain close failed during auto-close')
+      }
+    }
+
+    // Mark as CLOSED in DB
+    const result = await this.prisma.akashDeployment.updateMany({
+      where: { id: deploymentId, status: 'ACTIVE' },
+      data: { status: 'CLOSED', closedAt },
+    })
+
+    if (result.count > 0) {
+      // Settle billing and refund
+      await settleAkashEscrowToTime(this.prisma, deploymentId, closedAt)
+      await getEscrowService(this.prisma).refundEscrow(deploymentId)
+      log.info({ deploymentId, dseq }, 'Ghost deployment auto-closed, billing settled')
     }
   }
 
@@ -319,4 +404,36 @@ export class AkashProvider implements DeploymentProvider {
 
 export function createAkashProvider(prisma: PrismaClient): AkashProvider {
   return new AkashProvider(prisma)
+}
+
+const HEALTH_PREWARM_INTERVAL_MS = 30_000
+
+/**
+ * Pre-warms the health cache for all ACTIVE Akash deployments so the first
+ * panel open returns instantly from cache instead of waiting 2-3s for
+ * `provider-services lease-status`.
+ */
+export function startHealthPrewarmer(prisma: PrismaClient): ReturnType<typeof setInterval> {
+  const provider = new AkashProvider(prisma)
+
+  const warm = async () => {
+    try {
+      const activeDeployments = await prisma.akashDeployment.findMany({
+        where: { status: 'ACTIVE' },
+        select: { id: true },
+      })
+      for (const dep of activeDeployments) {
+        try {
+          await provider.getHealth(dep.id)
+        } catch {
+          // individual failures are fine — cache will just miss for this one
+        }
+      }
+    } catch (err) {
+      log.warn({ err }, 'Health pre-warmer cycle failed')
+    }
+  }
+
+  warm()
+  return setInterval(warm, HEALTH_PREWARM_INTERVAL_MS)
 }

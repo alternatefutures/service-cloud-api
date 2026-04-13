@@ -8,21 +8,23 @@
  * This operates at the infrastructure level (platform's deployer wallet),
  * separate from the user-facing org wallet billing.
  *
- * Schedule: runs alongside the threshold check cron (every hour at :15).
+ * Schedule: every 10 minutes for fast reaction to expensive GPU leases.
  */
 
 import * as cron from 'node-cron'
-import { execSync } from 'child_process'
 import type { PrismaClient } from '@prisma/client'
 import { BILLING_CONFIG } from '../../config/billing.js'
 import { createLogger } from '../../lib/logger.js'
+import { execAsync } from '../queue/asyncExec.js'
 
 const log = createLogger('escrow-health')
 
 const AKASH_CLI_TIMEOUT_MS = 30_000
-const MIN_ESCROW_HOURS = 6
-const REFILL_HOURS = 24
-const DEFAULT_DEPOSIT_UACT = 500_000
+const MIN_ESCROW_HOURS = 1
+const REFILL_HOURS = 1
+
+/** Warn when deployer wallet ACT balance falls below this (5 ACT). */
+const LOW_WALLET_THRESHOLD_UACT = 5_000_000
 
 function getAkashEnv(): Record<string, string> {
   return {
@@ -39,15 +41,9 @@ function getAkashEnv(): Record<string, string> {
   }
 }
 
-function runAkash(args: string[]): string {
-  const env = { ...process.env, ...getAkashEnv() }
-  const cmd = ['provider-services', ...args].join(' ')
-  return execSync(cmd, {
-    encoding: 'utf-8',
-    timeout: AKASH_CLI_TIMEOUT_MS,
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }).trim()
+async function runAkashCmd(args: string[]): Promise<string> {
+  const env = { ...(process.env as Record<string, string>), ...getAkashEnv() }
+  return execAsync('akash', args, { env, timeout: AKASH_CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 })
 }
 
 interface EscrowStatus {
@@ -96,6 +92,8 @@ export class EscrowHealthMonitor {
 
       if (activeDeployments.length === 0) return
 
+      await this.checkWalletBalance()
+
       let refillCount = 0
       let errorCount = 0
 
@@ -114,6 +112,8 @@ export class EscrowHealthMonitor {
             )
             await this.refillEscrow(dseq, dep.owner, status.pricePerBlockUact)
             refillCount++
+            // 8-second gap between on-chain TXs to avoid sequence collisions
+            await new Promise(r => setTimeout(r, 8000))
           }
         } catch (err) {
           errorCount++
@@ -132,13 +132,34 @@ export class EscrowHealthMonitor {
     }
   }
 
+  private async checkWalletBalance(): Promise<void> {
+    try {
+      const output = await runAkashCmd([
+        'query', 'bank', 'balances',
+        '--from', process.env.AKASH_KEY_NAME || 'default',
+        '-o', 'json',
+      ])
+      const data = JSON.parse(output)
+      const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uakt')
+      const balance = parseInt(uactBal?.amount || '0', 10)
+      if (balance < LOW_WALLET_THRESHOLD_UACT) {
+        log.warn(
+          { balanceUact: balance, balanceAct: (balance / 1_000_000).toFixed(4) },
+          'CRITICAL: Deployer wallet ACT balance is low — escrow refills will fail soon'
+        )
+      }
+    } catch {
+      log.warn('Could not check deployer wallet balance')
+    }
+  }
+
   private async getEscrowStatus(
     dseq: string,
     owner: string,
     pricePerBlock: string | null
   ): Promise<EscrowStatus | null> {
     try {
-      const output = runAkash([
+      const output = await runAkashCmd([
         'query',
         'deployment',
         'get',
@@ -172,26 +193,25 @@ export class EscrowHealthMonitor {
     }
   }
 
-  private async refillEscrow(dseq: string, owner: string, pricePerBlockUact: number): Promise<void> {
+  private async refillEscrow(dseq: string, _owner: string, pricePerBlockUact: number): Promise<void> {
     const blocksPerHour = 600
     const refillUact = Math.max(
-      DEFAULT_DEPOSIT_UACT,
+      100_000,
       pricePerBlockUact * blocksPerHour * REFILL_HOURS
     )
 
     try {
-      runAkash([
+      await runAkashCmd([
         'tx',
         'deployment',
         'deposit',
         `${refillUact}uact`,
-        '--owner', owner,
         '--dseq', dseq,
         '-y',
       ])
 
       log.info(
-        { dseq, refillUact, refillUsd: (refillUact / 1_000_000).toFixed(4) },
+        { dseq, refillUact, refillAct: (refillUact / 1_000_000).toFixed(4) },
         'Refilled on-chain escrow'
       )
     } catch (err) {
