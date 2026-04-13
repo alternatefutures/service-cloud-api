@@ -1030,10 +1030,23 @@ export async function handlePollUrls(
       s => (s.available_replicas ?? 0) > 0
     )
 
-    // Deployment is ready when URIs are assigned and replicas are running.
-    // HTTP probes are unreliable during container startup (502/503 from
-    // provider ingress is normal while the app boots). The user can check
-    // actual app health from the UI once the deployment is marked ACTIVE.
+    log.info(
+      {
+        dseq: String(deployment.dseq),
+        attempt,
+        hasEndpoints,
+        hasReadyReplicas,
+        serviceKeys: Object.keys(services),
+        replicas: Object.fromEntries(
+          Object.entries(services).map(([k, v]) => [k, v.available_replicas ?? 0])
+        ),
+        uriCounts: Object.fromEntries(
+          Object.entries(parsed).map(([k, v]) => [k, v.uris.length])
+        ),
+      },
+      'POLL_URLS readiness check'
+    )
+
     const isReady = hasEndpoints && hasReadyReplicas
 
     if (!isReady) {

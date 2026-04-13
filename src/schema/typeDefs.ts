@@ -1646,6 +1646,8 @@ export const typeDefs = /* GraphQL */ `
   input DeployCompositeTemplateInput {
     templateId: String!
     projectId: ID!
+    """Existing workspace service to reuse as the primary composite service."""
+    primaryServiceId: ID
     """
     'fullstack' — all components in one lease/provider.
     'custom' — each component targeted individually via componentTargets.
@@ -1667,6 +1669,15 @@ export const typeDefs = /* GraphQL */ `
 
   type CompositeDeploymentResult {
     primaryServiceId: ID!
+    partialSuccess: Boolean
+    failedComponents: [FailedComponentResult!]
+    succeededComponents: [String!]
+  }
+
+  type FailedComponentResult {
+    componentId: String!
+    componentName: String!
+    error: String!
   }
 
   # ============================================
@@ -1819,6 +1830,16 @@ export const typeDefs = /* GraphQL */ `
 
     # Service links (connections between services)
     serviceLinks(projectId: ID!): [ServiceLink!]!
+
+    # Org billing runway (how long until funds run out)
+    orgBillingRunway: OrgBillingRunway
+  }
+
+  type OrgBillingRunway {
+    balanceCents: Int!
+    totalDailyBurnCents: Int!
+    runwayHours: Float
+    runwayFormatted: String!
   }
 
   # ============================================

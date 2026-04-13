@@ -22,7 +22,11 @@ interface DeployCostEstimate {
   dailyCostCents: number
 }
 
-async function getExistingDailyBurn(
+/**
+ * Total HOURLY burn in cents for ALL active services in the org.
+ * Sums Akash escrows (daily rate / 24) + Phala deployments (hourly rate).
+ */
+export async function getOrgHourlyBurnCents(
   prisma: PrismaClient,
   orgBillingId: string
 ): Promise<number> {
@@ -38,9 +42,17 @@ async function getExistingDailyBurn(
   ])
 
   let totalCents = 0
-  for (const e of akashEscrows) totalCents += e.dailyRateCents
-  for (const p of phalaDeployments) totalCents += (p.hourlyRateCents ?? 0) * 24
+  for (const e of akashEscrows) totalCents += e.dailyRateCents / 24
+  for (const p of phalaDeployments) totalCents += (p.hourlyRateCents ?? 0)
   return totalCents
+}
+
+/** @deprecated Use getOrgHourlyBurnCents instead. Kept for backward compat. */
+export async function getExistingDailyBurn(
+  prisma: PrismaClient,
+  orgBillingId: string
+): Promise<number> {
+  return (await getOrgHourlyBurnCents(prisma, orgBillingId)) * 24
 }
 
 export async function assertDeployBalance(

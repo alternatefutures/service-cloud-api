@@ -665,6 +665,42 @@ export class AkashOrchestrator {
   }
 
   /**
+   * Resume DEPLOYING deployments whose in-process POLL_URLS loop was lost
+   * due to server restart (local dev without QStash). Re-enqueues the
+   * POLL_URLS step so the readiness check continues.
+   */
+  async resumeDeployingDeployments(): Promise<void> {
+    try {
+      const deploying = await this.prisma.akashDeployment.findMany({
+        where: {
+          status: 'DEPLOYING',
+          provider: { not: null },
+          dseq: { gt: 0 },
+        },
+        select: { id: true, dseq: true, provider: true },
+      })
+
+      if (deploying.length === 0) return
+
+      log.info(`Found ${deploying.length} DEPLOYING deployment(s) — resuming POLL_URLS`)
+
+      const { handleAkashStep } = await import('../queue/webhookHandler.js')
+
+      for (const dep of deploying) {
+        handleAkashStep({
+          step: 'POLL_URLS',
+          deploymentId: dep.id,
+          attempt: 1,
+        }).catch(err =>
+          log.error({ err, deploymentId: dep.id }, 'Failed to resume POLL_URLS')
+        )
+      }
+    } catch (err) {
+      log.error({ err }, 'resumeDeployingDeployments error')
+    }
+  }
+
+  /**
    * Startup scan: find all ACTIVE Akash deployments with empty serviceUrls
    * and kick off backfills for them. Call this once at server startup so
    * interrupted backfills (e.g. from pod restarts) are resumed automatically.
@@ -1260,13 +1296,23 @@ export class AkashOrchestrator {
     image: string,
     containerPort: number
   ): string {
+    const needsKeepAlive = /^(ubuntu|debian|alpine|centos|fedora|busybox|amazonlinux|rockylinux|almalinux)(:|$)/i.test(image)
+
+    const argsBlock = needsKeepAlive
+      ? `    args:
+      - sh
+      - -c
+      - "echo 'Container ready on port ${containerPort}'; tail -f /dev/null"
+`
+      : ''
+
     return `---
 version: "2.0"
 
 services:
   ${name}:
     image: ${image}
-    expose:
+${argsBlock}    expose:
       - port: ${containerPort}
         as: 80
         to:
@@ -1436,7 +1482,7 @@ version: "2.0"
 services:
   ${name}:
     image: ubuntu:22.04
-    command:
+    args:
       - sh
       - -c
       - |

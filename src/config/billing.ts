@@ -27,7 +27,8 @@ export const BILLING_CONFIG = {
     cronExpression: '0 3 * * *',
   },
   thresholds: {
-    lowBalanceDays: 1,
+    /** Suspend when balance cannot cover this many hours of total burn. */
+    lowBalanceHours: 1,
     checkIntervalCron: '15 * * * *',
     failClosedAboveCentsPerDay: 500,
   },

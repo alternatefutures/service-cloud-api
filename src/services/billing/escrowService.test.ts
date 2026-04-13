@@ -33,7 +33,7 @@ vi.mock('../../config/billing.js', () => ({
     },
     phala: { billingIntervalHours: 1, minBalanceCentsToLaunch: 100 },
     scheduler: { cronExpression: '0 3 * * *' },
-    thresholds: { lowBalanceDays: 1 },
+    thresholds: { lowBalanceHours: 1 },
   },
 }))
 
