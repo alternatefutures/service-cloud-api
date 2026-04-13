@@ -56,6 +56,47 @@ export async function getExistingDailyBurn(
 }
 
 /**
+ * Sum of reservedCents on active policies for this org's deployments.
+ * These funds are already spoken for by time-limited deployments.
+ */
+export async function getOrgReservedCents(
+  prisma: PrismaClient,
+  organizationId: string
+): Promise<number> {
+  const akashReservations = await prisma.deploymentPolicy.findMany({
+    where: {
+      stopReason: null,
+      reservedCents: { gt: 0 },
+      akashDeployment: {
+        status: 'ACTIVE',
+        service: { project: { organizationId } },
+      },
+    },
+    select: { reservedCents: true, totalSpentUsd: true },
+  })
+
+  const phalaReservations = await prisma.deploymentPolicy.findMany({
+    where: {
+      stopReason: null,
+      reservedCents: { gt: 0 },
+      phalaDeployment: {
+        status: 'ACTIVE',
+        organizationId,
+      },
+    },
+    select: { reservedCents: true, totalSpentUsd: true },
+  })
+
+  let total = 0
+  for (const p of [...akashReservations, ...phalaReservations]) {
+    // Remaining reservation = reserved - already consumed
+    const consumed = Math.ceil(p.totalSpentUsd * 100)
+    total += Math.max(0, p.reservedCents - consumed)
+  }
+  return total
+}
+
+/**
  * Compute unbilled cost across all active deployments for an org.
  * This is the cost accrued since last billing that hasn't been debited yet.
  */
@@ -90,6 +131,66 @@ async function getOrgUnbilledCents(
   return Math.ceil(total)
 }
 
+/**
+ * For time-limited deployments: check if the org can afford the full reservation.
+ * Returns { allowed, maxHours, reservationCents } so the caller can create the
+ * reservation or show the user the maximum affordable duration.
+ */
+export async function checkTimeLimitedDeployBalance(
+  organizationId: string,
+  provider: 'akash' | 'phala',
+  prisma: PrismaClient,
+  hourlyCostCents: number,
+  requestedHours: number
+): Promise<{
+  allowed: boolean
+  maxAffordableHours: number
+  reservationCents: number
+  effectiveBalanceCents: number
+  reason?: string
+}> {
+  const client = getBillingApiClient()
+  const orgBilling = await client.getOrgBilling(organizationId)
+  const balance = await client.getOrgBalance(orgBilling.orgBillingId)
+
+  const unbilledCents = await getOrgUnbilledCents(prisma, orgBilling.orgBillingId)
+  const existingReservedCents = await getOrgReservedCents(prisma, organizationId)
+  const existingHourlyBurn = await getOrgHourlyBurnCents(prisma, orgBilling.orgBillingId)
+
+  const effectiveBalanceCents = balance.balanceCents - unbilledCents - existingReservedCents
+  const reservationCents = Math.ceil(hourlyCostCents * requestedHours)
+
+  // After reserving, the remaining balance must still cover 1 hour of all
+  // existing (non-reserved) services so the org doesn't get suspended immediately.
+  const nonReservedHourlyBurn = existingHourlyBurn
+  const minRemainder = nonReservedHourlyBurn * BILLING_CONFIG.thresholds.lowBalanceHours
+  const totalRequired = reservationCents + minRemainder
+
+  const availableForReservation = Math.max(0, effectiveBalanceCents - minRemainder)
+  const maxAffordableHours = hourlyCostCents > 0
+    ? Math.floor(availableForReservation / hourlyCostCents)
+    : Infinity
+
+  if (effectiveBalanceCents < totalRequired) {
+    return {
+      allowed: false,
+      maxAffordableHours,
+      reservationCents,
+      effectiveBalanceCents,
+      reason: maxAffordableHours > 0
+        ? `Not enough funds to run for ${requestedHours} hours. Maximum: ${maxAffordableHours}h at $${(hourlyCostCents / 100).toFixed(2)}/hr.`
+        : `Insufficient balance. Need $${(totalRequired / 100).toFixed(2)}, effective balance is $${(effectiveBalanceCents / 100).toFixed(2)}.`,
+    }
+  }
+
+  return {
+    allowed: true,
+    maxAffordableHours,
+    reservationCents,
+    effectiveBalanceCents,
+  }
+}
+
 export async function assertDeployBalance(
   organizationId: string | undefined,
   provider: 'akash' | 'phala',
@@ -109,12 +210,14 @@ export async function assertDeployBalance(
 
     let existingHourlyBurn = 0
     let unbilledCents = 0
+    let reservedCents = 0
     if (prisma) {
       existingHourlyBurn = await getOrgHourlyBurnCents(prisma, orgBilling.orgBillingId)
       unbilledCents = await getOrgUnbilledCents(prisma, orgBilling.orgBillingId)
+      reservedCents = await getOrgReservedCents(prisma, organizationId)
     }
 
-    const effectiveBalanceCents = balance.balanceCents - unbilledCents
+    const effectiveBalanceCents = balance.balanceCents - unbilledCents - reservedCents
     const totalHourlyWithNew = existingHourlyBurn + projectedHourlyCost
     const requiredCents = Math.max(
       BILLING_CONFIG[provider].minBalanceCentsToLaunch,
@@ -137,6 +240,7 @@ export async function assertDeployBalance(
             existingHourlyBurnCents: existingHourlyBurn,
             projectedHourlyCostCents: projectedHourlyCost,
             unbilledCents,
+            reservedCents,
           },
         }
       )

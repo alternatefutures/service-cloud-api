@@ -260,6 +260,7 @@ model Service {
   createdByUserId String?
   parentServiceId String?     // Companion services share the parent's deployment lifecycle
   sdlServiceName  String?     // Akash SDL service name for multi-service deployments (e.g. "postgres", "app", "web")
+  shutdownPriority Int        @default(50) @map("shutdown_priority") // Lower = last to shut down. Used by billing scheduler for priority-based suspension.
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -1208,6 +1209,12 @@ model DeploymentPolicy {
   // Duration constraints
   runtimeMinutes        Int?              @map("runtime_minutes")
   expiresAt             DateTime?         @map("expires_at")
+
+  // Fund reservation for time-limited deployments (Phase 2).
+  // When runtimeMinutes is set, reservedCents holds the full upfront cost
+  // deducted from the org's available balance. Consumed as billing runs;
+  // remainder refunded on stop/expiry.
+  reservedCents         Int               @default(0) @map("reserved_cents")
 
   // Enforcement state
   stopReason            PolicyStopReason? @map("stop_reason")

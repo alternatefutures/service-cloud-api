@@ -1536,6 +1536,27 @@ export const resolvers = {
       })
     },
 
+    updateServicePriority: async (
+      _: unknown,
+      { serviceId, shutdownPriority }: { serviceId: string; shutdownPriority: number },
+      context: Context
+    ) => {
+      requireAuth(context)
+
+      const service = await context.prisma.service.findUnique({
+        where: { id: serviceId },
+        include: { project: { select: { userId: true, organizationId: true } } },
+      })
+      if (!service) throw new GraphQLError('Service not found')
+      assertProjectAccess(context, service.project, 'Not authorized to update this service')
+
+      const clamped = Math.max(0, Math.min(100, shutdownPriority))
+      return context.prisma.service.update({
+        where: { id: serviceId },
+        data: { shutdownPriority: clamped },
+      })
+    },
+
     createAFFunction: async (
       _: unknown,
       {

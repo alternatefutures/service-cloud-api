@@ -91,9 +91,12 @@ export async function stopForPolicy(
 ) {
   const now = new Date()
 
+  // Clear the reservation — any remaining funds return to the org's pool
+  // automatically since reservedCents is subtracted from effective balance
+  // in balanceCheck.ts. Setting it to 0 releases those funds.
   await prisma.deploymentPolicy.update({
     where: { id: policy.id },
-    data: { stopReason: reason, stoppedAt: now },
+    data: { stopReason: reason, stoppedAt: now, reservedCents: 0 },
   })
 
   if (policy.akashDeployment) {

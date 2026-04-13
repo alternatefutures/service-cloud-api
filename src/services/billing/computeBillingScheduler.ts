@@ -562,10 +562,35 @@ export class ComputeBillingScheduler {
         status: 'ACTIVE',
         escrow: { orgBillingId, status: 'ACTIVE' },
       },
-      include: { escrow: true },
+      include: {
+        escrow: true,
+        service: { select: { shutdownPriority: true, name: true } },
+      },
     })
 
+    // Sort by shutdownPriority descending: highest number = sacrificed first
+    akashDeployments.sort((a, b) =>
+      (b.service?.shutdownPriority ?? 50) - (a.service?.shutdownPriority ?? 50)
+    )
+
+    // Track remaining hourly burn so we can stop suspending once affordable
+    let remainingHourlyBurn = dailyCostCents / 24
+    const threshold = BILLING_CONFIG.thresholds.lowBalanceHours
+
     for (const deployment of akashDeployments) {
+      // If remaining services are now affordable, stop suspending
+      if (balanceCents >= remainingHourlyBurn * threshold) {
+        log.info(
+          { balanceCents, remainingHourlyBurn, threshold },
+          'Remaining services are affordable — stopping suspension'
+        )
+        break
+      }
+
+      const deploymentHourlyCost = deployment.escrow
+        ? deployment.escrow.dailyRateCents / 24
+        : 0
+
       try {
         const stoppedAt = new Date()
 
@@ -583,7 +608,6 @@ export class ComputeBillingScheduler {
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
           log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
-          // Wait for TX to settle before closing the next one — avoids sequence number collisions
           await new Promise(r => setTimeout(r, 8000))
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
@@ -609,6 +633,16 @@ export class ComputeBillingScheduler {
             await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
             await escrowService.pauseEscrow(deployment.id)
           }
+
+          // Clear any reservation on the policy
+          if (deployment.policyId) {
+            await this.prisma.deploymentPolicy.updateMany({
+              where: { id: deployment.policyId, reservedCents: { gt: 0 } },
+              data: { reservedCents: 0, stopReason: 'BALANCE_LOW', stoppedAt },
+            })
+          }
+
+          remainingHourlyBurn -= deploymentHourlyCost
         } else {
           log.error(
             { dseq: deployment.dseq },
@@ -617,7 +651,7 @@ export class ComputeBillingScheduler {
           continue
         }
 
-        pausedServices.push(`Akash: dseq=${deployment.dseq}`)
+        pausedServices.push(`Akash: dseq=${deployment.dseq} (priority=${deployment.service?.shutdownPriority ?? 50})`)
       } catch (error) {
         log.error(
           { deploymentId: deployment.id, err: error },
@@ -631,9 +665,28 @@ export class ComputeBillingScheduler {
         status: 'ACTIVE',
         orgBillingId,
       },
+      include: {
+        service: { select: { shutdownPriority: true, name: true } },
+      },
     })
 
+    // Sort Phala deployments by priority too
+    phalaDeployments.sort((a, b) =>
+      ((b as any).service?.shutdownPriority ?? 50) - ((a as any).service?.shutdownPriority ?? 50)
+    )
+
     for (const deployment of phalaDeployments) {
+      // If remaining services are now affordable, stop suspending
+      if (balanceCents >= remainingHourlyBurn * threshold) {
+        log.info(
+          { balanceCents, remainingHourlyBurn },
+          'Remaining services affordable after Akash suspensions — skipping Phala'
+        )
+        break
+      }
+
+      const deploymentHourlyCost = deployment.hourlyRateCents ?? 0
+
       try {
         const stoppedAt = new Date()
         await processFinalPhalaBilling(
@@ -667,7 +720,15 @@ export class ComputeBillingScheduler {
             data: { status: 'STOPPED' },
           })
           if (result.count > 0) {
-            pausedServices.push(`Phala: ${deployment.name}`)
+            // Clear any reservation
+            if (deployment.policyId) {
+              await this.prisma.deploymentPolicy.updateMany({
+                where: { id: deployment.policyId, reservedCents: { gt: 0 } },
+                data: { reservedCents: 0, stopReason: 'BALANCE_LOW', stoppedAt },
+              })
+            }
+            remainingHourlyBurn -= deploymentHourlyCost
+            pausedServices.push(`Phala: ${deployment.name} (priority=${(deployment as any).service?.shutdownPriority ?? 50})`)
           }
         }
       } catch (error) {
