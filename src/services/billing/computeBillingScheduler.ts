@@ -463,44 +463,44 @@ export class ComputeBillingScheduler {
 
     const orgBurnRates = new Map<
       string,
-      { dailyCostCents: number; orgId: string }
+      { hourlyCostCents: number; orgId: string }
     >()
 
     for (const e of activeEscrows) {
       const existing = orgBurnRates.get(e.orgBillingId) || {
-        dailyCostCents: 0,
+        hourlyCostCents: 0,
         orgId: e.organizationId,
       }
-      existing.dailyCostCents += e.dailyRateCents
+      existing.hourlyCostCents += e.dailyRateCents / 24
       orgBurnRates.set(e.orgBillingId, existing)
     }
 
     for (const p of activePhala) {
       if (!p.orgBillingId || !p.hourlyRateCents) continue
       const existing = orgBurnRates.get(p.orgBillingId) || {
-        dailyCostCents: 0,
+        hourlyCostCents: 0,
         orgId: p.organizationId || '',
       }
-      existing.dailyCostCents += p.hourlyRateCents * 24
+      existing.hourlyCostCents += p.hourlyRateCents
       orgBurnRates.set(p.orgBillingId, existing)
     }
 
-    for (const [orgBillingId, { dailyCostCents, orgId }] of orgBurnRates) {
+    for (const [orgBillingId, { hourlyCostCents, orgId }] of orgBurnRates) {
       try {
         const balanceInfo = await billingApi.getOrgBalance(orgBillingId)
-        const thresholdCents = dailyCostCents * BILLING_CONFIG.thresholds.lowBalanceDays
+        const thresholdCents = hourlyCostCents * BILLING_CONFIG.thresholds.lowBalanceHours
 
         if (balanceInfo.balanceCents < thresholdCents) {
           log.warn(
-            { orgId, balanceCents: balanceInfo.balanceCents, dailyCostCents },
-            'Org balance below threshold — pausing deployments'
+            { orgId, balanceCents: balanceInfo.balanceCents, hourlyCostCents, thresholdCents },
+            'Org balance below hourly threshold — suspending deployments'
           )
 
           await this.pauseOrgDeployments(
             orgBillingId,
             orgId,
             balanceInfo.balanceCents,
-            dailyCostCents
+            hourlyCostCents * 24
           )
           stats.orgsPaused++
         }
@@ -546,8 +546,12 @@ export class ComputeBillingScheduler {
           const { getAkashOrchestrator } =
             await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(this.prisma)
+          log.info({ dseq: deployment.dseq }, 'Closing on-chain deployment for suspension')
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
+          log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
+          // Wait for TX to settle before closing the next one — avoids sequence number collisions
+          await new Promise(r => setTimeout(r, 8000))
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
@@ -557,7 +561,7 @@ export class ComputeBillingScheduler {
           } else {
             log.error(
               { dseq: deployment.dseq, err },
-              'On-chain close failed — deployment stays ACTIVE and billed until resolved'
+              'On-chain close FAILED — deployment stays ACTIVE and billed until resolved'
             )
           }
         }
@@ -572,6 +576,12 @@ export class ComputeBillingScheduler {
             await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
             await escrowService.pauseEscrow(deployment.id)
           }
+        } else {
+          log.error(
+            { dseq: deployment.dseq },
+            'Skipping SUSPENDED status — on-chain close did not succeed, lease still running'
+          )
+          continue
         }
 
         pausedServices.push(`Akash: dseq=${deployment.dseq}`)

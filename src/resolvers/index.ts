@@ -44,6 +44,7 @@ import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
+import { getOrgHourlyBurnCents } from './balanceCheck.js'
 
 export type { Context }
 
@@ -1088,6 +1089,48 @@ export const resolvers = {
 
     // Service connectivity (env vars, ports, links)
     ...serviceConnectivityQueries,
+
+    // Org billing runway
+    orgBillingRunway: async (_: unknown, __: unknown, context: Context) => {
+      requireAuth(context)
+      if (!context.organizationId) return null
+
+      try {
+        const billingClient = getBillingApiClient()
+        const orgBilling = await billingClient.getOrgBilling(context.organizationId)
+        const balance = await billingClient.getOrgBalance(orgBilling.orgBillingId)
+        const totalHourlyBurnCents = await getOrgHourlyBurnCents(context.prisma, orgBilling.orgBillingId)
+
+        let runwayHours: number | null = null
+        let runwayFormatted = 'No active deployments'
+
+        if (totalHourlyBurnCents > 0) {
+          runwayHours = balance.balanceCents / totalHourlyBurnCents
+          if (runwayHours > 24 * 30) {
+            runwayFormatted = `~${Math.floor(runwayHours / 24)} days`
+          } else if (runwayHours > 24) {
+            const days = Math.floor(runwayHours / 24)
+            const hrs = Math.floor(runwayHours % 24)
+            runwayFormatted = hrs > 0 ? `~${days}d ${hrs}h` : `~${days} days`
+          } else if (runwayHours > 1) {
+            runwayFormatted = `~${Math.floor(runwayHours)}h`
+          } else if (runwayHours > 0) {
+            runwayFormatted = `< 1h`
+          } else {
+            runwayFormatted = 'Insufficient funds'
+          }
+        }
+
+        return {
+          balanceCents: balance.balanceCents,
+          totalDailyBurnCents: totalHourlyBurnCents * 24,
+          runwayHours,
+          runwayFormatted,
+        }
+      } catch {
+        return null
+      }
+    },
 
     // Storage tracking queries (billing is now in service-auth)
     pinnedContent: async (

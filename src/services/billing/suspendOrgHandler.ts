@@ -97,8 +97,12 @@ export async function handleSuspendOrg(
           const { getAkashOrchestrator } =
             await import('../akash/orchestrator.js')
           const orchestrator = getAkashOrchestrator(prisma)
+          log.info({ dseq: deployment.dseq }, 'Closing on-chain deployment for org suspension')
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
+          log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
+          // Wait for TX to settle before closing the next one — avoids sequence number collisions
+          await new Promise(r => setTimeout(r, 8000))
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
@@ -108,7 +112,7 @@ export async function handleSuspendOrg(
           } else {
             log.error(
               { dseq: deployment.dseq, err },
-              'On-chain close failed — deployment stays ACTIVE and billed until resolved'
+              'On-chain close FAILED — deployment stays ACTIVE and billed until resolved'
             )
             errors.push(
               `Akash dseq=${deployment.dseq}: on-chain close failed, still running and billed`

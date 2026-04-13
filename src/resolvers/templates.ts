@@ -71,6 +71,18 @@ type ResourceOverrideInput = {
   gpu?: { units: number; vendor: string; model?: string } | null
 }
 
+type CompositeServiceMutationData = {
+  name: string
+  slug: string
+  type: Template['serviceType']
+  projectId: string
+  templateId: string
+  createdByUserId: string | null
+  internalHostname: string
+  sdlServiceName?: string
+  parentServiceId?: string | null
+}
+
 function normalizeResourceOverrides(input?: ResourceOverrideInput) {
   if (!input) return undefined
 
@@ -103,6 +115,65 @@ function resolveTemplateResources(
       overrides?.gpu === null
         ? undefined
         : (overrides?.gpu ?? templateResources.gpu),
+  }
+}
+
+export async function upsertCompositeServiceRecord(
+  prisma: Context['prisma'],
+  existingServiceId: string | undefined,
+  data: CompositeServiceMutationData
+) {
+  if (existingServiceId) {
+    return prisma.service.update({
+      where: { id: existingServiceId },
+      data,
+    })
+  }
+
+  return prisma.service.create({ data })
+}
+
+export async function replaceCompositeServiceConfig(
+  prisma: Context['prisma'],
+  serviceId: string,
+  envEntries: Array<[string, string]>,
+  ports: Array<{ port: number; as: number; global: boolean }>
+) {
+  await prisma.serviceEnvVar.deleteMany({
+    where: { serviceId },
+  })
+  await prisma.servicePort.deleteMany({
+    where: { serviceId },
+  })
+
+  if (envEntries.length > 0) {
+    await prisma.$transaction(
+      envEntries.map(([key, value]) =>
+        prisma.serviceEnvVar.create({
+          data: {
+            serviceId,
+            key,
+            value,
+            secret: key.includes('PASSWORD') || key.includes('SECRET'),
+          },
+        })
+      )
+    )
+  }
+
+  if (ports.length > 0) {
+    await prisma.$transaction(
+      ports.map(p =>
+        prisma.servicePort.create({
+          data: {
+            serviceId,
+            containerPort: p.port,
+            publicPort: p.global ? p.as : null,
+            protocol: 'TCP',
+          },
+        })
+      )
+    )
   }
 }
 
@@ -656,6 +727,7 @@ export const templateMutations = {
       input: {
         templateId: string
         projectId: string
+        primaryServiceId?: string
         mode: 'fullstack' | 'custom'
         provider?: string
         componentTargets?: Array<{
@@ -771,16 +843,39 @@ export const templateMutations = {
     if (!project) throw new GraphQLError('Project not found')
     assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
+    const existingPrimaryService = input.primaryServiceId
+      ? await context.prisma.service.findUnique({
+          where: { id: input.primaryServiceId },
+        })
+      : null
+    if (input.primaryServiceId && !existingPrimaryService) {
+      throw new GraphQLError('Primary service not found')
+    }
+    if (
+      existingPrimaryService &&
+      existingPrimaryService.projectId !== input.projectId
+    ) {
+      throw new GraphQLError('Primary service does not belong to this project')
+    }
+
     const envOverrides: Record<string, string> = {}
     if (input.envOverrides) {
       for (const { key, value } of input.envOverrides) envOverrides[key] = value
     }
 
+    const baseName =
+      input.serviceName ||
+      existingPrimaryService?.name ||
+      `${template.id}-${Date.now().toString(36)}`
+    const generatedPrimarySlug = generateSlug(baseName)
+
     // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
-    const primarySlug = generateSlug(
-      input.serviceName || `${template.id}-${Date.now().toString(36)}`
+    await injectPlatformEnvVars(
+      template,
+      envOverrides,
+      context,
+      generatedPrimarySlug
     )
-    await injectPlatformEnvVars(template, envOverrides, context, primarySlug)
     assertRequiredTemplateEnvVars(template, envOverrides)
 
     // ── Resolve components ──────────────────────────────────────
@@ -792,17 +887,17 @@ export const templateMutations = {
     const password = generatePassword()
     const secret = generateBase64Secret()
 
-    const baseName =
-      input.serviceName || `${template.id}-${Date.now().toString(36)}`
-
     const slugs: Record<string, string> = {}
     const groups: Record<string, string> = {}
     const providers: Record<string, 'akash' | 'phala'> = {}
     for (const target of targets) {
       const comp = activeComponents.find(c => c.id === target.componentId)
       if (!comp) continue
-      const suffix = comp.primary ? '' : `-${comp.id}`
-      slugs[comp.id] = generateSlug(`${baseName}${suffix}`)
+      if (comp.primary) {
+        slugs[comp.id] = generatedPrimarySlug
+      } else {
+        slugs[comp.id] = generateSlug(`${baseName}-${comp.id}`)
+      }
       groups[comp.id] = target.group
       providers[comp.id] = target.provider
     }
@@ -950,8 +1045,10 @@ export const templateMutations = {
       resolved.find(r => activeComponents.find(c => c.id === r.id)?.primary) ??
       resolved[0]
 
-    const primaryService = await context.prisma.service.create({
-      data: {
+    const primaryService = await upsertCompositeServiceRecord(
+      context.prisma,
+      existingPrimaryService?.id,
+      {
         name: baseName,
         slug: slugs[primaryComp.id],
         type: template.serviceType,
@@ -963,8 +1060,24 @@ export const templateMutations = {
           project.slug
         ),
         sdlServiceName: primaryComp.sdlServiceName,
-      },
-    })
+        parentServiceId: null,
+      }
+    )
+
+    const existingChildServices = input.primaryServiceId
+      ? await context.prisma.service.findMany({
+          where: {
+            parentServiceId: primaryService.id,
+          },
+        })
+      : []
+
+    const existingChildByComponent = new Map<string, (typeof existingChildServices)[number]>(
+      existingChildServices.map(service => [
+        service.sdlServiceName ?? service.slug,
+        service,
+      ])
+    )
 
     const serviceIds: Record<string, string> = {
       [primaryComp.id]: primaryService.id,
@@ -973,8 +1086,15 @@ export const templateMutations = {
     for (const comp of resolved) {
       if (comp.id === primaryComp.id) continue
       const compDef = activeComponents.find(c => c.id === comp.id)!
-      const svc = await context.prisma.service.create({
-        data: {
+      const componentLookupKey = comp.sdlServiceName ?? slugs[comp.id]
+      const existingChild =
+        existingChildByComponent.get(componentLookupKey) ??
+        existingChildByComponent.get(slugs[comp.id])
+
+      const svc = await upsertCompositeServiceRecord(
+        context.prisma,
+        existingChild?.id,
+        {
           name: `${baseName}-${comp.id}`,
           slug: slugs[comp.id],
           type: compDef.templateId
@@ -989,8 +1109,8 @@ export const templateMutations = {
           ),
           parentServiceId: primaryService.id,
           sdlServiceName: comp.sdlServiceName,
-        },
-      })
+        }
+      )
       serviceIds[comp.id] = svc.id
     }
 
@@ -998,34 +1118,12 @@ export const templateMutations = {
     for (const comp of resolved) {
       const svcId = serviceIds[comp.id]
       const envEntries = Object.entries(comp.resolvedEnv)
-      if (envEntries.length > 0) {
-        await context.prisma.$transaction(
-          envEntries.map(([key, value]) =>
-            context.prisma.serviceEnvVar.create({
-              data: {
-                serviceId: svcId,
-                key,
-                value,
-                secret: key.includes('PASSWORD') || key.includes('SECRET'),
-              },
-            })
-          )
-        )
-      }
-      if (comp.ports.length > 0) {
-        await context.prisma.$transaction(
-          comp.ports.map(p =>
-            context.prisma.servicePort.create({
-              data: {
-                serviceId: svcId,
-                containerPort: p.port,
-                publicPort: p.global ? p.as : null,
-                protocol: 'TCP',
-              },
-            })
-          )
-        )
-      }
+      await replaceCompositeServiceConfig(
+        context.prisma,
+        svcId,
+        envEntries,
+        comp.ports
+      )
     }
 
     // ── Helper: create a policy record for each sub-deployment ─
@@ -1048,6 +1146,9 @@ export const templateMutations = {
     }
 
     // ── Deploy Akash groups ─────────────────────────────────────
+    const failedComponents: Array<{ componentId: string; componentName: string; error: string }> = []
+    const succeededComponents: string[] = []
+
     for (const [groupName, groupComponents] of akashGroups) {
       const sdlContent = generateCompositeSDL(groupComponents)
       log.info(
@@ -1075,10 +1176,19 @@ export const templateMutations = {
             data: { policyId: compositePolicyId },
           })
         }
+
+        for (const gc of groupComponents) succeededComponents.push(gc.id)
       } catch (error: any) {
-        throw new GraphQLError(
-          `Composite deployment failed (Akash): ${error.message || 'Unknown error'}`
-        )
+        const msg = error.message || 'Unknown error'
+        log.error({ groupName, error: msg }, 'Akash group deploy failed')
+        for (const gc of groupComponents) {
+          const compDef = activeComponents.find(c => c.id === gc.id)
+          failedComponents.push({
+            componentId: gc.id,
+            componentName: compDef?.name ?? gc.id,
+            error: `Akash: ${msg}`,
+          })
+        }
       }
     }
 
@@ -1114,14 +1224,32 @@ export const templateMutations = {
             data: { policyId: compositePolicyId },
           })
         }
+
+        succeededComponents.push(comp.id)
       } catch (error: any) {
-        throw new GraphQLError(
-          `Composite deployment failed (Phala): ${error.message || 'Unknown error'}`
-        )
+        const msg = error.message || 'Unknown error'
+        log.error({ componentId: comp.id, error: msg }, 'Phala component deploy failed')
+        const compDef = activeComponents.find(c => c.id === comp.id)
+        failedComponents.push({
+          componentId: comp.id,
+          componentName: compDef?.name ?? comp.id,
+          error: `Phala: ${msg}`,
+        })
       }
     }
 
-    return { primaryServiceId: primaryService.id }
+    if (failedComponents.length > 0 && succeededComponents.length === 0) {
+      throw new GraphQLError(
+        `All composite deployments failed: ${failedComponents.map(f => `${f.componentName}: ${f.error}`).join('; ')}`
+      )
+    }
+
+    return {
+      primaryServiceId: primaryService.id,
+      partialSuccess: failedComponents.length > 0,
+      failedComponents: failedComponents.length > 0 ? failedComponents : null,
+      succeededComponents: succeededComponents.length > 0 ? succeededComponents : null,
+    }
   },
 }
 

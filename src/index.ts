@@ -16,6 +16,7 @@ import {
   InvoiceScheduler,
   UsageAggregator,
   ComputeBillingScheduler,
+  EscrowHealthMonitor,
 } from './services/billing/index.js'
 import { handleComputeResumeCheck } from './services/billing/resumeHandler.js'
 import { handleSuspendOrg } from './services/billing/suspendOrgHandler.js'
@@ -65,6 +66,7 @@ const storageSnapshotScheduler = new StorageSnapshotScheduler(prisma)
 const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
 const computeBillingScheduler = new ComputeBillingScheduler(prisma)
+const escrowHealthMonitor = new EscrowHealthMonitor(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
@@ -296,6 +298,7 @@ server.listen(port, () => {
   invoiceScheduler.start()
   usageAggregator.start()
   computeBillingScheduler.start()
+  escrowHealthMonitor.start()
   providerRegistryScheduler.start()
   providerVerificationScheduler.start()
   telemetryIngestionService.start()
@@ -315,6 +318,7 @@ server.listen(port, () => {
   })
 
   const orchestrator = new AkashOrchestrator(prisma)
+  orchestrator.resumeDeployingDeployments()
   orchestrator.resumePendingBackfills()
 
   startStaleDeploymentSweeper(prisma)
@@ -325,6 +329,7 @@ async function gracefulShutdown(signal: string) {
   storageSnapshotScheduler.stop()
   invoiceScheduler.stop()
   computeBillingScheduler.stop()
+  escrowHealthMonitor.stop()
   providerRegistryScheduler.stop()
   providerVerificationScheduler.stop()
 
