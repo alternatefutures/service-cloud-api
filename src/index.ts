@@ -49,6 +49,7 @@ import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './servi
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
 import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
+import { handleAdminDeploymentStats } from './services/admin/deploymentStatsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { ShellEndpoint } from './services/shell/shellEndpoint.js'
@@ -219,6 +220,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/test/cleanup' && req.method === 'POST') {
       await handleMockCleanup(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/admin/deployment-stats' && req.method === 'GET') {
+      await handleAdminDeploymentStats(req, res, prisma)
       return
     }
 
