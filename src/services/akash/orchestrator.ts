@@ -18,6 +18,7 @@ import type { PrismaClient, ServiceType } from '@prisma/client'
 import type { ShellSession } from '../providers/types.js'
 import { providerSelector } from './providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
+import { getAkashEnv } from '../../lib/akashEnv.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
 import type { TemplateGpu } from '../../templates/index.js'
@@ -32,27 +33,6 @@ const SERVICE_POLL_MAX_ATTEMPTS = 24
 
 /** Default Akash deposit in uact (1 ACT — buffer for bid/lease process). */
 export const DEFAULT_DEPOSIT_UACT = 1_000_000
-
-function getAkashEnv(): Record<string, string> {
-  if (!process.env.AKASH_MNEMONIC) {
-    throw new Error('AKASH_MNEMONIC is not set')
-  }
-  const keyName = process.env.AKASH_KEY_NAME || 'default'
-  return {
-    ...(process.env as Record<string, string>),
-    AKASH_KEY_NAME: keyName,
-    AKASH_FROM: keyName,
-    AKASH_KEYRING_BACKEND: 'test',
-    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443',
-    AKASH_CHAIN_ID: process.env.AKASH_CHAIN_ID || 'akashnet-2',
-    AKASH_GAS: 'auto',
-    AKASH_GAS_ADJUSTMENT: '1.5',
-    AKASH_GAS_PRICES: '0.025uakt',
-    AKASH_BROADCAST_MODE: 'sync',
-    AKASH_YES: 'true',
-    HOME: process.env.HOME || '/home/nodejs',
-  }
-}
 
 // Fixed by audit 2026-03: use execFileSync to prevent shell injection (was execSync with string concat)
 function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {

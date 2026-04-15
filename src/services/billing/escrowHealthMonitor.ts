@@ -15,6 +15,7 @@ import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
 import { BILLING_CONFIG } from '../../config/billing.js'
 import { createLogger } from '../../lib/logger.js'
+import { getAkashEnv } from '../../lib/akashEnv.js'
 import { execAsync } from '../queue/asyncExec.js'
 
 const log = createLogger('escrow-health')
@@ -26,23 +27,8 @@ const REFILL_HOURS = 1
 /** Warn when deployer wallet ACT balance falls below this (5 ACT). */
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
 
-function getAkashEnv(): Record<string, string> {
-  return {
-    AKASH_HOME: process.env.AKASH_HOME || `${process.env.HOME}/.akash`,
-    AKASH_NODE: process.env.AKASH_NODE || 'https://rpc.akashnet.net:443',
-    AKASH_CHAIN_ID: process.env.AKASH_CHAIN_ID || 'akashnet-2',
-    AKASH_KEY_NAME: process.env.AKASH_KEY_NAME || 'default',
-    AKASH_KEYRING_BACKEND: process.env.AKASH_KEYRING_BACKEND || 'test',
-    AKASH_GAS_ADJUSTMENT: '1.5',
-    AKASH_GAS_PRICES: '0.025uakt',
-    AKASH_GAS: 'auto',
-    AKASH_BROADCAST_MODE: 'sync',
-    AKASH_YES: '1',
-  }
-}
-
 async function runAkashCmd(args: string[]): Promise<string> {
-  const env = { ...(process.env as Record<string, string>), ...getAkashEnv() }
+  const env = getAkashEnv()
   return execAsync('akash', args, { env, timeout: AKASH_CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 })
 }
 
@@ -134,9 +120,16 @@ export class EscrowHealthMonitor {
 
   private async checkWalletBalance(): Promise<void> {
     try {
+      const keyName = process.env.AKASH_KEY_NAME || 'default'
+      const addrOutput = await runAkashCmd(['keys', 'show', keyName, '-a'])
+      const address = addrOutput.trim()
+      if (!address) {
+        log.warn('Could not resolve deployer wallet address')
+        return
+      }
+
       const output = await runAkashCmd([
-        'query', 'bank', 'balances',
-        '--from', process.env.AKASH_KEY_NAME || 'default',
+        'query', 'bank', 'balances', address,
         '-o', 'json',
       ])
       const data = JSON.parse(output)
@@ -172,8 +165,18 @@ export class EscrowHealthMonitor {
       const escrowAccount = data?.escrow_account
       if (!escrowAccount) return null
 
-      const balanceStr = escrowAccount.balance?.amount || '0'
-      const escrowBalanceUact = parseInt(balanceStr, 10) || 0
+      // Akash CLI v2 returns escrow_account.state.funds[] and
+      // escrow_account.state.state ('open' | 'closed'), NOT .balance.
+      const escrowState = escrowAccount.state || escrowAccount
+      if (escrowState.state === 'closed') return null
+
+      const funds: Array<{ denom: string; amount: string }> = escrowState.funds || []
+      const uactFund = funds.find((f: { denom: string }) => f.denom === 'uact')
+      const balanceStr = uactFund?.amount
+        // v1 fallback: escrow_account.balance.amount
+        || escrowAccount.balance?.amount
+        || '0'
+      const escrowBalanceUact = Math.floor(parseFloat(balanceStr)) || 0
 
       const ppb = parseInt(pricePerBlock || '0', 10) || 1
       const blocksPerHour = 600
@@ -181,6 +184,11 @@ export class EscrowHealthMonitor {
       const estimatedHoursRemaining = uactPerHour > 0
         ? escrowBalanceUact / uactPerHour
         : Infinity
+
+      log.debug(
+        { dseq, escrowBalanceUact, estimatedHoursRemaining: +estimatedHoursRemaining.toFixed(2) },
+        'Escrow status checked'
+      )
 
       return {
         dseq,
@@ -201,7 +209,7 @@ export class EscrowHealthMonitor {
     )
 
     try {
-      await runAkashCmd([
+      const output = await runAkashCmd([
         'tx',
         'escrow',
         'deposit',
@@ -210,10 +218,22 @@ export class EscrowHealthMonitor {
         '--dseq',
         dseq,
         '-y',
+        '-o', 'json',
       ])
 
+      let txhash = ''
+      try {
+        const result = JSON.parse(output)
+        txhash = result.txhash || ''
+        if (result.code && result.code !== 0) {
+          throw new Error(`TX failed on-chain: code=${result.code} log=${result.raw_log || ''}`)
+        }
+      } catch (parseErr) {
+        if ((parseErr as Error).message.startsWith('TX failed')) throw parseErr
+      }
+
       log.info(
-        { dseq, refillUact, refillAct: (refillUact / 1_000_000).toFixed(4) },
+        { dseq, refillUact, refillAct: (refillUact / 1_000_000).toFixed(4), txhash },
         'Refilled on-chain escrow'
       )
     } catch (err) {
