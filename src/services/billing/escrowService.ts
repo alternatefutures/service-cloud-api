@@ -128,8 +128,9 @@ export class EscrowService {
       return null
     }
 
-    const daysToBill = Math.max(1, Math.floor(hoursSinceLastBill / 24))
-    const consumptionCents = escrow.dailyRateCents * daysToBill
+    const hoursToBill = Math.max(1, Math.floor(hoursSinceLastBill))
+    const hourlyRateCents = escrow.dailyRateCents / 24
+    const consumptionCents = Math.round(hourlyRateCents * hoursToBill)
     const newConsumed = escrow.consumedCents + consumptionCents
     const remaining = escrow.depositCents - newConsumed
 
