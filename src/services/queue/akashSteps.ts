@@ -17,6 +17,7 @@ import { getEscrowService } from '../billing/escrowService.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { execAsync } from './asyncExec.js'
+import { getAkashEnv } from '../../lib/akashEnv.js'
 import {
   AKASH_TOTAL_STEPS,
   AKASH_STEP_NUMBERS,
@@ -85,27 +86,6 @@ const AKASH_TERMINAL_STATES = new Set([
   'PERMANENTLY_FAILED',
   'SUSPENDED',
 ])
-
-function getAkashEnv(): Record<string, string> {
-  if (!process.env.AKASH_MNEMONIC) {
-    throw new Error('AKASH_MNEMONIC is not set')
-  }
-  const keyName = process.env.AKASH_KEY_NAME || 'default'
-  return {
-    ...(process.env as Record<string, string>),
-    AKASH_KEY_NAME: keyName,
-    AKASH_FROM: keyName,
-    AKASH_KEYRING_BACKEND: 'test',
-    AKASH_NODE: process.env.RPC_ENDPOINT || 'https://rpc.akashnet.net:443',
-    AKASH_CHAIN_ID: process.env.AKASH_CHAIN_ID || 'akashnet-2',
-    AKASH_GAS: 'auto',
-    AKASH_GAS_ADJUSTMENT: '1.5',
-    AKASH_GAS_PRICES: '0.025uakt',
-    AKASH_BROADCAST_MODE: 'sync',
-    AKASH_YES: 'true',
-    HOME: process.env.HOME || '/home/nodejs',
-  }
-}
 
 async function runAkashAsync(
   args: string[],
