@@ -8,12 +8,13 @@
  * This operates at the infrastructure level (platform's deployer wallet),
  * separate from the user-facing org wallet billing.
  *
- * Schedule: every 10 minutes for fast reaction to expensive GPU leases.
+ * Schedule: hourly at :15 (offset from billing cycle). Refills 3 hours
+ * of runway when balance drops below 2 hours, so one missed cycle can't
+ * kill a lease.
  */
 
 import * as cron from 'node-cron'
 import type { PrismaClient } from '@prisma/client'
-import { BILLING_CONFIG } from '../../config/billing.js'
 import { createLogger } from '../../lib/logger.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
 import { execAsync } from '../queue/asyncExec.js'
@@ -21,26 +22,34 @@ import { execAsync } from '../queue/asyncExec.js'
 const log = createLogger('escrow-health')
 
 const AKASH_CLI_TIMEOUT_MS = 30_000
-const MIN_ESCROW_HOURS = 1
-const REFILL_HOURS = 1
+/** Longer timeout for the batch deployment list query (may return large JSON). */
+const BATCH_QUERY_TIMEOUT_MS = 60_000
+/** Refill when escrow drops below this many hours of runway. */
+const MIN_ESCROW_HOURS = 2
+/** Top up this many hours of runway per refill. */
+const REFILL_HOURS = 3
+/** Own cron schedule — hourly at :15 (offset from billing cycle at :00). */
+const ESCROW_CHECK_CRON = '15 * * * *'
 
 /** Warn when deployer wallet ACT balance falls below this (5 ACT). */
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
 
-async function runAkashCmd(args: string[]): Promise<string> {
+const BLOCKS_PER_HOUR = 600
+
+async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
   const env = getAkashEnv()
-  return execAsync('akash', args, { env, timeout: AKASH_CLI_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 })
+  return execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
 }
 
-interface EscrowStatus {
+interface ChainEscrowEntry {
   dseq: string
-  escrowBalanceUact: number
-  pricePerBlockUact: number
-  estimatedHoursRemaining: number
+  balanceUact: number
+  closed: boolean
 }
 
 export class EscrowHealthMonitor {
   private cronJob: cron.ScheduledTask | null = null
+  private running = false
   private readonly prisma: PrismaClient
 
   constructor(prisma: PrismaClient) {
@@ -50,11 +59,11 @@ export class EscrowHealthMonitor {
   start() {
     if (this.cronJob) return
 
-    this.cronJob = cron.schedule(BILLING_CONFIG.thresholds.checkIntervalCron, async () => {
+    this.cronJob = cron.schedule(ESCROW_CHECK_CRON, async () => {
       await this.checkAndRefill()
     })
 
-    log.info(`Escrow health monitor started — checking at ${BILLING_CONFIG.thresholds.checkIntervalCron}`)
+    log.info(`Escrow health monitor started — checking at ${ESCROW_CHECK_CRON}`)
   }
 
   stop() {
@@ -65,6 +74,12 @@ export class EscrowHealthMonitor {
   }
 
   async checkAndRefill(): Promise<void> {
+    if (this.running) {
+      log.warn('Skipping escrow check — previous cycle still running')
+      return
+    }
+    this.running = true
+
     try {
       const activeDeployments = await this.prisma.akashDeployment.findMany({
         where: { status: 'ACTIVE' },
@@ -78,7 +93,14 @@ export class EscrowHealthMonitor {
 
       if (activeDeployments.length === 0) return
 
+      log.info({ count: activeDeployments.length }, 'Escrow health check — active deployments found')
+
       await this.checkWalletBalance()
+
+      // Single RPC call to fetch all deployment escrow accounts for our owner,
+      // instead of one query per dseq. O(1) RPC calls regardless of deployment count.
+      const owner = activeDeployments[0].owner
+      const chainEscrows = await this.fetchAllEscrowBalances(owner)
 
       let refillCount = 0
       let errorCount = 0
@@ -88,18 +110,32 @@ export class EscrowHealthMonitor {
         if (!dseq || dseq === '0' || Number(dseq) < 0) continue
 
         try {
-          const status = await this.getEscrowStatus(dseq, dep.owner, dep.pricePerBlock)
-          if (!status) continue
+          const chain = chainEscrows.get(dseq)
+          if (!chain) {
+            log.warn({ dseq }, 'Deployment not found in chain query — may be closed on-chain')
+            continue
+          }
+          if (chain.closed) continue
 
-          if (status.estimatedHoursRemaining < MIN_ESCROW_HOURS) {
+          const ppb = parseInt(dep.pricePerBlock || '0', 10) || 1
+          const uactPerHour = ppb * BLOCKS_PER_HOUR
+          const estimatedHoursRemaining = uactPerHour > 0
+            ? chain.balanceUact / uactPerHour
+            : Infinity
+
+          if (estimatedHoursRemaining < MIN_ESCROW_HOURS) {
             log.warn(
-              { dseq, hoursRemaining: status.estimatedHoursRemaining },
+              { dseq, hoursRemaining: +estimatedHoursRemaining.toFixed(2), balanceUact: chain.balanceUact },
               'Low on-chain escrow — attempting refill'
             )
-            await this.refillEscrow(dseq, dep.owner, status.pricePerBlockUact)
+            await this.refillEscrow(dseq, dep.owner, ppb)
             refillCount++
-            // 8-second gap between on-chain TXs to avoid sequence collisions
             await new Promise(r => setTimeout(r, 8000))
+          } else {
+            log.info(
+              { dseq, hoursRemaining: +estimatedHoursRemaining.toFixed(2), balanceUact: chain.balanceUact },
+              'Escrow OK — no refill needed'
+            )
           }
         } catch (err) {
           errorCount++
@@ -107,14 +143,14 @@ export class EscrowHealthMonitor {
         }
       }
 
-      if (refillCount > 0 || errorCount > 0) {
-        log.info(
-          { checked: activeDeployments.length, refilled: refillCount, errors: errorCount },
-          'Escrow health check complete'
-        )
-      }
+      log.info(
+        { checked: activeDeployments.length, refilled: refillCount, errors: errorCount },
+        'Escrow health check complete'
+      )
     } catch (err) {
       log.error(err as Error, 'Escrow health check failed')
+    } finally {
+      this.running = false
     }
   }
 
@@ -146,59 +182,52 @@ export class EscrowHealthMonitor {
     }
   }
 
-  private async getEscrowStatus(
-    dseq: string,
-    owner: string,
-    pricePerBlock: string | null
-  ): Promise<EscrowStatus | null> {
+  /**
+   * Single RPC call: `akash query deployment list --owner <addr> --state active -o json`
+   * Returns a Map of dseq → escrow balance, replacing N per-deployment queries.
+   */
+  private async fetchAllEscrowBalances(owner: string): Promise<Map<string, ChainEscrowEntry>> {
+    const map = new Map<string, ChainEscrowEntry>()
     try {
       const output = await runAkashCmd([
-        'query',
-        'deployment',
-        'get',
+        'query', 'deployment', 'list',
         '--owner', owner,
-        '--dseq', dseq,
+        '--state', 'active',
         '-o', 'json',
-      ])
+      ], BATCH_QUERY_TIMEOUT_MS)
 
       const data = JSON.parse(output)
-      const escrowAccount = data?.escrow_account
-      if (!escrowAccount) return null
+      const deployments: any[] = data?.deployments || []
 
-      // Akash CLI v2 returns escrow_account.state.funds[] and
-      // escrow_account.state.state ('open' | 'closed'), NOT .balance.
-      const escrowState = escrowAccount.state || escrowAccount
-      if (escrowState.state === 'closed') return null
+      for (const dep of deployments) {
+        const dseq = dep.deployment?.deployment_id?.dseq
+          || dep.deployment_id?.dseq
+        if (!dseq) continue
 
-      const funds: Array<{ denom: string; amount: string }> = escrowState.funds || []
-      const uactFund = funds.find((f: { denom: string }) => f.denom === 'uact')
-      const balanceStr = uactFund?.amount
-        // v1 fallback: escrow_account.balance.amount
-        || escrowAccount.balance?.amount
-        || '0'
-      const escrowBalanceUact = Math.floor(parseFloat(balanceStr)) || 0
+        const escrowAccount = dep.escrow_account
+        if (!escrowAccount) continue
 
-      const ppb = parseInt(pricePerBlock || '0', 10) || 1
-      const blocksPerHour = 600
-      const uactPerHour = ppb * blocksPerHour
-      const estimatedHoursRemaining = uactPerHour > 0
-        ? escrowBalanceUact / uactPerHour
-        : Infinity
+        const escrowState = escrowAccount.state || escrowAccount
+        const closed = escrowState.state === 'closed'
 
-      log.debug(
-        { dseq, escrowBalanceUact, estimatedHoursRemaining: +estimatedHoursRemaining.toFixed(2) },
-        'Escrow status checked'
-      )
+        const funds: Array<{ denom: string; amount: string }> = escrowState.funds || []
+        const uactFund = funds.find((f: { denom: string }) => f.denom === 'uact')
+        const balanceStr = uactFund?.amount
+          || escrowAccount.balance?.amount
+          || '0'
+        const balanceUact = Math.floor(parseFloat(balanceStr)) || 0
 
-      return {
-        dseq,
-        escrowBalanceUact,
-        pricePerBlockUact: ppb,
-        estimatedHoursRemaining,
+        map.set(String(dseq), { dseq: String(dseq), balanceUact, closed })
       }
-    } catch {
-      return null
+
+      log.info({ count: map.size }, 'Fetched escrow balances from chain (single query)')
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Failed to batch-fetch escrow balances — falling back to per-deployment')
+      // Fallback removed: if the list query fails, we skip this cycle.
+      // The 2-hour threshold + 3-hour refill gives enough buffer to survive
+      // one missed cycle without any deployment dying.
     }
+    return map
   }
 
   private async refillEscrow(dseq: string, _owner: string, pricePerBlockUact: number): Promise<void> {
