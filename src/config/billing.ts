@@ -15,8 +15,8 @@ export const BILLING_CONFIG = {
     // Escrow: 0 = no upfront hold (pure pay-as-you-go).
     // Set > 0 to pre-fund N days (e.g. for budget-cap or auto-stop features later).
     escrowDays: 0,
-    billingIntervalHours: 24,
-    minBillingIntervalHours: 20,
+    billingIntervalHours: 1,
+    minBillingIntervalHours: 1,
     minBalanceCentsToLaunch: 100,
   },
   phala: {
@@ -24,7 +24,7 @@ export const BILLING_CONFIG = {
     minBalanceCentsToLaunch: 100,
   },
   scheduler: {
-    cronExpression: '0 3 * * *',
+    cronExpression: '0 * * * *',
   },
   thresholds: {
     /** Suspend when balance cannot cover this many hours of total burn. */
