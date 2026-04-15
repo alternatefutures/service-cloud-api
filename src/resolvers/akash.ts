@@ -143,15 +143,14 @@ async function estimateGpuDailyCost(
 
     if (providers.length === 0) return 1800 * gpuUnits
 
-    const { getAktUsdPrice, akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } =
+    const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } =
       await import('../config/pricing.js')
-    const aktPrice = await getAktUsdPrice()
 
     const minUact = providers.reduce(
       (min, p) => (p.minPriceUact! < min ? p.minPriceUact! : min),
       providers[0].minPriceUact!
     )
-    const dailyUsd = akashPricePerBlockToUsdPerDay(Number(minUact), aktPrice)
+    const dailyUsd = akashPricePerBlockToUsdPerDay(Number(minUact), 'uact')
     const withMargin = applyMargin(dailyUsd, DEFAULT_MONTHLY_MARGIN)
     return Math.ceil(withMargin * 100) * gpuUnits
   } catch (error) {
@@ -673,9 +672,8 @@ export const akashFieldResolvers = {
     },
     costPerDay: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const aktPrice = await getAktUsdPrice()
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
+        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, 'uact')
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN)
       }
       if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100
@@ -683,9 +681,8 @@ export const akashFieldResolvers = {
     },
     costPerHour: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const aktPrice = await getAktUsdPrice()
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
+        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, 'uact')
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN) / 24
       }
       if (parent.dailyRateCentsCharged != null) return parent.dailyRateCentsCharged / 100 / 24
@@ -693,9 +690,8 @@ export const akashFieldResolvers = {
     },
     costPerMonth: async (parent: any) => {
       if (parent.pricePerBlock) {
-        const { akashPricePerBlockToUsdPerDay, getAktUsdPrice, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
-        const aktPrice = await getAktUsdPrice()
-        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, aktPrice)
+        const { akashPricePerBlockToUsdPerDay, applyMargin, DEFAULT_MONTHLY_MARGIN } = await import('../config/pricing.js')
+        const raw = akashPricePerBlockToUsdPerDay(parent.pricePerBlock, 'uact')
         return applyMargin(raw, DEFAULT_MONTHLY_MARGIN) * 30
       }
       if (parent.dailyRateCentsCharged != null) return (parent.dailyRateCentsCharged / 100) * 30

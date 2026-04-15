@@ -363,8 +363,9 @@ export class AkashOrchestrator {
     log.info({ dseq, amountUact }, 'Topping up deployment escrow')
     await runAkashAsync([
       'tx',
-      'deployment',
+      'escrow',
       'deposit',
+      'deployment',
       `${amountUact}uact`,
       '--dseq',
       String(dseq),

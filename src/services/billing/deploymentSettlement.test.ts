@@ -20,7 +20,6 @@ vi.mock('./billingApiClient.js', () => ({
 }))
 
 vi.mock('../../config/pricing.js', () => ({
-  getAktUsdPrice: vi.fn(async () => 1),
   akashPricePerBlockToUsdPerDay: vi.fn(() => 1.44),
   applyMargin: vi.fn((raw: number, margin: number) => raw * (1 + margin)),
 }))

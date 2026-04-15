@@ -140,7 +140,7 @@ export class EscrowHealthMonitor {
         '-o', 'json',
       ])
       const data = JSON.parse(output)
-      const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uakt')
+      const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uact')
       const balance = parseInt(uactBal?.amount || '0', 10)
       if (balance < LOW_WALLET_THRESHOLD_UACT) {
         log.warn(
@@ -203,10 +203,12 @@ export class EscrowHealthMonitor {
     try {
       await runAkashCmd([
         'tx',
-        'deployment',
+        'escrow',
         'deposit',
+        'deployment',
         `${refillUact}uact`,
-        '--dseq', dseq,
+        '--dseq',
+        dseq,
         '-y',
       ])
 

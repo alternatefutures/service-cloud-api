@@ -16,9 +16,9 @@ vi.mock('./billingApiClient.js', () => ({
 
 vi.mock('../../config/pricing.js', () => ({
   getAktUsdPrice: () => getAktUsdPriceMock(),
-  akashPricePerBlockToUsdPerDay: (ppb: string, aktPrice: number) => {
-    const priceUakt = parseFloat(ppb)
-    return (priceUakt * 14400) / 1_000_000 * aktPrice
+  akashPricePerBlockToUsdPerDay: (ppb: string, _denom: string = 'uact') => {
+    const price = parseFloat(ppb)
+    return (price * 14400) / 1_000_000
   },
   applyMargin: (raw: number, rate: number) => raw * (1 + rate),
 }))

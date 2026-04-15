@@ -818,14 +818,15 @@ export async function handleCreateLease(
 
     await new Promise(r => setTimeout(r, 6000))
 
-    // Top up on-chain escrow based on actual bid price so the deployment
-    // has at least 1 hour of runway. The initial deposit (1 ACT) may not
-    // be enough for expensive GPU leases.
+    // Top up on-chain escrow so the deployment has at least 1 full hour
+    // of runway PLUS the initial 1 ACT deposit as a safety buffer.
+    // Without this, expensive GPU leases would drain the initial deposit
+    // in minutes and the health monitor might not refill in time.
     if (payload.priceAmount) {
       const pricePerBlock = parseInt(payload.priceAmount, 10) || 0
       const BLOCKS_PER_HOUR = 600
       const hourlyUact = pricePerBlock * BLOCKS_PER_HOUR
-      const needed = hourlyUact - DEFAULT_DEPOSIT_UACT
+      const needed = hourlyUact
       if (needed > 0) {
         try {
           const orchestrator = getAkashOrchestrator(prisma)

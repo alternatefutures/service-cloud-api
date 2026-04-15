@@ -15,7 +15,7 @@
 import type { PrismaClient, DeploymentEscrow } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { BILLING_CONFIG } from '../../config/billing.js'
-import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
+import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('escrow-service')
@@ -48,8 +48,7 @@ export class EscrowService {
   }): Promise<DeploymentEscrow> {
     const escrowDays = args.escrowDays ?? BILLING_CONFIG.akash.escrowDays
 
-    const aktPrice = await getAktUsdPrice()
-    const rawDailyUsd = akashPricePerBlockToUsdPerDay(args.pricePerBlock, aktPrice)
+    const rawDailyUsd = akashPricePerBlockToUsdPerDay(args.pricePerBlock, 'uact')
     const chargedDailyUsd = applyMargin(rawDailyUsd, args.marginRate)
     const dailyRateCents = Math.ceil(chargedDailyUsd * 100)
 
