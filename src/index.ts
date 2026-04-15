@@ -50,6 +50,7 @@ import { ProviderRegistryScheduler } from './services/providers/providerRegistry
 import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
 import { handleAdminDeploymentStats } from './services/admin/deploymentStatsEndpoint.js'
+import { handleAdminBillingStats } from './services/admin/billingStatsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { ShellEndpoint } from './services/shell/shellEndpoint.js'
@@ -225,6 +226,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/admin/deployment-stats' && req.method === 'GET') {
       await handleAdminDeploymentStats(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/admin/billing-stats' && req.method === 'GET') {
+      await handleAdminBillingStats(req, res, prisma)
       return
     }
 
