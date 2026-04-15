@@ -341,7 +341,7 @@ export class AkashOrchestrator {
   async topUpDeploymentDeposit(dseq: number, amountUact: number): Promise<void> {
     if (amountUact <= 0) return
     log.info({ dseq, amountUact }, 'Topping up deployment escrow')
-    await runAkashAsync([
+    const output = await runAkashAsync([
       'tx',
       'escrow',
       'deposit',
@@ -350,8 +350,22 @@ export class AkashOrchestrator {
       '--dseq',
       String(dseq),
       '-y',
+      '-o', 'json',
     ])
-    log.info({ dseq, amountUact }, 'Deployment escrow topped up')
+
+    try {
+      const result = extractJson(output) as Record<string, unknown>
+      const code = typeof result.code === 'number' ? result.code
+        : typeof result.code === 'string' ? parseInt(result.code, 10) : 0
+      if (code !== 0) {
+        const rawLog = (result.raw_log || '') as string
+        log.error({ dseq, amountUact, code, rawLog: rawLog.slice(0, 200) }, 'Escrow top-up TX rejected on-chain')
+        return
+      }
+      log.info({ dseq, amountUact, txhash: result.txhash }, 'Deployment escrow topped up')
+    } catch {
+      log.warn({ dseq, amountUact }, 'Escrow top-up completed but could not parse TX response')
+    }
   }
 
   /**
