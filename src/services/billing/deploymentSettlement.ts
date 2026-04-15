@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
-import { akashPricePerBlockToUsdPerDay, applyMargin, getAktUsdPrice } from '../../config/pricing.js'
+import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('deployment-settlement')
@@ -261,14 +261,11 @@ async function resolveAkashDailyRateCentsWithoutEscrow(
   if (!deployment.pricePerBlock) return 0
 
   try {
-    const [orgBilling, aktPrice] = await Promise.all([
-      billingApi.getOrgBilling(deployment.service.project.organizationId),
-      getAktUsdPrice(),
-    ])
+    const orgBilling = await billingApi.getOrgBilling(deployment.service.project.organizationId)
     const orgMarkup = await billingApi.getOrgMarkup(orgBilling.orgBillingId)
     const rawDailyUsd = akashPricePerBlockToUsdPerDay(
       deployment.pricePerBlock,
-      aktPrice
+      'uact'
     )
     return Math.ceil(applyMargin(rawDailyUsd, orgMarkup.marginRate) * 100)
   } catch {
