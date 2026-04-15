@@ -115,7 +115,7 @@ export class ComputeBillingScheduler {
 
   private async runBillingCycle() {
     const startTime = Date.now()
-    log.info('Starting daily billing cycle')
+    log.info('Starting hourly billing cycle')
 
     const stats = {
       akashProcessed: 0,
@@ -237,16 +237,17 @@ export class ComputeBillingScheduler {
 
         if (escrow.depositCents === 0) {
           // Pay-as-you-go: debit wallet directly (same pattern as Phala)
-          const daysToBill = this.forceMode
-            ? Math.max(1, Math.floor(hoursSinceLastBill / 24))
-            : Math.max(1, Math.floor(hoursSinceLastBill / 24))
-          const amountCents = escrow.dailyRateCents * daysToBill
+          const hoursToBill = this.forceMode
+            ? Math.max(1, Math.floor(hoursSinceLastBill))
+            : Math.max(1, Math.floor(hoursSinceLastBill))
+          const hourlyRateCents = escrow.dailyRateCents / 24
+          const amountCents = Math.round(hourlyRateCents * hoursToBill)
 
           if (amountCents <= 0) continue
 
-          const dateKey = now.toISOString().slice(0, 10)
-          const runId = this.forceMode ? `force_${now.toISOString().slice(0, 13)}` : dateKey
-          const idempotencyKey = `akash_daily:${escrow.id}:${runId}`
+          const hourKey = now.toISOString().slice(0, 13)
+          const runId = this.forceMode ? `force_${hourKey}` : hourKey
+          const idempotencyKey = `akash_hourly:${escrow.id}:${runId}`
 
           const result = await billingApi.computeDebit({
             orgBillingId: escrow.orgBillingId,
@@ -254,7 +255,7 @@ export class ComputeBillingScheduler {
             serviceType: 'akash_compute',
             provider: 'akash',
             resource: escrow.akashDeployment.service?.slug || escrow.akashDeploymentId,
-            description: `Akash compute: ${daysToBill}d @ $${(escrow.dailyRateCents / 100).toFixed(2)}/day`,
+            description: `Akash compute: ${hoursToBill}h @ $${(hourlyRateCents / 100).toFixed(2)}/hr`,
             idempotencyKey,
             metadata: {
               deploymentId: escrow.akashDeploymentId,
