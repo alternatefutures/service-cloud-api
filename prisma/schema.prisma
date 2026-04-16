@@ -1181,6 +1181,12 @@ model PhalaDeployment {
   @@index([status])
   @@index([appId])
   @@index([orgBillingId])
+  // Compound index for the per-org concurrency check in
+  // `resolvers/launchGuards.ts → assertOrgConcurrency`. PhalaDeployment carries
+  // organizationId directly (unlike AkashDeployment which joins through
+  // Service → Project), so this index covers the entire WHERE clause without
+  // needing the join optimizer to be clever. Becomes meaningful at >10K rows.
+  @@index([organizationId, status])
 }
 
 // ============================================

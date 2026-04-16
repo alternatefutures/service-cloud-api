@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GraphQLError } from 'graphql'
+
+const opsAlertMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+vi.mock('../lib/opsAlert.js', () => ({
+  opsAlert: opsAlertMock,
+}))
+
 import {
   assertDeploymentsEnabled,
   assertWithinHourlyCap,
@@ -48,6 +54,7 @@ describe('launchGuards', () => {
     delete process.env.MAX_ACTIVE_DEPLOYMENTS_PER_ORG
     delete process.env.MAX_ACTIVE_DEPLOYMENTS_TRIAL
     delete process.env.MAX_ACTIVE_DEPLOYMENTS_PAID
+    opsAlertMock.mockClear()
   })
 
   afterEach(() => {
@@ -290,6 +297,33 @@ describe('launchGuards', () => {
       const prisma = buildPrisma(100, 100)
       await expect(assertOrgConcurrency('org-1', prisma, TRIAL)).resolves.toBeUndefined()
       expect(prisma.akashDeployment.count).not.toHaveBeenCalled()
+    })
+
+    it('disabled guard fires a deduped opsAlert (warning, hourly suppress)', async () => {
+      process.env.MAX_ACTIVE_DEPLOYMENTS_PER_ORG = '0'
+      const prisma = buildPrisma(0, 0)
+
+      await assertOrgConcurrency('org-1', prisma, TRIAL)
+      await assertOrgConcurrency('org-2', prisma, PAID)
+
+      // Both calls hit the alert path — `opsAlert` itself dedupes (we just
+      // verify we ALWAYS call it with the same key + a long suppressMs so
+      // dedupe actually engages downstream).
+      expect(opsAlertMock).toHaveBeenCalledTimes(2)
+      const firstCall = opsAlertMock.mock.calls[0]?.[0]
+      const secondCall = opsAlertMock.mock.calls[1]?.[0]
+      expect(firstCall.key).toBe('launch-guards:concurrency-disabled')
+      expect(secondCall.key).toBe('launch-guards:concurrency-disabled')
+      expect(firstCall.severity).toBe('warning')
+      expect(firstCall.suppressMs).toBeGreaterThanOrEqual(60 * 60 * 1000)
+      expect(firstCall.context).toEqual({ organizationId: 'org-1', tier: 'trial' })
+      expect(secondCall.context).toEqual({ organizationId: 'org-2', tier: 'paid' })
+    })
+
+    it('does not fire the disabled-guard alert when the guard is enabled', async () => {
+      const prisma = buildPrisma(1, 0)
+      await assertOrgConcurrency('org-1', prisma, PAID)
+      expect(opsAlertMock).not.toHaveBeenCalled()
     })
 
     it('skips the check when organizationId is undefined', async () => {
