@@ -1,16 +1,17 @@
 /**
- * Akash On-Chain Escrow Health Monitor
+ * Akash On-Chain Escrow Health Monitor — Safety Net
  *
- * Monitors the on-chain escrow balance for active Akash deployments and
- * auto-refills from the deployer wallet's ACT balance before the escrow
- * depletes (which would cause Akash to close the lease).
+ * Runs at :30 each hour (30 min after the billing cycle at :00). The billing
+ * scheduler is the primary mechanism for on-chain escrow top-ups — it deposits
+ * 1 hour of runway after each successful user charge. This monitor is the
+ * safety net that catches any billing-cycle top-up failures.
  *
- * This operates at the infrastructure level (platform's deployer wallet),
- * separate from the user-facing org wallet billing.
+ * Also detects deployments that died on-chain (escrow depleted or provider
+ * closed the lease) and triggers close + pro-rated billing settlement so users
+ * are never charged for a non-existent lease.
  *
- * Schedule: hourly at :15 (offset from billing cycle). Refills 3 hours
- * of runway when balance drops below 2 hours, so one missed cycle can't
- * kill a lease.
+ * Operates at the infrastructure level (platform's deployer wallet), separate
+ * from user-facing org wallet billing.
  */
 
 import * as cron from 'node-cron'
@@ -18,6 +19,9 @@ import type { PrismaClient } from '@prisma/client'
 import { createLogger } from '../../lib/logger.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
 import { execAsync } from '../queue/asyncExec.js'
+import { settleAkashEscrowToTime } from './deploymentSettlement.js'
+import { getEscrowService } from './escrowService.js'
+import { getAkashOrchestrator } from '../akash/orchestrator.js'
 
 const log = createLogger('escrow-health')
 
@@ -25,11 +29,11 @@ const AKASH_CLI_TIMEOUT_MS = 30_000
 /** Longer timeout for the batch deployment list query (may return large JSON). */
 const BATCH_QUERY_TIMEOUT_MS = 60_000
 /** Refill when escrow drops below this many hours of runway. */
-const MIN_ESCROW_HOURS = 2
+const MIN_ESCROW_HOURS = 1
 /** Top up this many hours of runway per refill. */
-const REFILL_HOURS = 3
-/** Own cron schedule — hourly at :15 (offset from billing cycle at :00). */
-const ESCROW_CHECK_CRON = '15 * * * *'
+const REFILL_HOURS = 1
+/** Safety-net cron — hourly at :30 (30 min after billing cycle at :00). */
+const ESCROW_CHECK_CRON = '30 * * * *'
 
 /** Warn when deployer wallet ACT balance falls below this (5 ACT). */
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
@@ -103,6 +107,7 @@ export class EscrowHealthMonitor {
       const chainEscrows = await this.fetchAllEscrowBalances(owner)
 
       let refillCount = 0
+      let closedCount = 0
       let errorCount = 0
 
       for (const dep of activeDeployments) {
@@ -111,11 +116,17 @@ export class EscrowHealthMonitor {
 
         try {
           const chain = chainEscrows.get(dseq)
-          if (!chain) {
-            log.warn({ dseq }, 'Deployment not found in chain query — may be closed on-chain')
+
+          // Deployment missing from chain or explicitly closed — settle billing
+          if (!chain || chain.closed) {
+            log.warn(
+              { dseq, deploymentId: dep.id, reason: chain ? 'closed' : 'missing' },
+              'Deployment gone on-chain — closing and settling billing'
+            )
+            await this.closeAndSettleDeployment(dep.id, dseq)
+            closedCount++
             continue
           }
-          if (chain.closed) continue
 
           const ppb = parseInt(dep.pricePerBlock || '0', 10) || 1
           const uactPerHour = ppb * BLOCKS_PER_HOUR
@@ -126,7 +137,7 @@ export class EscrowHealthMonitor {
           if (estimatedHoursRemaining < MIN_ESCROW_HOURS) {
             log.warn(
               { dseq, hoursRemaining: +estimatedHoursRemaining.toFixed(2), balanceUact: chain.balanceUact },
-              'Low on-chain escrow — attempting refill'
+              'Low on-chain escrow — attempting safety-net refill'
             )
             await this.refillEscrow(dseq, dep.owner, ppb)
             refillCount++
@@ -144,7 +155,7 @@ export class EscrowHealthMonitor {
       }
 
       log.info(
-        { checked: activeDeployments.length, refilled: refillCount, errors: errorCount },
+        { checked: activeDeployments.length, refilled: refillCount, closed: closedCount, errors: errorCount },
         'Escrow health check complete'
       )
     } catch (err) {
@@ -223,11 +234,46 @@ export class EscrowHealthMonitor {
       log.info({ count: map.size }, 'Fetched escrow balances from chain (single query)')
     } catch (err) {
       log.error({ error: (err as Error).message }, 'Failed to batch-fetch escrow balances — falling back to per-deployment')
-      // Fallback removed: if the list query fails, we skip this cycle.
-      // The 2-hour threshold + 3-hour refill gives enough buffer to survive
-      // one missed cycle without any deployment dying.
+      // If the list query fails, we skip this cycle.
+      // The billing-cycle top-up at :00 is the primary mechanism; this is the safety net.
     }
     return map
+  }
+
+  /**
+   * Close a deployment that the chain reports as gone/closed, settle billing
+   * pro-rata, and refund any pre-funded escrow balance.
+   */
+  private async closeAndSettleDeployment(deploymentId: string, dseq: string): Promise<void> {
+    const current = await this.prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { status: true },
+    })
+    if (!current || current.status !== 'ACTIVE') return
+
+    const closedAt = new Date()
+
+    try {
+      const orchestrator = getAkashOrchestrator(this.prisma)
+      await orchestrator.closeDeployment(Number(dseq))
+    } catch (closeErr) {
+      const msg = (closeErr as Error).message ?? ''
+      const alreadyGone = /deployment not found|deployment closed|not active|does not exist/i.test(msg)
+      if (!alreadyGone) {
+        log.error({ deploymentId, dseq, err: msg }, 'On-chain close failed during escrow-monitor auto-close')
+      }
+    }
+
+    const result = await this.prisma.akashDeployment.updateMany({
+      where: { id: deploymentId, status: 'ACTIVE' },
+      data: { status: 'CLOSED', closedAt },
+    })
+
+    if (result.count > 0) {
+      await settleAkashEscrowToTime(this.prisma, deploymentId, closedAt)
+      await getEscrowService(this.prisma).refundEscrow(deploymentId)
+      log.info({ deploymentId, dseq }, 'Chain-dead deployment closed and billing settled')
+    }
   }
 
   private async refillEscrow(dseq: string, _owner: string, pricePerBlockUact: number): Promise<void> {
