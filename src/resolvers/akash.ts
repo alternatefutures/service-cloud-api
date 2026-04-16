@@ -11,6 +11,7 @@ import { getEscrowService } from '../services/billing/escrowService.js'
 import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
+import { assertLaunchAllowed } from './launchGuards.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
@@ -385,6 +386,15 @@ export const akashMutations = {
       policyId = policyRecord.id
     }
 
+    // Kill-switch + hourly cap + per-org concurrency. Runs BEFORE
+    // assertDeployBalance so a disabled platform / disallowed rate / over-limit
+    // org fails cleanly with no balance lookup side effects.
+    await assertLaunchAllowed(
+      context.organizationId,
+      context.prisma,
+      estimatedDailyCostCents / 24,
+    )
+
     await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
       dailyCostCents: estimatedDailyCostCents,
     })
@@ -459,6 +469,12 @@ export const akashMutations = {
     if (!func.serviceId) {
       throw new GraphQLError('Function has no associated service in the registry')
     }
+
+    await assertLaunchAllowed(
+      context.organizationId,
+      context.prisma,
+      BILLING_CONFIG.akash.minBalanceCentsToLaunch / 24,
+    )
 
     await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
       dailyCostCents: BILLING_CONFIG.akash.minBalanceCentsToLaunch,

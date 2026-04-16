@@ -215,6 +215,66 @@ describe('ComputeBillingScheduler.processAkashEscrows — idempotency drift', ()
     expect(topUpDeploymentDepositMock).toHaveBeenCalledWith(123, 60_000) // ppb=100 * 600 blocks
   })
 
+  it('advances lastBilledAt by exactly hoursToBill * 1h so fractional time rolls forward', async () => {
+    // Regression for the first-hour leak (Phase 36):
+    // Setting lastBilledAt=now discarded the partial hour between the previous
+    // marker and the current cron tick, causing a systemic under-charge of up
+    // to 1 hour of runtime across every deployment's lifetime.
+    //
+    // The fix advances lastBilledAt by exactly `hoursToBill * 1h` instead, so
+    // the fractional remainder is preserved and picked up on the next cycle
+    // (or at final settlement). Capped at `now` so forceMode cannot future-date.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    const { prisma } = buildPrisma([buildEscrow({ lastBilledAt: twoHoursAgo })])
+
+    computeDebitMock.mockResolvedValue({
+      success: true,
+      balanceCents: 99_900,
+      alreadyProcessed: false,
+    })
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ noPause: true })
+
+    const updateArg = prisma.deploymentEscrow.update.mock.calls[0][0]
+    const newLastBilledAt = updateArg.data.lastBilledAt as Date
+    // dailyRateCents=2400 → hourlyRateCents=100. hoursSinceLastBill≈2,
+    // hoursToBill=2 → new lastBilledAt = twoHoursAgo + 2h ≈ now.
+    const expectedMs = twoHoursAgo.getTime() + 2 * 3_600_000
+
+    // Should be at the 2h-advanced mark, not the raw `now`.
+    // Tolerance: 1s for test runtime.
+    expect(Math.abs(newLastBilledAt.getTime() - expectedMs)).toBeLessThan(1000)
+
+    // And must not be in the future (forceMode guard).
+    expect(newLastBilledAt.getTime()).toBeLessThanOrEqual(Date.now() + 100)
+  })
+
+  it('does not future-date lastBilledAt under forceMode when <1h elapsed', async () => {
+    // Force-billing with only 30min elapsed would otherwise try to advance
+    // lastBilledAt 1h into the future (hoursToBill=Math.max(1, floor(0.5))=1).
+    // The Math.min(now, ...) cap prevents that: user gets billed for 1h (the
+    // ceiling behavior of the scheduler under force) but next cycle is not
+    // silently skipped by a future lastBilledAt.
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000)
+    const { prisma } = buildPrisma([buildEscrow({ lastBilledAt: thirtyMinAgo })])
+
+    computeDebitMock.mockResolvedValue({
+      success: true,
+      balanceCents: 99_900,
+      alreadyProcessed: false,
+    })
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ force: true, noPause: true })
+
+    const updateArg = prisma.deploymentEscrow.update.mock.calls[0][0]
+    const newLastBilledAt = updateArg.data.lastBilledAt as Date
+
+    expect(newLastBilledAt.getTime()).toBeLessThanOrEqual(Date.now() + 100)
+    expect(newLastBilledAt.getTime()).toBeGreaterThan(thirtyMinAgo.getTime())
+  })
+
   it('does not double-bill after a simulated prior-run crash (sequential runs)', async () => {
     // Simulate: hour H had a prior crash (auth billed, DB not updated).
     // This run is hour H+1. Auth will alreadyProcess key for H-old? No —
