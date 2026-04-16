@@ -798,15 +798,22 @@ export async function handleCreateLease(
 
     await new Promise(r => setTimeout(r, 6000))
 
-    // Top up on-chain escrow so the deployment has at least 1 full hour
-    // of runway PLUS the initial 1 ACT deposit as a safety buffer.
-    // Without this, expensive GPU leases would drain the initial deposit
-    // in minutes and the health monitor might not refill in time.
+    // Top up on-chain escrow so the deployment has at least 2 full hours of
+    // runway PLUS the initial 1 ACT safety buffer.
+    //
+    // Why 2 hours (not 1):
+    // Deployments created mid-hour can miss the billing cron at :00 (the
+    // scheduler skips runs that happened "too soon" after the previous cycle).
+    // With only 1 hour of post-lease runway, a lease created at e.g. :45 can
+    // burn its buffer before the first billing-cron top-up at the next :00.
+    // 2 hours guarantees the billing scheduler gets at least one successful
+    // top-up before the escrow enters the danger zone, regardless of when
+    // the deployment was created.
     if (payload.priceAmount) {
       const pricePerBlock = parseInt(payload.priceAmount, 10) || 0
       const BLOCKS_PER_HOUR = 600
-      const hourlyUact = pricePerBlock * BLOCKS_PER_HOUR
-      const needed = hourlyUact
+      const POST_LEASE_HOURS = 2
+      const needed = pricePerBlock * BLOCKS_PER_HOUR * POST_LEASE_HOURS
       if (needed > 0) {
         try {
           const orchestrator = getAkashOrchestrator(prisma)
