@@ -33,6 +33,15 @@
 import { GraphQLError } from 'graphql'
 import type { PrismaClient } from '@prisma/client'
 import type { SubscriptionStatusInfo } from './subscriptionCheck.js'
+import { opsAlert } from '../lib/opsAlert.js'
+
+/**
+ * How long between disabled-guard alerts (per process). The guard being off is
+ * a steady-state config, not an event — alerting on every deploy attempt would
+ * spam the channel. One hour is loud enough that nobody forgets, quiet enough
+ * to not be annoying. `opsAlert`'s built-in dedupe handles the throttling.
+ */
+const DISABLED_GUARD_ALERT_SUPPRESS_MS = 60 * 60 * 1000
 
 function isTruthy(v: string | undefined): boolean {
   if (!v) return false
@@ -191,7 +200,24 @@ export async function assertOrgConcurrency(
 
   const tier = classifyTier(subscriptionStatus)
   const cap = resolveConcurrencyCap(tier)
-  if (cap === null) return // disabled globally
+  if (cap === null) {
+    // Guard is disabled by `MAX_ACTIVE_DEPLOYMENTS_PER_ORG="0"`. This is a
+    // legitimate state during demos/incidents, but it's also the kind of thing
+    // that gets set "for 5 minutes" and forgotten for a week. Fire a
+    // hourly-deduped alert so it stays visible in the ops channel without
+    // spamming on every deploy attempt.
+    void opsAlert({
+      key: 'launch-guards:concurrency-disabled',
+      severity: 'warning',
+      title: 'Concurrency cap disabled',
+      message:
+        'MAX_ACTIVE_DEPLOYMENTS_PER_ORG="0" is in effect — orgs can launch unlimited concurrent deployments. ' +
+        'If this was intentional (demo/incident), ignore. Otherwise unset the env var to re-enable per-tier caps.',
+      context: { organizationId, tier },
+      suppressMs: DISABLED_GUARD_ALERT_SUPPRESS_MS,
+    })
+    return
+  }
 
   const [akashActive, phalaActive] = await Promise.all([
     prisma.akashDeployment.count({
