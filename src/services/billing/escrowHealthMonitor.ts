@@ -200,8 +200,8 @@ export class EscrowHealthMonitor {
       const deployments: any[] = data?.deployments || []
 
       for (const dep of deployments) {
-        const dseq = dep.deployment?.deployment_id?.dseq
-          || dep.deployment_id?.dseq
+        const dseq = dep.deployment?.id?.dseq
+          || dep.deployment?.deployment_id?.dseq
         if (!dseq) continue
 
         const escrowAccount = dep.escrow_account
