@@ -18,6 +18,7 @@ import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { execAsync } from './asyncExec.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
+import { withWalletLock, isWalletTx } from '../akash/walletMutex.js'
 import {
   AKASH_TOTAL_STEPS,
   AKASH_STEP_NUMBERS,
@@ -93,7 +94,12 @@ async function runAkashAsync(
 ): Promise<string> {
   const env = getAkashEnv()
   log.info(`Running: akash ${args.join(' ')}`)
-  return execAsync('akash', args, { env, timeout })
+  const invoke = () => execAsync('akash', args, { env, timeout })
+  // Serialize tx submissions on the wallet mutex to avoid Cosmos account
+  // sequence collisions with other TX-emitting call sites (orchestrator,
+  // billing scheduler, health monitor, etc.).
+  if (isWalletTx(args)) return withWalletLock(invoke)
+  return invoke()
 }
 
 async function runProviderServicesAsync(

@@ -20,6 +20,7 @@ import type { PrismaClient, ComputeProviderType } from '@prisma/client'
 import { getAkashEnv as getAkashEnvBase } from '../../lib/akashEnv.js'
 import { getAllTemplates } from '../../templates/registry.js'
 import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
+import { withWalletLock } from '../akash/walletMutex.js'
 import { generateSDLFromTemplate } from '../../templates/sdl.js'
 import { createLogger } from '../../lib/logger.js'
 
@@ -226,14 +227,18 @@ async function testSingleTemplate(
     if (addrResult.exitCode !== 0) return mkFail(`Cannot get address: ${addrResult.stderr.trim()}`)
     owner = addrResult.stdout.trim()
 
-    // Step 2: Submit deployment tx (with sequence mismatch retry)
+    // Step 2: Submit deployment tx (with sequence mismatch retry).
+    // Serialized on the shared wallet mutex so the verifier doesn't race
+    // the billing scheduler / health monitor / deployment workers.
     const TX_RETRIES = 3
     let txJson: any = {}
     for (let attempt = 1; attempt <= TX_RETRIES; attempt++) {
-      const txResult = await execCli('akash', [
-        'tx', 'deployment', 'create', sdlPath,
-        '--deposit', `${DEFAULT_DEPOSIT_UACT}uact`, '-o', 'json', '-y',
-      ])
+      const txResult = await withWalletLock(() =>
+        execCli('akash', [
+          'tx', 'deployment', 'create', sdlPath,
+          '--deposit', `${DEFAULT_DEPOSIT_UACT}uact`, '-o', 'json', '-y',
+        ])
+      )
       if (txResult.exitCode !== 0) return mkFail(txResult.stderr.trim().slice(0, 300))
       try { txJson = extractJson(txResult.stdout) as any } catch { txJson = {} }
       const code = typeof txJson.code === 'number' ? txJson.code : parseInt(txJson.code ?? '0', 10)
@@ -327,11 +332,13 @@ async function testSingleTemplate(
     // Step 4: Create lease (with sequence mismatch retry)
     let leaseOk = false
     for (let attempt = 1; attempt <= TX_RETRIES; attempt++) {
-      const leaseResult = await execCli('akash', [
-        'tx', 'market', 'lease', 'create',
-        '--dseq', String(dseq), '--gseq', String(selectedBid.gseq), '--oseq', String(selectedBid.oseq),
-        '--provider', provider!, '-o', 'json', '-y',
-      ])
+      const leaseResult = await withWalletLock(() =>
+        execCli('akash', [
+          'tx', 'market', 'lease', 'create',
+          '--dseq', String(dseq), '--gseq', String(selectedBid.gseq), '--oseq', String(selectedBid.oseq),
+          '--provider', provider!, '-o', 'json', '-y',
+        ])
+      )
       if (leaseResult.exitCode !== 0) return mkFail(`Lease creation failed: ${leaseResult.stderr.trim().slice(0, 200)}`)
       let leaseCode = 0
       try { leaseCode = (extractJson(leaseResult.stdout) as any)?.code ?? 0 } catch { /* ok */ }
@@ -416,7 +423,9 @@ async function testSingleTemplate(
   } finally {
     if (dseq) {
       try {
-        await execCli('akash', ['tx', 'deployment', 'close', '--dseq', String(dseq), '-o', 'json', '-y'])
+        await withWalletLock(() =>
+          execCli('akash', ['tx', 'deployment', 'close', '--dseq', String(dseq), '-o', 'json', '-y'])
+        )
         log.info({ dseq, templateId }, 'Test deployment closed')
       } catch { /* best-effort */ }
     }
