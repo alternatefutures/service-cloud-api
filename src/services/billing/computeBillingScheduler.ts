@@ -281,17 +281,32 @@ export class ComputeBillingScheduler {
             },
           })
 
-          // Always mirror the auth-side charge into our DB — even on
-          // idempotency hits. An `alreadyProcessed=true` response means auth
-          // has already debited this key on a prior attempt; if we don't
-          // advance lastBilledAt/consumedCents locally, the next cron cycle
-          // will compute a larger hoursToBill with a FRESH idempotency key
-          // and double-charge the user. This is the core of the M1 bug.
+          // Advance lastBilledAt by exactly hoursToBill*1h (NOT to `now`).
+          //
+          // Why: the billing cron charges for integer hours via
+          // Math.floor(hoursSinceLastBill). If we set lastBilledAt=now, the
+          // fractional tail gets discarded forever. Example: deployment
+          // created 23:08, first cron hits at 01:00 → hoursSinceLastBill=1.87,
+          // hoursToBill=1. With `now`, the 0.87h from 23:08→00:08 is never
+          // billed. With `lastBilled + hoursToBill*1h`, lastBilledAt becomes
+          // 00:08 and that 0.87h rolls forward for the next cycle / final
+          // settlement to pick up.
+          //
+          // Cap at `now` so forceMode (which bypasses the 1h minimum check)
+          // cannot future-date lastBilledAt and silently skip the next cycle.
+          //
+          // Also mirror the auth-side charge into our DB even on idempotency
+          // hits: `alreadyProcessed=true` means auth already debited this key
+          // on a prior attempt; without the mirror the next cron cycle would
+          // compute a larger hoursToBill with a FRESH key and double-charge.
+          const advancedLastBilledAt = new Date(
+            Math.min(now.getTime(), lastBilled.getTime() + hoursToBill * 3_600_000)
+          )
           await this.prisma.deploymentEscrow.update({
             where: { id: escrow.id },
             data: {
               consumedCents: escrow.consumedCents + amountCents,
-              lastBilledAt: now,
+              lastBilledAt: advancedLastBilledAt,
             },
           })
 

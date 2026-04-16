@@ -6,6 +6,7 @@ import { getPhalaOrchestrator } from '../services/phala/index.js'
 import { processFinalPhalaBilling } from '../services/billing/deploymentSettlement.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
+import { assertLaunchAllowed } from './launchGuards.js'
 import { BILLING_CONFIG } from '../config/billing.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
@@ -446,6 +447,12 @@ export const phalaMutations = {
       })
       policyId = policyRecord.id
     }
+
+    await assertLaunchAllowed(
+      context.organizationId,
+      context.prisma,
+      estimatedDailyCostCents / 24,
+    )
 
     await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
       dailyCostCents: estimatedDailyCostCents,
