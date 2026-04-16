@@ -47,7 +47,12 @@ async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Prom
 
 interface ChainEscrowEntry {
   dseq: string
-  balanceUact: number
+  /** Raw `funds[uact].amount` from chain — total ever deposited, only changes on deposit/withdraw tx. */
+  fundsUact: number
+  /** Raw `transferred[uact].amount` — only updates on settlement txs (deposit/withdraw/close). */
+  transferredUact: number
+  /** Block height of last on-chain settlement. Used to compute unsettled consumption. */
+  settledAtBlock: number
   closed: boolean
 }
 
@@ -104,7 +109,15 @@ export class EscrowHealthMonitor {
       // Single RPC call to fetch all deployment escrow accounts for our owner,
       // instead of one query per dseq. O(1) RPC calls regardless of deployment count.
       const owner = activeDeployments[0].owner
-      const chainEscrows = await this.fetchAllEscrowBalances(owner)
+      const [chainEscrows, currentBlockHeight] = await Promise.all([
+        this.fetchAllEscrowBalances(owner),
+        this.fetchCurrentBlockHeight(),
+      ])
+
+      if (currentBlockHeight === 0) {
+        log.error('Could not fetch current block height — aborting escrow check this cycle')
+        return
+      }
 
       let refillCount = 0
       let closedCount = 0
@@ -130,23 +143,39 @@ export class EscrowHealthMonitor {
 
           const ppb = parseInt(dep.pricePerBlock || '0', 10) || 1
           const uactPerHour = ppb * BLOCKS_PER_HOUR
+
+          // Akash chain lazy-settles: `funds` / `transferred` only update on settlement
+          // txs (deposit, withdraw, close). Between settlements the escrow drains
+          // invisibly at `pricePerBlock` per block. Real balance must be computed as:
+          //   real = funds - transferred - (currentBlock - settledAt) * pricePerBlock
+          const blocksSinceSettlement = Math.max(0, currentBlockHeight - chain.settledAtBlock)
+          const unsettledConsumption = blocksSinceSettlement * ppb
+          const settledBalance = chain.fundsUact - chain.transferredUact
+          const realBalanceUact = Math.max(0, settledBalance - unsettledConsumption)
+
           const estimatedHoursRemaining = uactPerHour > 0
-            ? chain.balanceUact / uactPerHour
+            ? realBalanceUact / uactPerHour
             : Infinity
 
+          const logFields = {
+            dseq,
+            hoursRemaining: +estimatedHoursRemaining.toFixed(2),
+            realBalanceUact,
+            fundsUact: chain.fundsUact,
+            transferredUact: chain.transferredUact,
+            settledAtBlock: chain.settledAtBlock,
+            currentBlockHeight,
+            blocksSinceSettlement,
+            pricePerBlock: ppb,
+          }
+
           if (estimatedHoursRemaining < MIN_ESCROW_HOURS) {
-            log.warn(
-              { dseq, hoursRemaining: +estimatedHoursRemaining.toFixed(2), balanceUact: chain.balanceUact },
-              'Low on-chain escrow — attempting safety-net refill'
-            )
+            log.warn(logFields, 'Low on-chain escrow — attempting safety-net refill')
             await this.refillEscrow(dseq, dep.owner, ppb)
             refillCount++
             await new Promise(r => setTimeout(r, 8000))
           } else {
-            log.info(
-              { dseq, hoursRemaining: +estimatedHoursRemaining.toFixed(2), balanceUact: chain.balanceUact },
-              'Escrow OK — no refill needed'
-            )
+            log.info(logFields, 'Escrow OK — no refill needed')
           }
         } catch (err) {
           errorCount++
@@ -194,8 +223,29 @@ export class EscrowHealthMonitor {
   }
 
   /**
+   * Fetch the current chain block height via `akash status`. Needed to compute
+   * real escrow balance because Akash lazy-settles — the on-chain `transferred`
+   * value only updates on settlement txs, not as blocks pass.
+   */
+  private async fetchCurrentBlockHeight(): Promise<number> {
+    try {
+      const output = await runAkashCmd(['status'])
+      const data = JSON.parse(output)
+      const heightStr = data?.sync_info?.latest_block_height
+        || data?.SyncInfo?.latest_block_height
+        || '0'
+      const height = parseInt(String(heightStr), 10) || 0
+      return height
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Failed to fetch current block height')
+      return 0
+    }
+  }
+
+  /**
    * Single RPC call: `akash query deployment list --owner <addr> --state active -o json`
-   * Returns a Map of dseq → escrow balance, replacing N per-deployment queries.
+   * Returns a Map of dseq → chain escrow state. Real balance must be derived
+   * by combining these fields with the current block height in the caller.
    */
   private async fetchAllEscrowBalances(owner: string): Promise<Map<string, ChainEscrowEntry>> {
     const map = new Map<string, ChainEscrowEntry>()
@@ -222,13 +272,22 @@ export class EscrowHealthMonitor {
         const closed = escrowState.state === 'closed'
 
         const funds: Array<{ denom: string; amount: string }> = escrowState.funds || []
-        const uactFund = funds.find((f: { denom: string }) => f.denom === 'uact')
-        const balanceStr = uactFund?.amount
-          || escrowAccount.balance?.amount
-          || '0'
-        const balanceUact = Math.floor(parseFloat(balanceStr)) || 0
+        const transferred: Array<{ denom: string; amount: string }> = escrowState.transferred || []
+        const fundsUact = Math.floor(
+          parseFloat(funds.find((f) => f.denom === 'uact')?.amount || '0')
+        ) || 0
+        const transferredUact = Math.floor(
+          parseFloat(transferred.find((f) => f.denom === 'uact')?.amount || '0')
+        ) || 0
+        const settledAtBlock = parseInt(String(escrowState.settled_at || '0'), 10) || 0
 
-        map.set(String(dseq), { dseq: String(dseq), balanceUact, closed })
+        map.set(String(dseq), {
+          dseq: String(dseq),
+          fundsUact,
+          transferredUact,
+          settledAtBlock,
+          closed,
+        })
       }
 
       log.info({ count: map.size }, 'Fetched escrow balances from chain (single query)')
