@@ -101,8 +101,8 @@ export async function handleSuspendOrg(
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
           log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
-          // Wait for TX to settle before closing the next one — avoids sequence number collisions
-          await new Promise(r => setTimeout(r, 8000))
+          // Sequence-settle delay is held inside withWalletLock
+          // (see services/akash/walletMutex.ts). No manual sleep needed.
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)

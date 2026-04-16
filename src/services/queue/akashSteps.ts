@@ -19,6 +19,7 @@ import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { execAsync } from './asyncExec.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
 import { withWalletLock, isWalletTx } from '../akash/walletMutex.js'
+import { BLOCKS_PER_HOUR, POST_LEASE_HOURS } from '../../config/akash.js'
 import {
   AKASH_TOTAL_STEPS,
   AKASH_STEP_NUMBERS,
@@ -817,8 +818,6 @@ export async function handleCreateLease(
     // the deployment was created.
     if (payload.priceAmount) {
       const pricePerBlock = parseInt(payload.priceAmount, 10) || 0
-      const BLOCKS_PER_HOUR = 600
-      const POST_LEASE_HOURS = 2
       const needed = pricePerBlock * BLOCKS_PER_HOUR * POST_LEASE_HOURS
       if (needed > 0) {
         try {
