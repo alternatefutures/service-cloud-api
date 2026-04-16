@@ -26,9 +26,13 @@ const log = createLogger('compute-billing')
 
 const BLOCKS_PER_HOUR = 600
 
+/** Delay between sequential chain TXs to avoid Cosmos SDK account-sequence-mismatch errors. */
+const TX_NONCE_DELAY_MS = 3_000
+
 export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
   private thresholdCronJob: cron.ScheduledTask | null = null
+  private running = false
   private forceMode = false
   private noPauseMode = false
   private readonly prisma: PrismaClient
@@ -118,6 +122,12 @@ export class ComputeBillingScheduler {
   // ========================================
 
   private async runBillingCycle() {
+    if (this.running) {
+      log.warn('Skipping billing cycle — previous cycle still running')
+      return
+    }
+    this.running = true
+
     const startTime = Date.now()
     log.info('Starting hourly billing cycle')
 
@@ -169,6 +179,8 @@ export class ComputeBillingScheduler {
       )
     } catch (error) {
       log.error(error, 'Fatal error in billing cycle')
+    } finally {
+      this.running = false
     }
   }
 
@@ -309,7 +321,7 @@ export class ComputeBillingScheduler {
                   'Post-billing escrow top-up failed — health monitor will catch up'
                 )
               }
-              await new Promise(r => setTimeout(r, 8000))
+              await new Promise(r => setTimeout(r, TX_NONCE_DELAY_MS))
             }
           } else {
             log.info(
