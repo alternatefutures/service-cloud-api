@@ -21,6 +21,7 @@ import { getEscrowService } from '../billing/escrowService.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
+import { withWalletLock, isWalletTx } from './walletMutex.js'
 import type { TemplateGpu } from '../../templates/index.js'
 
 const log = createLogger('akash-orchestrator')
@@ -49,12 +50,19 @@ function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
 /**
  * Non-blocking version of runAkash for use in request handlers.
  * Uses execAsync to avoid freezing the Node.js event loop.
+ *
+ * If args[0] === 'tx' the call is serialized on the process-wide wallet
+ * mutex to keep the Cosmos account sequence number monotonic. Read-only
+ * commands (query, keys show, status) run without lock contention.
  */
 async function runAkashAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
   const { execAsync } = await import('../queue/asyncExec.js')
   const env = getAkashEnv()
   log.info(`Running (async): akash ${args.join(' ')}`)
-  return execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
+  const invoke = () =>
+    execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
+  if (isWalletTx(args)) return withWalletLock(invoke)
+  return invoke()
 }
 
 /**
@@ -196,7 +204,7 @@ export class AkashOrchestrator {
     deposit: number
   ): Promise<{ dseq: number; owner: string }> {
     log.info('Creating deployment...')
-    const output = runAkash([
+    const output = await runAkashAsync([
       'tx',
       'deployment',
       'create',
@@ -457,7 +465,7 @@ export class AkashOrchestrator {
     oseq: number,
     provider: string
   ): Promise<void> {
-    runAkash([
+    await runAkashAsync([
       'tx',
       'market',
       'lease',

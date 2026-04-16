@@ -22,6 +22,8 @@ import { execAsync } from '../queue/asyncExec.js'
 import { settleAkashEscrowToTime } from './deploymentSettlement.js'
 import { getEscrowService } from './escrowService.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
+import { withWalletLock, isWalletTx } from '../akash/walletMutex.js'
+import { opsAlert } from '../../lib/opsAlert.js'
 
 const log = createLogger('escrow-health')
 
@@ -42,7 +44,13 @@ const BLOCKS_PER_HOUR = 600
 
 async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
   const env = getAkashEnv()
-  return execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
+  const invoke = () =>
+    execAsync('akash', args, { env, timeout, maxBuffer: 10 * 1024 * 1024 })
+  // Serialize chain TX submissions (escrow refills) on the shared wallet
+  // mutex so they don't race with the billing scheduler, deployment steps,
+  // or any resolver-initiated close.
+  if (isWalletTx(args)) return withWalletLock(invoke)
+  return invoke()
 }
 
 interface ChainEscrowEntry {
@@ -212,10 +220,27 @@ export class EscrowHealthMonitor {
       const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uact')
       const balance = parseInt(uactBal?.amount || '0', 10)
       if (balance < LOW_WALLET_THRESHOLD_UACT) {
+        const balanceAct = (balance / 1_000_000).toFixed(4)
         log.warn(
-          { balanceUact: balance, balanceAct: (balance / 1_000_000).toFixed(4) },
+          { balanceUact: balance, balanceAct },
           'CRITICAL: Deployer wallet ACT balance is low — escrow refills will fail soon'
         )
+        await opsAlert({
+          key: 'deployer-wallet-low-balance',
+          severity: 'critical',
+          title: 'Deployer wallet ACT balance low',
+          message:
+            `Deployer wallet is below the ${(LOW_WALLET_THRESHOLD_UACT / 1_000_000).toFixed(0)} ACT threshold. ` +
+            `On-chain escrow top-ups will start failing; deployments will be closed by providers and the platform will eat the uncovered time.`,
+          context: {
+            address,
+            balanceAct,
+            balanceUact: String(balance),
+            thresholdUact: String(LOW_WALLET_THRESHOLD_UACT),
+          },
+          // Alert hourly (matches the health-monitor cadence), not every 10 min.
+          suppressMs: 55 * 60 * 1000,
+        })
       }
     } catch {
       log.warn('Could not check deployer wallet balance')
@@ -371,7 +396,22 @@ export class EscrowHealthMonitor {
         'Refilled on-chain escrow'
       )
     } catch (err) {
-      log.error({ dseq, error: (err as Error).message }, 'Failed to refill escrow via CLI')
+      const errMsg = (err as Error).message
+      log.error({ dseq, error: errMsg }, 'Failed to refill escrow via CLI')
+      await opsAlert({
+        key: `escrow-refill-failed:${dseq}`,
+        severity: 'critical',
+        title: 'Escrow refill failed',
+        message:
+          `Health-monitor escrow refill for dseq=${dseq} failed. If this keeps failing the provider will close ` +
+          `the lease and the platform will eat any time between the last user billing and chain-death.`,
+        context: {
+          dseq,
+          refillUact: String(refillUact),
+          refillAct: (refillUact / 1_000_000).toFixed(4),
+          error: errMsg.slice(0, 400),
+        },
+      })
       throw err
     }
   }

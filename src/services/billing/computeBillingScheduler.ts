@@ -21,6 +21,7 @@ import {
 import { createLogger } from '../../lib/logger.js'
 import { checkPolicyLimits } from '../policy/enforcer.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
+import { opsAlert } from '../../lib/opsAlert.js'
 
 const log = createLogger('compute-billing')
 
@@ -134,6 +135,7 @@ export class ComputeBillingScheduler {
     const stats = {
       akashProcessed: 0,
       akashErrors: 0,
+      akashIdempotencyHits: 0,
       phalaProcessed: 0,
       phalaErrors: 0,
       orgsPaused: 0,
@@ -167,6 +169,7 @@ export class ComputeBillingScheduler {
         {
           akashProcessed: stats.akashProcessed,
           akashErrors: stats.akashErrors,
+          akashIdempotencyHits: stats.akashIdempotencyHits,
           phalaProcessed: stats.phalaProcessed,
           phalaErrors: stats.phalaErrors,
           orgsPaused: stats.orgsPaused,
@@ -191,6 +194,7 @@ export class ComputeBillingScheduler {
   private async processAkashEscrows(stats: {
     akashProcessed: number
     akashErrors: number
+    akashIdempotencyHits: number
     totalDebitedCents: number
   }) {
     const escrowService = getEscrowService(this.prisma)
@@ -281,15 +285,30 @@ export class ComputeBillingScheduler {
             },
           })
 
-          if (!result.alreadyProcessed) {
-            await this.prisma.deploymentEscrow.update({
-              where: { id: escrow.id },
-              data: {
-                consumedCents: escrow.consumedCents + amountCents,
-                lastBilledAt: now,
-              },
-            })
+          // Always mirror the auth-side charge into our DB — even on
+          // idempotency hits. An `alreadyProcessed=true` response means auth
+          // has already debited this key on a prior attempt; if we don't
+          // advance lastBilledAt/consumedCents locally, the next cron cycle
+          // will compute a larger hoursToBill with a FRESH idempotency key
+          // and double-charge the user. This is the core of the M1 bug.
+          await this.prisma.deploymentEscrow.update({
+            where: { id: escrow.id },
+            data: {
+              consumedCents: escrow.consumedCents + amountCents,
+              lastBilledAt: now,
+            },
+          })
 
+          if (result.alreadyProcessed) {
+            stats.akashIdempotencyHits = (stats.akashIdempotencyHits || 0) + 1
+            log.info(
+              { escrowId: escrow.id, amountCents, idempotencyKey },
+              'Akash billing already processed (idempotency hit) — mirrored to local DB'
+            )
+            // Skip on-chain top-up on idempotency hits: we cannot tell whether
+            // the prior attempt's top-up succeeded without extra chain queries,
+            // and the :30 health monitor covers any shortfall safely.
+          } else {
             stats.akashProcessed++
             stats.totalDebitedCents += amountCents
             log.info(
@@ -312,22 +331,36 @@ export class ComputeBillingScheduler {
                   'Post-billing escrow top-up succeeded'
                 )
               } catch (topUpErr) {
+                const errMsg =
+                  topUpErr instanceof Error ? topUpErr.message : String(topUpErr)
                 log.warn(
                   {
                     dseq: String(escrow.akashDeployment.dseq),
                     hourlyUact,
-                    err: topUpErr instanceof Error ? topUpErr.message : topUpErr,
+                    err: errMsg,
                   },
                   'Post-billing escrow top-up failed — health monitor will catch up'
                 )
+                await opsAlert({
+                  key: `billing-topup-failed:${escrow.akashDeploymentId}`,
+                  severity: 'warning',
+                  title: 'Billing-cycle top-up failed',
+                  message:
+                    `Hourly top-up for dseq=${escrow.akashDeployment.dseq} failed after a successful user charge. ` +
+                    `The :30 escrow health monitor should recover, but repeated failures will drain on-chain escrow ` +
+                    `and the provider will close the lease. Investigate wallet balance, RPC health, or dseq state.`,
+                  context: {
+                    deploymentId: escrow.akashDeploymentId,
+                    dseq: String(escrow.akashDeployment.dseq),
+                    hourlyUact: String(hourlyUact),
+                    error: errMsg.slice(0, 400),
+                  },
+                  // Once per cycle is enough — no need to spam between runs.
+                  suppressMs: 55 * 60 * 1000,
+                })
               }
               await new Promise(r => setTimeout(r, TX_NONCE_DELAY_MS))
             }
-          } else {
-            log.info(
-              { escrowId: escrow.id },
-              'Akash billing already processed (idempotency hit)'
-            )
           }
         } else {
           // Pre-funded mode: consume from escrow pool
@@ -357,6 +390,22 @@ export class ComputeBillingScheduler {
           )
         } else {
           log.error({ escrowId: escrow.id, err: error }, 'Akash escrow error')
+          await opsAlert({
+            key: `billing-cycle-escrow-error:${escrow.id}`,
+            severity: 'warning',
+            title: 'Akash billing cycle error',
+            message:
+              `Failed to bill escrow ${escrow.id} (deployment ${escrow.akashDeploymentId}) during the hourly cycle. ` +
+              `If this persists across cycles the user will stop being charged for a live deployment.`,
+            context: {
+              escrowId: escrow.id,
+              deploymentId: escrow.akashDeploymentId,
+              dseq: String(escrow.akashDeployment.dseq ?? ''),
+              orgBillingId: escrow.orgBillingId,
+              error: errMsg.slice(0, 400),
+            },
+            suppressMs: 55 * 60 * 1000,
+          })
         }
       }
     }
