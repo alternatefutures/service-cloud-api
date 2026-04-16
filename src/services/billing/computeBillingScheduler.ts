@@ -22,13 +22,9 @@ import { createLogger } from '../../lib/logger.js'
 import { checkPolicyLimits } from '../policy/enforcer.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
 import { opsAlert } from '../../lib/opsAlert.js'
+import { BLOCKS_PER_HOUR } from '../../config/akash.js'
 
 const log = createLogger('compute-billing')
-
-const BLOCKS_PER_HOUR = 600
-
-/** Delay between sequential chain TXs to avoid Cosmos SDK account-sequence-mismatch errors. */
-const TX_NONCE_DELAY_MS = 3_000
 
 export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
@@ -359,7 +355,11 @@ export class ComputeBillingScheduler {
                   suppressMs: 55 * 60 * 1000,
                 })
               }
-              await new Promise(r => setTimeout(r, TX_NONCE_DELAY_MS))
+              // Sequence-settle delay is now held INSIDE withWalletLock
+              // (see config/akash.ts TX_SETTLE_DELAY_MS). Do NOT add a
+              // setTimeout here — it would be outside the mutex and would
+              // not actually prevent the next caller from colliding on
+              // the account sequence.
             }
           }
         } else {
@@ -702,7 +702,8 @@ export class ComputeBillingScheduler {
           await orchestrator.closeDeployment(Number(deployment.dseq))
           onChainClosed = true
           log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
-          await new Promise(r => setTimeout(r, 8000))
+          // Sequence-settle delay is held inside withWalletLock
+          // (see services/akash/walletMutex.ts). No manual sleep needed.
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)

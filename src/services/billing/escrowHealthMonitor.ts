@@ -24,6 +24,7 @@ import { getEscrowService } from './escrowService.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
 import { withWalletLock, isWalletTx } from '../akash/walletMutex.js'
 import { opsAlert } from '../../lib/opsAlert.js'
+import { BLOCKS_PER_HOUR } from '../../config/akash.js'
 
 const log = createLogger('escrow-health')
 
@@ -39,8 +40,6 @@ const ESCROW_CHECK_CRON = '30 * * * *'
 
 /** Warn when deployer wallet ACT balance falls below this (5 ACT). */
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
-
-const BLOCKS_PER_HOUR = 600
 
 async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
   const env = getAkashEnv()
@@ -179,9 +178,11 @@ export class EscrowHealthMonitor {
 
           if (estimatedHoursRemaining < MIN_ESCROW_HOURS) {
             log.warn(logFields, 'Low on-chain escrow — attempting safety-net refill')
-            await this.refillEscrow(dseq, dep.owner, ppb)
+            await this.refillEscrow(dseq, ppb)
             refillCount++
-            await new Promise(r => setTimeout(r, 8000))
+            // No post-refill sleep here — withWalletLock holds for
+            // TX_SETTLE_DELAY_MS internally so the next refill's sequence
+            // number lookup sees the previous TX committed.
           } else {
             log.info(logFields, 'Escrow OK — no refill needed')
           }
@@ -360,11 +361,10 @@ export class EscrowHealthMonitor {
     }
   }
 
-  private async refillEscrow(dseq: string, _owner: string, pricePerBlockUact: number): Promise<void> {
-    const blocksPerHour = 600
+  private async refillEscrow(dseq: string, pricePerBlockUact: number): Promise<void> {
     const refillUact = Math.max(
       100_000,
-      pricePerBlockUact * blocksPerHour * REFILL_HOURS
+      pricePerBlockUact * BLOCKS_PER_HOUR * REFILL_HOURS
     )
 
     try {
