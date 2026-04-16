@@ -283,7 +283,7 @@ export const phalaMutations = {
       throw new GraphQLError('Not authenticated')
     }
 
-    await assertSubscriptionActive(context.organizationId)
+    const subscriptionStatus = await assertSubscriptionActive(context.organizationId)
 
     const service = await context.prisma.service.findUnique({
       where: { id: input.serviceId },
@@ -452,6 +452,7 @@ export const phalaMutations = {
       context.organizationId,
       context.prisma,
       estimatedDailyCostCents / 24,
+      subscriptionStatus,
     )
 
     await assertDeployBalance(context.organizationId, 'phala', context.prisma, {
