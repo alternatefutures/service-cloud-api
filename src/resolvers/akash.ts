@@ -294,7 +294,7 @@ export const akashMutations = {
       throw new GraphQLError('Not authenticated')
     }
 
-    await assertSubscriptionActive(context.organizationId)
+    const subscriptionStatus = await assertSubscriptionActive(context.organizationId)
 
     // Get the service from the registry
     const service = await context.prisma.service.findUnique({
@@ -386,13 +386,17 @@ export const akashMutations = {
       policyId = policyRecord.id
     }
 
-    // Kill-switch + hourly cap + per-org concurrency. Runs BEFORE
+    // Kill-switch + hourly cap + tier-aware concurrency cap. Runs BEFORE
     // assertDeployBalance so a disabled platform / disallowed rate / over-limit
-    // org fails cleanly with no balance lookup side effects.
+    // org fails cleanly with no balance lookup side effects. The subscription
+    // status was already fetched by assertSubscriptionActive above — we reuse
+    // it here so the concurrency cap can pick the trial vs paid tier without
+    // a second round-trip to service-auth.
     await assertLaunchAllowed(
       context.organizationId,
       context.prisma,
       estimatedDailyCostCents / 24,
+      subscriptionStatus,
     )
 
     await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
@@ -445,7 +449,7 @@ export const akashMutations = {
       throw new GraphQLError('Not authenticated')
     }
 
-    await assertSubscriptionActive(context.organizationId)
+    const subscriptionStatus = await assertSubscriptionActive(context.organizationId)
 
     // Get the function with its service
     const func = await context.prisma.aFFunction.findUnique({
@@ -474,6 +478,7 @@ export const akashMutations = {
       context.organizationId,
       context.prisma,
       BILLING_CONFIG.akash.minBalanceCentsToLaunch / 24,
+      subscriptionStatus,
     )
 
     await assertDeployBalance(context.organizationId, 'akash', context.prisma, {
