@@ -1,8 +1,9 @@
 /**
  * Compute Billing Scheduler
  *
- * Daily cron job that processes:
+ * Hourly cron that processes:
  *   1. Akash deployments — direct wallet debit (pay-as-you-go) or escrow consumption (pre-funded)
+ *      After each successful charge, tops up on-chain escrow for the next hour.
  *   2. Phala per-hour debits
  *   3. Balance threshold checks → pause if < 1 day burn
  *   4. Policy spend tracking and enforcement
@@ -19,8 +20,11 @@ import {
 } from './deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
 import { checkPolicyLimits } from '../policy/enforcer.js'
+import { getAkashOrchestrator } from '../akash/orchestrator.js'
 
 const log = createLogger('compute-billing')
+
+const BLOCKS_PER_HOUR = 600
 
 export class ComputeBillingScheduler {
   private cronJob: cron.ScheduledTask | null = null
@@ -188,6 +192,7 @@ export class ComputeBillingScheduler {
             id: true,
             status: true,
             dseq: true,
+            pricePerBlock: true,
             service: {
               select: {
                 slug: true,
@@ -279,6 +284,33 @@ export class ComputeBillingScheduler {
               { escrowId: escrow.id, debitedCents: amountCents },
               'Akash pay-as-you-go billing complete'
             )
+
+            // Top up on-chain escrow for the next hour so the lease stays alive.
+            // Failures are non-fatal — the :30 health monitor will catch up.
+            const ppb = parseInt(escrow.akashDeployment.pricePerBlock || '0', 10)
+            if (ppb > 0 && escrow.akashDeployment.dseq) {
+              const hourlyUact = ppb * BLOCKS_PER_HOUR
+              try {
+                const orchestrator = getAkashOrchestrator(this.prisma)
+                await orchestrator.topUpDeploymentDeposit(
+                  Number(escrow.akashDeployment.dseq), hourlyUact
+                )
+                log.info(
+                  { dseq: String(escrow.akashDeployment.dseq), hourlyUact },
+                  'Post-billing escrow top-up succeeded'
+                )
+              } catch (topUpErr) {
+                log.warn(
+                  {
+                    dseq: String(escrow.akashDeployment.dseq),
+                    hourlyUact,
+                    err: topUpErr instanceof Error ? topUpErr.message : topUpErr,
+                  },
+                  'Post-billing escrow top-up failed — health monitor will catch up'
+                )
+              }
+              await new Promise(r => setTimeout(r, 8000))
+            }
           } else {
             log.info(
               { escrowId: escrow.id },
