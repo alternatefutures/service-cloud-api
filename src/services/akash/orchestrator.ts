@@ -353,19 +353,34 @@ export class AkashOrchestrator {
       '-o', 'json',
     ])
 
+    // A non-zero code here means the chain accepted the tx envelope but the
+    // state transition was rejected (e.g. insufficient wallet funds, unknown
+    // dseq, deployment already closed). We MUST throw so callers treat this as
+    // a failure — a silent return previously caused chain-escrow depletion to
+    // go unnoticed until the provider closed the lease.
+    let result: Record<string, unknown>
     try {
-      const result = extractJson(output) as Record<string, unknown>
-      const code = typeof result.code === 'number' ? result.code
-        : typeof result.code === 'string' ? parseInt(result.code, 10) : 0
-      if (code !== 0) {
-        const rawLog = (result.raw_log || '') as string
-        log.error({ dseq, amountUact, code, rawLog: rawLog.slice(0, 200) }, 'Escrow top-up TX rejected on-chain')
-        return
-      }
-      log.info({ dseq, amountUact, txhash: result.txhash }, 'Deployment escrow topped up')
+      result = extractJson(output) as Record<string, unknown>
     } catch {
+      // Parse failure after a successful CLI invocation usually means the
+      // broadcast went through but stdout had trailing noise. Keep as warn.
       log.warn({ dseq, amountUact }, 'Escrow top-up completed but could not parse TX response')
+      return
     }
+
+    const code =
+      typeof result.code === 'number'
+        ? result.code
+        : typeof result.code === 'string'
+          ? parseInt(result.code, 10)
+          : 0
+    if (code !== 0) {
+      const rawLog = (result.raw_log || result.rawLog || '') as string
+      const msg = `Escrow top-up TX rejected on-chain (code ${code}): ${rawLog.slice(0, 300)}`
+      log.error({ dseq, amountUact, code, rawLog: rawLog.slice(0, 200) }, msg)
+      throw new Error(msg)
+    }
+    log.info({ dseq, amountUact, txhash: result.txhash }, 'Deployment escrow topped up')
   }
 
   /**
@@ -759,10 +774,15 @@ export class AkashOrchestrator {
   }
 
   /**
-   * Close a deployment
+   * Close a deployment.
+   *
+   * Throws if the chain rejects the tx (e.g. deployment already closed,
+   * deployment not found). Callers that tolerate benign "already gone" states
+   * match on the thrown message (which includes the chain's raw_log) using
+   * patterns like /deployment not found|deployment closed|not active|does not exist/.
    */
   async closeDeployment(dseq: number): Promise<void> {
-    await runAkashAsync([
+    const output = await runAkashAsync([
       'tx',
       'deployment',
       'close',
@@ -772,6 +792,31 @@ export class AkashOrchestrator {
       'json',
       '-y',
     ])
+
+    let result: Record<string, unknown>
+    try {
+      result = extractJson(output) as Record<string, unknown>
+    } catch {
+      // CLI exited 0 but output was unparseable — treat as provisional success
+      // rather than block close paths. Downstream liveness reconciliation will
+      // catch any stuck-open deployment.
+      log.warn({ dseq }, 'Close TX completed but response could not be parsed')
+      return
+    }
+
+    const code =
+      typeof result.code === 'number'
+        ? result.code
+        : typeof result.code === 'string'
+          ? parseInt(result.code, 10)
+          : 0
+    if (code !== 0) {
+      const rawLog = (result.raw_log || result.rawLog || '') as string
+      const msg = `Close TX rejected on-chain (code ${code}): ${rawLog.slice(0, 300)}`
+      log.error({ dseq, code, rawLog: rawLog.slice(0, 200) }, msg)
+      throw new Error(msg)
+    }
+    log.info({ dseq, txhash: result.txhash }, 'Deployment close TX accepted')
   }
 
   /**
