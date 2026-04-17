@@ -390,6 +390,26 @@ async function main() {
   }
 
   console.log(`\n📦 Seeded ${templateData.length} templates`)
+
+  // ─── Seed Promo Codes ────────────────────────────────────────────────────────
+  console.log('\n🎫 Seeding promo codes...')
+
+  await prisma.promoCode.upsert({
+    where: { code: 'PRODUCTHUNT' },
+    update: {},
+    create: {
+      code: 'PRODUCTHUNT',
+      description: '6 months free Pro tier — Product Hunt launch promo',
+      discountType: 'FREE_MONTHS',
+      discountValue: 6,
+      appliesToPlan: 'PRO',
+      maxRedemptions: 500,
+      expiresAt: new Date('2026-06-30T23:59:59Z'),
+      isActive: true,
+    },
+  })
+  console.log('  ✅ Promo code: PRODUCTHUNT (6 months free Pro, max 500 redemptions)')
+
   console.log('\n🎉 Seeding complete!')
   console.log('\n📋 Test data:')
   console.log('   User: test@alternatefutures.ai')

@@ -31,6 +31,7 @@ import {
   serviceConnectivityFieldResolvers,
 } from './serviceConnectivity.js'
 import { logsQueries } from './logs.js'
+import { promoQueries, promoMutations } from './promo.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 
@@ -1046,6 +1047,9 @@ export const resolvers = {
     // Service connectivity (env vars, ports, links)
     ...serviceConnectivityQueries,
 
+    // Promo code queries
+    ...promoQueries,
+
     // Storage tracking queries (billing is now in service-auth)
     pinnedContent: async (
       _: unknown,
@@ -1627,6 +1631,9 @@ export const resolvers = {
 
     // Service connectivity mutations (env vars, ports, links)
     ...serviceConnectivityMutations,
+
+    // Promo code mutations
+    ...promoMutations,
 
     // Storage tracking mutation (billing is now in service-auth)
     triggerStorageSnapshot: async (_: unknown, __: unknown, context: Context) => {

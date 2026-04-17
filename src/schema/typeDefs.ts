@@ -1457,6 +1457,9 @@ export const typeDefs = /* GraphQL */ `
     # Unified Deployments (all deployment types across all services)
     allDeployments(projectId: ID, limit: Int): [UnifiedDeployment!]!
 
+    # Promo Codes (public — validate without redeeming)
+    validatePromoCode(code: String!): PromoCode
+
     # System Health
     subscriptionHealth: SubscriptionHealth!
 
@@ -1636,6 +1639,46 @@ export const typeDefs = /* GraphQL */ `
     # Service Linking
     linkServices(sourceServiceId: ID!, targetServiceId: ID!, alias: String): ServiceLink!
     unlinkServices(sourceServiceId: ID!, targetServiceId: ID!): Boolean!
+
+    # Promo Codes (authenticated — redeem against the caller's subscription)
+    redeemPromoCode(code: String!): RedeemPromoCodeResult!
+  }
+
+  # ============================================
+  # PROMO CODES
+  # ============================================
+
+  enum PromoDiscountType {
+    FREE_MONTHS
+    PERCENT_OFF
+    AMOUNT_OFF
+  }
+
+  """
+  A promotional code that can be redeemed by a user for a discount.
+  isValid is computed: active + not expired + under redemption cap.
+  """
+  type PromoCode {
+    code: String!
+    description: String
+    discountType: PromoDiscountType!
+    discountValue: Int!
+    """
+    The plan name this code is restricted to (e.g. "PRO"), or null if it applies to any plan.
+    """
+    appliesToPlan: String
+    expiresAt: Date
+    isValid: Boolean!
+  }
+
+  type RedeemPromoCodeResult {
+    success: Boolean!
+    promoCode: PromoCode
+    """
+    The Stripe subscription ID that was updated, if applicable.
+    """
+    subscriptionId: String
+    error: String
   }
 
   # ============================================
