@@ -719,6 +719,55 @@ model ObservabilitySettings {
 }
 
 // ============================================
+// AUDIT LOG (Phase 44)
+// ============================================
+// Append-only event log. One row per business event across deployment,
+// billing, provider, health, user, cron, ai-proxy, and system categories.
+// The identical shape lives in service-auth (for identity/billing events
+// that originate there); D3 export cron unifies both halves into a single
+// JSONL stream. Schema-free `payload` — each subsystem writes its own keys
+// with the privacy allowlist enforced in the `audit()` helper, never here.
+model AuditEvent {
+  id           String   @id @default(cuid())
+  timestamp    DateTime @default(now())
+
+  // Trace correlation — groups events from one user action across services.
+  // Populated by the HTTP middleware that mints a cuid per request and
+  // forwards it via `x-af-trace-id`. Background jobs mint their own.
+  traceId      String
+
+  // Origin service + logical grouping.
+  source       String   // "auth" | "cloud-api" | "web" | "monitor" | "cron"
+  category     String   // "billing" | "deployment" | "health" | "user" | "auth" | "provider" | "ai-proxy" | "cron" | "system"
+  action       String   // verb-first, dotted: "deployment.requested", "billing.hourly_tick", "lease.closed"
+  status       String   // "ok" | "warn" | "error"
+
+  // Identity dimensions (all nullable — system events have none of these).
+  userId       String?
+  orgId        String?
+  projectId    String?
+  serviceId    String?
+  deploymentId String?                                    // Akash, Phala, Site — generic key
+
+  // Timing + payload.
+  durationMs   Int?
+  payload      Json                                       // subsystem-specific; privacy-allowlisted upstream
+
+  // Error dimensions (populated when status = "error").
+  errorCode    String?
+  errorMessage String?
+
+  @@index([userId, timestamp])
+  @@index([orgId, timestamp])
+  @@index([projectId, timestamp])
+  @@index([serviceId, timestamp])
+  @@index([category, timestamp])
+  @@index([action, timestamp])
+  @@index([traceId])
+  @@index([status, timestamp])
+}
+
+// ============================================
 // USAGE BUFFERING
 // ============================================
 

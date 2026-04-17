@@ -15,6 +15,7 @@ import { assertLaunchAllowed } from './launchGuards.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
+import { audit } from '../lib/audit.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
 import { BILLING_CONFIG } from '../config/billing.js'
@@ -403,6 +404,29 @@ export const akashMutations = {
       dailyCostCents: estimatedDailyCostCents,
     })
 
+    // Phase 44 audit: stamp the "deployment requested" event up front.
+    // Fired before the orchestrator call so a crash during submission still
+    // leaves a record of the user's intent. Success/failure of the submit
+    // itself becomes a distinct event in D2.
+    audit(context.prisma, {
+      category: 'deployment',
+      action: 'deployment.requested',
+      status: 'ok',
+      userId: context.userId,
+      orgId: context.organizationId ?? null,
+      projectId: service.projectId,
+      serviceId: service.id,
+      payload: {
+        provider: 'akash',
+        serviceType: service.type,
+        policyId,
+        estimatedDailyCostCents,
+        depositUakt: input.depositUakt ?? null,
+        hasSdlOverride: Boolean(input.sdlContent),
+        hasResourceOverrides: Boolean(input.resourceOverrides),
+      },
+    })
+
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
 
@@ -431,6 +455,17 @@ export const akashMutations = {
 
       return formatDeployment(deployment)
     } catch (error) {
+      audit(context.prisma, {
+        category: 'deployment',
+        action: 'deployment.submit_failed',
+        status: 'error',
+        userId: context.userId,
+        orgId: context.organizationId ?? null,
+        projectId: service.projectId,
+        serviceId: service.id,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        payload: { provider: 'akash', policyId },
+      })
       throw new GraphQLError(
         `Akash deployment failed: ${error instanceof Error ? error.message : 'Unknown error'}`
       )
@@ -571,6 +606,22 @@ export const akashMutations = {
       } catch (error) {
         log.warn(error, `Escrow refund failed for SUSPENDED→CLOSED deployment ${id}`)
       }
+      audit(context.prisma, {
+        category: 'deployment',
+        action: 'lease.closed',
+        status: 'ok',
+        userId: context.userId,
+        orgId: context.organizationId ?? null,
+        projectId: deployment.service.projectId,
+        serviceId: deployment.serviceId,
+        deploymentId: deployment.id,
+        payload: {
+          provider: 'akash',
+          reason: 'manual_close_after_suspend',
+          priorStatus: 'SUSPENDED',
+          dseq: deployment.dseq?.toString() ?? null,
+        },
+      })
       return formatDeployment(updated)
     }
 
@@ -604,6 +655,23 @@ export const akashMutations = {
       data: {
         status: 'CLOSED',
         closedAt,
+      },
+    })
+
+    audit(context.prisma, {
+      category: 'deployment',
+      action: 'lease.closed',
+      status: 'ok',
+      userId: context.userId,
+      orgId: context.organizationId ?? null,
+      projectId: deployment.service.projectId,
+      serviceId: deployment.serviceId,
+      deploymentId: deployment.id,
+      payload: {
+        provider: 'akash',
+        reason: 'manual_close',
+        priorStatus: deployment.status,
+        dseq: deployment.dseq?.toString() ?? null,
       },
     })
 

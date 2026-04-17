@@ -19,6 +19,8 @@ import { settleAkashEscrowToTime } from '../billing/deploymentSettlement.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getAvailableProviders } from '../providers/registry.js'
 import { createLogger } from '../../lib/logger.js'
+import { audit } from '../../lib/audit.js'
+import { randomUUID } from 'node:crypto'
 
 const log = createLogger('stale-sweeper')
 
@@ -138,9 +140,12 @@ function isDefinitelyDead(health: { overall: string }): boolean {
   return health.overall === 'unhealthy'
 }
 
-async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> {
+async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   const providers = getAvailableProviders()
   let totalReconciled = 0
+  // One trace id per sweep invocation so all closures in a single pass
+  // group together in the audit log (Phase 44).
+  const sweepTraceId = randomUUID()
 
   for (const provider of providers) {
     try {
@@ -167,6 +172,11 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
               try {
                 await provider.close(id)
                 totalReconciled++
+                auditHealthClose(prisma, sweepTraceId, provider.name, id, {
+                  reason: 'unhealthy',
+                  overall: health?.overall ?? '404',
+                  failures: count,
+                })
               } catch (closeErr) {
                 log.error(
                   { provider: provider.name, deploymentId: id, err: closeErr },
@@ -192,6 +202,11 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
               try {
                 await provider.close(id)
                 totalReconciled++
+                auditHealthClose(prisma, sweepTraceId, provider.name, id, {
+                  reason: 'unknown_health',
+                  overall: 'unknown',
+                  failures: count,
+                })
               } catch (closeErr) {
                 log.error(
                   { provider: provider.name, deploymentId: id, err: closeErr },
@@ -219,6 +234,11 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
             try {
               await provider.close(id)
               totalReconciled++
+              auditHealthClose(prisma, sweepTraceId, provider.name, id, {
+                reason: 'probe_exception',
+                failures: count,
+                probeError: err instanceof Error ? err.message : String(err),
+              })
             } catch (closeErr) {
               log.error(
                 { provider: provider.name, deploymentId: id, err: closeErr },
@@ -237,6 +257,58 @@ async function reconcileActiveDeployments(_prisma: PrismaClient): Promise<void> 
   if (totalReconciled > 0) {
     log.info({ reconciled: totalReconciled }, 'Reconciled dead deployments across all providers')
   }
+}
+
+/**
+ * Phase 44 audit helper — records one event per health-driven close. We
+ * best-effort enrich the event with org/service context by looking up the
+ * AkashDeployment row; Phala closes use the generic provider id as
+ * deploymentId without enrichment. Fire-and-forget: any lookup failure is
+ * swallowed so the sweep itself is never blocked by audit work.
+ */
+interface HealthCloseRow {
+  id: string
+  serviceId: string
+  service: { projectId: string; project: { organizationId: string | null } | null } | null
+}
+
+function auditHealthClose(
+  prisma: PrismaClient,
+  traceId: string,
+  providerName: string,
+  providerDeploymentId: string,
+  extra: Record<string, unknown>
+): void {
+  void (async () => {
+    let row: HealthCloseRow | null = null
+    try {
+      if (providerName === 'akash') {
+        row = (await prisma.akashDeployment.findFirst({
+          where: { id: providerDeploymentId },
+          select: {
+            id: true,
+            serviceId: true,
+            service: { select: { projectId: true, project: { select: { organizationId: true } } } },
+          },
+        })) as HealthCloseRow | null
+      }
+    } catch (err) {
+      log.debug({ err, providerName, providerDeploymentId }, 'audit enrichment lookup failed')
+    }
+
+    audit(prisma, {
+      traceId,
+      source: 'monitor',
+      category: 'health',
+      action: 'health.deployment_closed',
+      status: 'error',
+      orgId: row?.service?.project?.organizationId ?? null,
+      projectId: row?.service?.projectId ?? null,
+      serviceId: row?.serviceId ?? null,
+      deploymentId: row?.id ?? providerDeploymentId,
+      payload: { provider: providerName, ...extra },
+    })
+  })()
 }
 
 /**
