@@ -154,8 +154,27 @@ export class ProviderSelector {
 
   isProviderSafe(
     providerAddress: string,
-    serviceType: ServiceType
+    serviceType: ServiceType,
+    excludeProviders?: ReadonlySet<string> | readonly string[]
   ): ProviderSafetyResult {
+    // Phase 43 — skip providers that previous failovers in this chain
+    // already proved unhealthy. We treat exclusion the same as a block at
+    // the bid-filter level so the existing safe-bids pipeline handles it.
+    if (excludeProviders) {
+      const set =
+        excludeProviders instanceof Set
+          ? excludeProviders
+          : new Set(excludeProviders)
+      if (set.has(providerAddress)) {
+        return {
+          safe: false,
+          provider: providerAddress,
+          reason: `EXCLUDED: provider previously failed for this service`,
+          blockedProvider: providerAddress,
+        }
+      }
+    }
+
     // Check DB-sourced blocklist
     const blockReason = blockedProviders.get(providerAddress)
     if (blockReason) {
@@ -194,10 +213,19 @@ export class ProviderSelector {
     }
   }
 
-  filterBids(bids: AkashBid[], serviceType: ServiceType): FilteredBid[] {
+  filterBids(
+    bids: AkashBid[],
+    serviceType: ServiceType,
+    excludeProviders?: ReadonlySet<string> | readonly string[]
+  ): FilteredBid[] {
+    const set = excludeProviders
+      ? excludeProviders instanceof Set
+        ? excludeProviders
+        : new Set(excludeProviders)
+      : undefined
     return bids.map(bid => {
       const provider = bid.bidId.provider
-      const safetyResult = this.isProviderSafe(provider, serviceType)
+      const safetyResult = this.isProviderSafe(provider, serviceType, set)
       return {
         ...bid,
         isSafe: safetyResult.safe,
@@ -206,8 +234,12 @@ export class ProviderSelector {
     })
   }
 
-  getSafeBids(bids: AkashBid[], serviceType: ServiceType): FilteredBid[] {
-    return this.filterBids(bids, serviceType).filter(bid => bid.isSafe)
+  getSafeBids(
+    bids: AkashBid[],
+    serviceType: ServiceType,
+    excludeProviders?: ReadonlySet<string> | readonly string[]
+  ): FilteredBid[] {
+    return this.filterBids(bids, serviceType, excludeProviders).filter(bid => bid.isSafe)
   }
 
   sortBidsByPriceAndSafety(bids: FilteredBid[]): FilteredBid[] {

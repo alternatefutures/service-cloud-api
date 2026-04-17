@@ -1582,6 +1582,11 @@ export const resolvers = {
             intervalSec?: number
             timeoutSec?: number
           } | null
+          failoverPolicy?: {
+            enabled: boolean
+            maxAttempts?: number
+            windowHours?: number
+          } | null
         }
       },
       context: Context
@@ -1627,6 +1632,7 @@ export const resolvers = {
         containerPort?: number | null
         volumes?: any
         healthProbe?: any
+        failoverPolicy?: any
       } = {}
 
       if (Object.prototype.hasOwnProperty.call(input, 'dockerImage')) {
@@ -1766,6 +1772,51 @@ export const resolvers = {
           data.healthProbe = cleaned
         } else {
           throw new GraphQLError('healthProbe must be an object with at least { path }, or null to clear.')
+        }
+      }
+
+      // Failover policy (Phase 43) — health-aware auto-redeploy on dead
+      // providers. We refuse the combination "failover enabled + service has
+      // volumes" because failover spawns a fresh deployment on a different
+      // provider with no carry-over of /data. The user must either remove
+      // volumes first or accept that auto-failover is off for stateful apps.
+      if (Object.prototype.hasOwnProperty.call(input, 'failoverPolicy')) {
+        const policy = input.failoverPolicy
+        if (policy === null) {
+          data.failoverPolicy = null
+        } else if (typeof policy === 'object') {
+          if (typeof policy.enabled !== 'boolean') {
+            throw new GraphQLError('failoverPolicy.enabled is required and must be a boolean.')
+          }
+          const cleaned: Record<string, unknown> = { enabled: policy.enabled }
+          if (policy.maxAttempts !== undefined) {
+            const n = Number(policy.maxAttempts)
+            if (!Number.isInteger(n) || n < 1 || n > 10) {
+              throw new GraphQLError('failoverPolicy.maxAttempts must be an integer between 1 and 10.')
+            }
+            cleaned.maxAttempts = n
+          }
+          if (policy.windowHours !== undefined) {
+            const n = Number(policy.windowHours)
+            if (!Number.isInteger(n) || n < 1 || n > 720) {
+              throw new GraphQLError('failoverPolicy.windowHours must be an integer between 1 and 720 hours.')
+            }
+            cleaned.windowHours = n
+          }
+          if (cleaned.enabled) {
+            // Use whatever we're about to write; fall back to current row.
+            const incomingVolumes =
+              data.volumes !== undefined ? data.volumes : (service as any).volumes
+            const volumeCount = Array.isArray(incomingVolumes) ? incomingVolumes.length : 0
+            if (volumeCount > 0) {
+              throw new GraphQLError(
+                'Auto-failover cannot be enabled on a service that has persistent volumes — failover spawns a fresh deployment on a different provider and would lose the volume data. Remove volumes first or keep failover disabled.'
+              )
+            }
+          }
+          data.failoverPolicy = cleaned
+        } else {
+          throw new GraphQLError('failoverPolicy must be an object with at least { enabled }, or null to clear.')
         }
       }
 
@@ -2181,6 +2232,61 @@ export const resolvers = {
         lastStatus: last?.statusCode ?? null,
         lastError: last?.error ?? null,
         recentResults: snap.results,
+      }
+    },
+    /**
+     * failoverHistory — derived view over the failover chain for this
+     * service. Returns null when no failover has fired (the chain is empty).
+     * The `chain` array is newest-first and includes the original deployment
+     * + every spawned replacement so the UI can show the full lineage. (Phase 43)
+     */
+    failoverHistory: async (parent: any, _: unknown, context: Context) => {
+      if (!parent?.id) return null
+      const { parseFailoverPolicy, countAttemptsInWindow } = await import(
+        '../services/failover/failoverService.js'
+      )
+      const policy = parseFailoverPolicy(parent.failoverPolicy)
+      const failovers = await context.prisma.akashDeployment.findMany({
+        where: {
+          serviceId: parent.id,
+          failoverParentId: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+          id: true,
+          parentDeploymentId: true,
+          failoverParentId: true,
+          provider: true,
+          excludedProviders: true,
+          status: true,
+          failoverReason: true,
+          createdAt: true,
+          deployedAt: true,
+          closedAt: true,
+        },
+      })
+      if (failovers.length === 0) return null
+      const attemptsInWindow = await countAttemptsInWindow(
+        context.prisma,
+        parent.id,
+        policy.windowHours
+      )
+      return {
+        attemptsInWindow,
+        maxAttempts: policy.maxAttempts,
+        windowHours: policy.windowHours,
+        chain: failovers.map(f => ({
+          deploymentId: f.id,
+          parentDeploymentId: f.failoverParentId,
+          provider: f.provider,
+          excludedProviders: f.excludedProviders ?? [],
+          status: f.status,
+          reason: f.failoverReason,
+          createdAt: f.createdAt,
+          deployedAt: f.deployedAt,
+          closedAt: f.closedAt,
+        })),
       }
     },
     // Merge Akash-related Service field resolvers (akashDeployments, activeAkashDeployment)

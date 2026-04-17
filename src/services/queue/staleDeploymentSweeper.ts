@@ -21,6 +21,12 @@ import { getAvailableProviders } from '../providers/registry.js'
 import { createLogger } from '../../lib/logger.js'
 import { audit } from '../../lib/audit.js'
 import { randomUUID } from 'node:crypto'
+import {
+  evaluateFailoverEligibility,
+  executeFailover,
+  auditFailoverSkipped,
+  type FailoverSkipReason,
+} from '../failover/failoverService.js'
 
 const log = createLogger('stale-sweeper')
 
@@ -140,6 +146,133 @@ function isDefinitelyDead(health: { overall: string }): boolean {
   return health.overall === 'unhealthy'
 }
 
+/**
+ * Phase 43 — close-or-failover branch. The sweeper has already decided this
+ * deployment is dead. We try `executeFailover()` if the service has opted
+ * in AND the failure looks like a *provider* problem; otherwise we plain
+ * `close()` (the existing behaviour).
+ *
+ * Returns true if the deployment was either closed or replaced (caller
+ * counts it as reconciled either way).
+ */
+async function closeOrFailover(
+  prisma: PrismaClient,
+  provider: { name: string; close(id: string): Promise<void> },
+  deploymentId: string,
+  sweepTraceId: string,
+  closeAuditExtra: Record<string, unknown>
+): Promise<boolean> {
+  if (provider.name !== 'akash') {
+    // Phala / future providers: failover not implemented yet; fall through.
+    try {
+      await provider.close(deploymentId)
+      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, closeAuditExtra)
+      return true
+    } catch (closeErr) {
+      log.error(
+        { provider: provider.name, deploymentId, err: closeErr },
+        'Failed to close dead deployment'
+      )
+      return false
+    }
+  }
+
+  let eligibility: Awaited<ReturnType<typeof evaluateFailoverEligibility>>
+  try {
+    eligibility = await evaluateFailoverEligibility(prisma, deploymentId)
+  } catch (evalErr) {
+    log.warn(
+      { deploymentId, err: evalErr },
+      'failover eligibility evaluation threw — defaulting to plain close'
+    )
+    eligibility = { eligible: false, reason: 'no_chain_root' }
+  }
+
+  if (!eligibility.eligible) {
+    // Skip-audit only the cases where the user explicitly asked for failover
+    // (i.e. policy was enabled). Disabled-by-default services would drown
+    // the audit log otherwise.
+    const noisySkips: ReadonlySet<FailoverSkipReason> = new Set([
+      'has_volumes',
+      'never_active',
+      'app_unhealthy',
+      'cap_exceeded',
+    ])
+    if (noisySkips.has(eligibility.reason)) {
+      try {
+        const dep = await prisma.akashDeployment.findUnique({
+          where: { id: deploymentId },
+          select: {
+            id: true,
+            serviceId: true,
+            service: { select: { projectId: true, project: { select: { organizationId: true } } } },
+          },
+        })
+        if (dep) {
+          auditFailoverSkipped(prisma, {
+            traceId: sweepTraceId,
+            deployment: dep,
+            reason: eligibility.reason,
+            detail: eligibility.detail,
+          })
+        }
+      } catch (auditErr) {
+        log.debug({ err: auditErr }, 'failover skip audit lookup failed')
+      }
+    }
+
+    try {
+      await provider.close(deploymentId)
+      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, closeAuditExtra)
+      return true
+    } catch (closeErr) {
+      log.error(
+        { provider: provider.name, deploymentId, err: closeErr },
+        'Failed to close dead deployment'
+      )
+      return false
+    }
+  }
+
+  try {
+    const result = await executeFailover(prisma, deploymentId, {
+      excludedProviders: eligibility.excludedProviders,
+      reason: String(closeAuditExtra.reason ?? 'unhealthy'),
+      triggeredBy: 'sweeper',
+      traceId: sweepTraceId,
+    })
+    log.info(
+      {
+        from: deploymentId,
+        to: result.newDeploymentId,
+        excluded: eligibility.excludedProviders.length,
+        attemptsInWindow: eligibility.attemptsInWindow,
+      },
+      'failover triggered for dead deployment'
+    )
+    return true
+  } catch (failoverErr) {
+    log.error(
+      { deploymentId, err: failoverErr },
+      'failover execution failed — falling back to plain close'
+    )
+    try {
+      await provider.close(deploymentId)
+      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, {
+        ...closeAuditExtra,
+        failoverError: failoverErr instanceof Error ? failoverErr.message : String(failoverErr),
+      })
+      return true
+    } catch (closeErr) {
+      log.error(
+        { provider: provider.name, deploymentId, err: closeErr },
+        'Failed to close dead deployment after failover failure'
+      )
+      return false
+    }
+  }
+}
+
 async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   const providers = getAvailableProviders()
   let totalReconciled = 0
@@ -167,22 +300,14 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
             if (count >= UNHEALTHY_THRESHOLD) {
               log.warn(
                 { provider: provider.name, deploymentId: id, failures: count, health: health?.overall },
-                'Deployment confirmed dead (unhealthy/404) — closing immediately'
+                'Deployment confirmed dead (unhealthy/404) — closing or failing over'
               )
-              try {
-                await provider.close(id)
-                totalReconciled++
-                auditHealthClose(prisma, sweepTraceId, provider.name, id, {
-                  reason: 'unhealthy',
-                  overall: health?.overall ?? '404',
-                  failures: count,
-                })
-              } catch (closeErr) {
-                log.error(
-                  { provider: provider.name, deploymentId: id, err: closeErr },
-                  'Failed to close dead deployment'
-                )
-              }
+              const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
+                reason: 'unhealthy',
+                overall: health?.overall ?? '404',
+                failures: count,
+              })
+              if (ok) totalReconciled++
               failureCounters.delete(counterKey)
             } else {
               log.debug(
@@ -197,22 +322,14 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
             if (count >= UNKNOWN_THRESHOLD) {
               log.warn(
                 { provider: provider.name, deploymentId: id, failures: count },
-                'Deployment returned unknown health for too many consecutive checks — closing'
+                'Deployment returned unknown health for too many consecutive checks — closing or failing over'
               )
-              try {
-                await provider.close(id)
-                totalReconciled++
-                auditHealthClose(prisma, sweepTraceId, provider.name, id, {
-                  reason: 'unknown_health',
-                  overall: 'unknown',
-                  failures: count,
-                })
-              } catch (closeErr) {
-                log.error(
-                  { provider: provider.name, deploymentId: id, err: closeErr },
-                  'Failed to close unknown-health deployment'
-                )
-              }
+              const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
+                reason: 'unknown_health',
+                overall: 'unknown',
+                failures: count,
+              })
+              if (ok) totalReconciled++
               failureCounters.delete(counterKey)
             }
           } else {
@@ -229,22 +346,14 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           if (count >= EXCEPTION_THRESHOLD) {
             log.warn(
               { provider: provider.name, deploymentId: id, failures: count },
-              'Health check exceptions exceeded threshold — closing'
+              'Health check exceptions exceeded threshold — closing or failing over'
             )
-            try {
-              await provider.close(id)
-              totalReconciled++
-              auditHealthClose(prisma, sweepTraceId, provider.name, id, {
-                reason: 'probe_exception',
-                failures: count,
-                probeError: err instanceof Error ? err.message : String(err),
-              })
-            } catch (closeErr) {
-              log.error(
-                { provider: provider.name, deploymentId: id, err: closeErr },
-                'Failed to close deployment after health-check exceptions'
-              )
-            }
+            const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
+              reason: 'probe_exception',
+              failures: count,
+              probeError: err instanceof Error ? err.message : String(err),
+            })
+            if (ok) totalReconciled++
             failureCounters.delete(counterKey)
           }
         }

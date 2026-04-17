@@ -127,6 +127,20 @@ export const typeDefs = /* GraphQL */ `
     Null until the runner has fired at least one probe. (Phase 42)
     """
     applicationHealth: ApplicationHealth
+    """
+    Optional health-aware auto-failover policy (Phase 43). Shape:
+    JSON object with enabled (boolean), maxAttempts (default 3, clamped 1-10),
+    and windowHours (default 24, clamped 1-720). When enabled, the sweeper
+    redeploys to a different provider on provider-side failures rather than
+    plain-closing the deployment. Refused for services with persistent
+    volumes (data-loss risk) and for application-side failures.
+    """
+    failoverPolicy: JSON
+    """
+    Live failover history derived from this service's deployment chain.
+    Null when no failover has ever fired for this service. (Phase 43)
+    """
+    failoverHistory: FailoverHistory
     internalHostname: String
     createdByUserId: ID
     parentServiceId: ID
@@ -212,6 +226,38 @@ export const typeDefs = /* GraphQL */ `
     lastStatus: Int
     lastError: String
     recentResults: [ProbeResult!]!
+  }
+
+  # ============================================
+  # FAILOVER HISTORY (Phase 43)
+  # ============================================
+
+  """
+  One entry in the failover chain for a service. Newest first. Each attempt
+  corresponds to one AkashDeployment row spawned by the sweeper after the
+  previous attempt was declared dead.
+  """
+  type FailoverAttempt {
+    deploymentId: ID!
+    parentDeploymentId: ID
+    provider: String
+    excludedProviders: [String!]!
+    status: String!
+    reason: String
+    createdAt: Date!
+    deployedAt: Date
+    closedAt: Date
+  }
+
+  """
+  Aggregated failover history. attemptsInWindow counts failover-spawned
+  deployments within the configured window (used for cap enforcement).
+  """
+  type FailoverHistory {
+    attemptsInWindow: Int!
+    maxAttempts: Int!
+    windowHours: Int!
+    chain: [FailoverAttempt!]!
   }
 
   # ============================================
@@ -417,6 +463,15 @@ export const typeDefs = /* GraphQL */ `
     timeoutSec (default 5, clamped 1-30).
     """
     healthProbe: JSON
+    """
+    Optional health-aware auto-failover policy (Phase 43). Pass null to
+    remove the policy; pass an object to set/replace it. Required key:
+    enabled (boolean). Optional keys: maxAttempts (default 3, clamped 1-10),
+    windowHours (default 24, clamped 1-720). Refused on services with
+    persistent volumes — that combination would silently lose data on a
+    failover event.
+    """
+    failoverPolicy: JSON
   }
 
   """
