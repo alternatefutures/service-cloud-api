@@ -6,7 +6,13 @@
  *
  * This client is the bridge between deployment operations (cloud-api)
  * and the wallet/balance system (auth service).
+ *
+ * Phase 44 D2: every outbound request forwards the current trace id via
+ * `X-AF-Trace-Id` so events on both sides of this call (debit in auth,
+ * deploy in cloud-api) share one trace id in the audit log.
  */
+
+import { currentTraceId } from '../../lib/audit.js'
 
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:1601'
 const INTROSPECTION_SECRET = process.env.AUTH_INTROSPECTION_SECRET || ''
@@ -66,6 +72,7 @@ class BillingApiClient {
       headers: {
         'Content-Type': 'application/json',
         'x-af-introspection-secret': this.secret,
+        'x-af-trace-id': currentTraceId(),
         ...options.headers,
       },
     })

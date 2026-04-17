@@ -789,6 +789,21 @@ export class ComputeBillingScheduler {
             })
           }
 
+          audit(this.prisma, {
+            category: 'billing',
+            action: 'balance.low_suspended',
+            status: 'warn',
+            orgId: deployment.escrow?.organizationId ?? undefined,
+            deploymentId: deployment.id,
+            payload: {
+              provider: 'akash',
+              dseq: deployment.dseq != null ? String(deployment.dseq) : null,
+              hourlyCostCents: deploymentHourlyCost,
+              balanceCentsAtSuspend: balanceCents,
+              remainingHourlyBurnAfter: remainingHourlyBurn - deploymentHourlyCost,
+            },
+          })
+
           remainingHourlyBurn -= deploymentHourlyCost
         } else {
           log.error(
@@ -874,6 +889,19 @@ export class ComputeBillingScheduler {
                 data: { reservedCents: 0, stopReason: 'BALANCE_LOW', stoppedAt },
               })
             }
+            audit(this.prisma, {
+              category: 'billing',
+              action: 'balance.low_suspended',
+              status: 'warn',
+              deploymentId: deployment.id,
+              payload: {
+                provider: 'phala',
+                appId: deployment.appId,
+                hourlyCostCents: deploymentHourlyCost,
+                balanceCentsAtSuspend: balanceCents,
+                remainingHourlyBurnAfter: remainingHourlyBurn - deploymentHourlyCost,
+              },
+            })
             remainingHourlyBurn -= deploymentHourlyCost
             pausedServices.push(`Phala: ${deployment.name} (priority=${(deployment as any).service?.shutdownPriority ?? 50})`)
           }

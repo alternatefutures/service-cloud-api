@@ -5,6 +5,7 @@ import {
   processFinalPhalaBilling,
   settleAkashEscrowToTime,
 } from '../billing/deploymentSettlement.js'
+import { audit } from '../../lib/audit.js'
 
 const log = createLogger('policy-enforcer')
 
@@ -117,29 +118,45 @@ export async function stopForPolicy(
     await getEscrowService(prisma).refundEscrow(policy.akashDeployment.id)
   }
 
-  if (policy.phalaDeployment) {
-    await processFinalPhalaBilling(
-      prisma,
-      policy.phalaDeployment.id,
-      now,
-      `policy_${reason.toLowerCase()}`
-    )
+    if (policy.phalaDeployment) {
+      await processFinalPhalaBilling(
+        prisma,
+        policy.phalaDeployment.id,
+        now,
+        `policy_${reason.toLowerCase()}`
+      )
 
-    try {
-      const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
-      const orchestrator = getPhalaOrchestrator(prisma)
-      await orchestrator.stopPhalaDeployment(policy.phalaDeployment.appId)
-    } catch (err) {
-      log.warn({ appId: policy.phalaDeployment.appId, err }, 'Failed to stop Phala CVM')
+      try {
+        const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
+        const orchestrator = getPhalaOrchestrator(prisma)
+        await orchestrator.stopPhalaDeployment(policy.phalaDeployment.appId)
+      } catch (err) {
+        log.warn({ appId: policy.phalaDeployment.appId, err }, 'Failed to stop Phala CVM')
+      }
+
+      await prisma.phalaDeployment.update({
+        where: { id: policy.phalaDeployment.id },
+        data: { status: 'STOPPED' },
+      })
     }
 
-    await prisma.phalaDeployment.update({
-      where: { id: policy.phalaDeployment.id },
-      data: { status: 'STOPPED' },
-    })
-  }
+    log.info({ policyId: policy.id, reason }, 'Deployment stopped by policy')
 
-  log.info({ policyId: policy.id, reason }, 'Deployment stopped by policy')
+    // Phase 44: single policy auto-stop audit event covers both providers.
+    // deploymentId falls through in provider-agnostic form; payload carries
+    // which provider actually received the stop call so filters can still
+    // split akash vs phala without touching the top-level shape.
+    audit(prisma, {
+      category: 'deployment',
+      action: 'policy.auto_stopped',
+      status: 'ok',
+      deploymentId: policy.akashDeployment?.id ?? policy.phalaDeployment?.id,
+      payload: {
+        reason,
+        policyId: policy.id,
+        provider: policy.akashDeployment ? 'akash' : 'phala',
+      },
+    })
 }
 
 /**

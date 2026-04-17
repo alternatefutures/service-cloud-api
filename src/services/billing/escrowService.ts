@@ -17,6 +17,7 @@ import { getBillingApiClient } from './billingApiClient.js'
 import { BILLING_CONFIG } from '../../config/billing.js'
 import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
+import { audit } from '../../lib/audit.js'
 
 const log = createLogger('escrow-service')
 
@@ -204,6 +205,24 @@ export class EscrowService {
     })
 
     log.info({ deploymentId: akashDeploymentId, refundedCents: remaining }, 'Refunded escrow for deployment')
+
+    // Phase 44: single audit hook for every refund path (SUSPENDED close,
+    // provider-close sweeper, ghost close, orphaned-escrow reconcile, policy
+    // enforcer, resume handler). Intentionally placed at the tail of the
+    // method so failures above don't produce misleading "ok" events.
+    audit(this.prisma, {
+      category: 'billing',
+      action: 'escrow.refunded',
+      status: 'ok',
+      orgId: escrow.organizationId,
+      deploymentId: akashDeploymentId,
+      payload: {
+        orgBillingId: escrow.orgBillingId,
+        depositCents: escrow.depositCents,
+        consumedCents: escrow.consumedCents,
+        refundedCents: remaining,
+      },
+    })
 
     return remaining
   }

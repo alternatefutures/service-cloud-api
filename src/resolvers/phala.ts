@@ -21,6 +21,7 @@ import type { TemplateResources, TemplateGpu } from '../templates/index.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
+import { audit } from '../lib/audit.js'
 
 const log = createLogger('resolver-phala')
 
@@ -466,6 +467,24 @@ export const phalaMutations = {
       'Starting Phala deployment'
     )
 
+    audit(context.prisma, {
+      category: 'deployment',
+      action: 'deployment.requested',
+      status: 'ok',
+      userId: context.userId,
+      orgId: context.organizationId ?? undefined,
+      projectId: service.project.id,
+      serviceId: service.id,
+      payload: {
+        provider: 'phala',
+        cvmSize: phalaInstance.cvmSize,
+        gpuModel: phalaInstance.gpuModel ?? null,
+        hourlyCostCents,
+        isTemplate: !!template,
+        dockerImage: template ? null : (service.dockerImage || input.baseImage || null),
+      },
+    })
+
     try {
       const deploymentId = await orchestrator.deployServicePhala(service.id, {
         composeContent,
@@ -496,6 +515,20 @@ export const phalaMutations = {
       return deployment
     } catch (error: any) {
       const msg = error.message || 'Unknown error'
+      audit(context.prisma, {
+        category: 'deployment',
+        action: 'deployment.submit_failed',
+        status: 'error',
+        userId: context.userId,
+        orgId: context.organizationId ?? undefined,
+        projectId: service.project.id,
+        serviceId: service.id,
+        errorMessage: msg,
+        payload: {
+          provider: 'phala',
+          cvmSize: phalaInstance.cvmSize,
+        },
+      })
       if (msg.includes('No available resources')) {
         throw new GraphQLError(
           `No Confidential GPU capacity available for ${phalaInstance.cvmSize}. ` +
@@ -557,6 +590,22 @@ export const phalaMutations = {
         data: { stopReason: 'MANUAL_STOP', stoppedAt, reservedCents: 0 },
       })
     }
+
+    audit(context.prisma, {
+      category: 'deployment',
+      action: 'lease.closed',
+      status: 'ok',
+      userId: context.userId,
+      orgId: context.organizationId ?? undefined,
+      projectId: deployment.service.project.id,
+      serviceId: deployment.serviceId,
+      deploymentId: deployment.id,
+      payload: {
+        provider: 'phala',
+        reason: 'manual_stop',
+        appId: deployment.appId,
+      },
+    })
 
     // Cancel any in-progress sibling/retry deployments for the same service
     const IN_PROGRESS_PHALA = ['CREATING', 'STARTING'] as const
