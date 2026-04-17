@@ -48,6 +48,7 @@ import {
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
 import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
+import { AuditExportScheduler } from './services/audit/auditExportScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
 import { handleAdminDeploymentStats } from './services/admin/deploymentStatsEndpoint.js'
 import { handleAdminBillingStats } from './services/admin/billingStatsEndpoint.js'
@@ -72,6 +73,7 @@ const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const escrowHealthMonitor = new EscrowHealthMonitor(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
+const auditExportScheduler = new AuditExportScheduler(prisma)
 let healthPrewarmerInterval: ReturnType<typeof setInterval> | null = null
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
 const jwtSecret = process.env.JWT_SECRET
@@ -316,6 +318,7 @@ server.listen(port, () => {
   computeBillingScheduler.start()
   escrowHealthMonitor.start()
   providerRegistryScheduler.start()
+  auditExportScheduler.start()
   providerVerificationScheduler.start()
   telemetryIngestionService.start()
   log.info('billing + provider registry + verification schedulers started')
@@ -349,6 +352,7 @@ async function gracefulShutdown(signal: string) {
   escrowHealthMonitor.stop()
   providerRegistryScheduler.stop()
   providerVerificationScheduler.stop()
+  auditExportScheduler.stop()
   if (healthPrewarmerInterval) clearInterval(healthPrewarmerInterval)
 
   const forceExitTimeout = setTimeout(() => {
