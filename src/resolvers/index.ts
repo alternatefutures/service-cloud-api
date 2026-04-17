@@ -1571,7 +1571,11 @@ export const resolvers = {
         input,
       }: {
         serviceId: string
-        input: { dockerImage?: string | null; containerPort?: number | null }
+        input: {
+          dockerImage?: string | null
+          containerPort?: number | null
+          volumes?: Array<{ name: string; mountPath: string; size: string }> | null
+        }
       },
       context: Context
     ) => {
@@ -1607,7 +1611,15 @@ export const resolvers = {
         )
       }
 
-      const data: { dockerImage?: string | null; containerPort?: number | null } = {}
+      // Prisma JSON columns require either an InputJsonValue or `JsonNull`.
+      // We use `any` for the volumes entry to avoid pulling Prisma types into
+      // this file purely for one optional field; runtime validation below is
+      // strict.
+      const data: {
+        dockerImage?: string | null
+        containerPort?: number | null
+        volumes?: any
+      } = {}
 
       if (Object.prototype.hasOwnProperty.call(input, 'dockerImage')) {
         const raw = input.dockerImage
@@ -1644,6 +1656,58 @@ export const resolvers = {
             throw new GraphQLError('containerPort must be an integer between 1 and 65535.')
           }
           data.containerPort = port
+        }
+      }
+
+      // Volumes (Phase 38) — persistent storage attached to raw Docker images.
+      // Templates own their volume layout via template.persistentStorage and
+      // ignore this field. We validate strictly here to keep the SDL builder
+      // simple downstream.
+      if (Object.prototype.hasOwnProperty.call(input, 'volumes')) {
+        const v = input.volumes
+        if (v === null) {
+          data.volumes = null
+        } else if (Array.isArray(v)) {
+          if (v.length > 4) {
+            throw new GraphQLError('At most 4 volumes are allowed per service.')
+          }
+          const seenNames = new Set<string>()
+          const seenMounts = new Set<string>()
+          const cleaned = v.map((vol, idx) => {
+            if (!vol || typeof vol !== 'object') {
+              throw new GraphQLError(`volumes[${idx}] must be an object with name, mountPath, and size.`)
+            }
+            const name = String((vol as any).name ?? '').trim()
+            const mountPath = String((vol as any).mountPath ?? '').trim()
+            const size = String((vol as any).size ?? '').trim()
+            if (!/^[a-z][a-z0-9-]{0,30}$/.test(name)) {
+              throw new GraphQLError(
+                `volumes[${idx}].name must be lowercase letters/digits/hyphens, start with a letter, max 31 chars.`
+              )
+            }
+            if (seenNames.has(name)) {
+              throw new GraphQLError(`Duplicate volume name "${name}". Names must be unique within a service.`)
+            }
+            seenNames.add(name)
+            if (!mountPath.startsWith('/') || mountPath.length > 4096 || /\/$/.test(mountPath)) {
+              throw new GraphQLError(
+                `volumes[${idx}].mountPath must be an absolute path without a trailing slash (e.g. "/data").`
+              )
+            }
+            if (seenMounts.has(mountPath)) {
+              throw new GraphQLError(`Duplicate mountPath "${mountPath}". Each volume must mount to a distinct path.`)
+            }
+            seenMounts.add(mountPath)
+            if (!/^\d+(Mi|Gi|Ti)$/.test(size)) {
+              throw new GraphQLError(
+                `volumes[${idx}].size must be a number followed by Mi, Gi, or Ti (e.g. "5Gi", "100Mi").`
+              )
+            }
+            return { name, mountPath, size }
+          })
+          data.volumes = cleaned
+        } else {
+          throw new GraphQLError('volumes must be an array of { name, mountPath, size } objects, or null to clear.')
         }
       }
 
