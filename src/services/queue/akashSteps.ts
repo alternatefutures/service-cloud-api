@@ -471,6 +471,7 @@ export async function handleCheckBids(
       dseq: true,
       retryCount: true,
       status: true,
+      excludedProviders: true,
     },
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
@@ -554,14 +555,25 @@ export async function handleCheckBids(
       data: { status: 'SELECTING_BID' },
     })
 
-    const filteredBids = providerSelector.filterBids(bids as any, 'standalone')
+    // Phase 43 — when this deployment was spawned by a failover, the
+    // excludedProviders array carries every provider this chain has already
+    // tried. We skip them at the safety filter so we never fail back onto a
+    // known-bad host.
+    const excludeSet =
+      deployment.excludedProviders && deployment.excludedProviders.length > 0
+        ? new Set<string>(deployment.excludedProviders)
+        : undefined
+    const filteredBids = providerSelector.filterBids(bids as any, 'standalone', excludeSet)
     let safeBids = filteredBids.filter(b => b.isSafe)
 
     if (safeBids.length === 0) {
+      const errMsg = excludeSet
+        ? `No safe bids available — every bidder is blocked or in the failover exclusion list (${excludeSet.size} excluded)`
+        : 'No safe bids available - all providers are blocked'
       await enqueueNext('/queue/akash/step', {
         step: 'HANDLE_FAILURE',
         deploymentId,
-        errorMessage: 'No safe bids available - all providers are blocked',
+        errorMessage: errMsg,
       } satisfies AkashHandleFailurePayload)
       return
     }

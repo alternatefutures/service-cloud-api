@@ -258,6 +258,7 @@ model Service {
   containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
   volumes         Json?       // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
   healthProbe     Json?       // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
+  failoverPolicy  Json?       // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null. (Phase 43)
   internalHostname String?    // Deterministic hostname: {slug}.{project-slug}.internal
   createdByUserId String?
   parentServiceId String?     // Companion services share the parent's deployment lifecycle
@@ -1088,6 +1089,16 @@ model AkashDeployment {
   parentDeploymentId String?          // Links retries to the original deployment
   qstashMessageId String?             // For cancellation of pending QStash messages
 
+  // Phase 43 — health-aware auto-failover.
+  // failoverParentId chains deployments that were spawned because the previous
+  // deployment was declared dead by the sweeper (vs parentDeploymentId, which
+  // links queue-step retries within a single deploy attempt).
+  // excludedProviders accumulates per-chain bad providers so successive
+  // failovers don't pick the same dead host.
+  failoverParentId    String?         @map("failover_parent_id")
+  excludedProviders   String[]        @default([]) @map("excluded_providers")
+  failoverReason      String?         @map("failover_reason")
+
   // Cost display (computed at lease creation, includes margin)
   dailyRateCentsRaw     Int?          // Raw provider cost per day in cents
   dailyRateCentsCharged Int?          // Cost after margin per day in cents
@@ -1108,6 +1119,7 @@ model AkashDeployment {
   @@index([siteId])
   @@index([status])
   @@index([dseq])
+  @@index([failoverParentId])
 }
 
 enum AkashDeploymentStatus {
