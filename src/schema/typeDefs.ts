@@ -340,6 +340,22 @@ export const typeDefs = /* GraphQL */ `
   }
 
   """
+  Patch a Service registry entry's source-of-truth fields. Used by the
+  Source tab in the web app to let users set/update the Docker image
+  reference and container port for VM/raw services after creation.
+
+  Changes apply on the next deploy. The mutation rejects updates while
+  a deployment is in flight (CREATING/WAITING_BIDS/SELECTING_BID/
+  CREATING_LEASE/SENDING_MANIFEST/DEPLOYING) so the in-progress lease
+  isn't operating against stale fields. ACTIVE deployments are fine to
+  update against — the user must redeploy to pick the new values up.
+  """
+  input UpdateServiceInput {
+    dockerImage: String
+    containerPort: Int
+  }
+
+  """
   SDK compatibility input type for updating a function.
   Some clients (including the CLI/SDK) use UpdateAFFunctionDataInput.
   """
@@ -1887,6 +1903,7 @@ export const typeDefs = /* GraphQL */ `
 
     # Services
     createService(input: CreateServiceInput!): Service!
+    updateService(serviceId: ID!, input: UpdateServiceInput!): Service!
     updateServicePriority(serviceId: ID!, shutdownPriority: Int!): Service!
 
     # Sites

@@ -1557,6 +1557,108 @@ export const resolvers = {
       })
     },
 
+    /**
+     * updateService — patch the source-of-truth fields on a Service registry
+     * entry (currently `dockerImage` and `containerPort`). Powers the Source
+     * tab in the web app for VM/raw services. See typeDefs comment for full
+     * semantics. New backend mutation introduced for the Docker source UX
+     * work — there was previously no way to edit these fields after creation.
+     */
+    updateService: async (
+      _: unknown,
+      {
+        serviceId,
+        input,
+      }: {
+        serviceId: string
+        input: { dockerImage?: string | null; containerPort?: number | null }
+      },
+      context: Context
+    ) => {
+      requireAuth(context)
+
+      const service = await context.prisma.service.findUnique({
+        where: { id: serviceId },
+        include: {
+          project: { select: { userId: true, organizationId: true } },
+          akashDeployments: { select: { status: true } },
+        },
+      })
+      if (!service) throw new GraphQLError('Service not found')
+      assertProjectAccess(context, service.project, 'Not authorized to update this service')
+
+      // Block edits while any deployment is mid-flight on Akash. ACTIVE/FAILED/
+      // CLOSED/SUSPENDED/PERMANENTLY_FAILED are fine — the change applies on
+      // the next redeploy. Mirrors how Railway queues source changes.
+      const inFlight: string[] = [
+        'CREATING',
+        'WAITING_BIDS',
+        'SELECTING_BID',
+        'CREATING_LEASE',
+        'SENDING_MANIFEST',
+        'DEPLOYING',
+      ]
+      const blockingDeployment = service.akashDeployments.find(d =>
+        inFlight.includes(d.status as unknown as string)
+      )
+      if (blockingDeployment) {
+        throw new GraphQLError(
+          `Cannot update service while a deployment is in progress (status: ${blockingDeployment.status}). Wait for it to reach ACTIVE or FAILED, then try again.`
+        )
+      }
+
+      const data: { dockerImage?: string | null; containerPort?: number | null } = {}
+
+      if (Object.prototype.hasOwnProperty.call(input, 'dockerImage')) {
+        const raw = input.dockerImage
+        if (raw === null || raw === '') {
+          data.dockerImage = null
+        } else if (typeof raw === 'string') {
+          const trimmed = raw.trim()
+          // Permissive Docker image reference: registry/owner/name:tag or
+          // name@sha256:digest. Allow common chars; reject obvious junk.
+          if (!/^[a-zA-Z0-9._\-/:@]+$/.test(trimmed)) {
+            throw new GraphQLError(
+              'Invalid Docker image reference. Expected something like "ghcr.io/owner/repo:v1" or "nginx:1.25-alpine".'
+            )
+          }
+          // Akash providers cache by tag — `:latest` and `:main` will not
+          // re-pull on redeploy. See .cursor/rules/akash-sdl.mdc.
+          const tagMatch = trimmed.match(/:([^/@]+)$/)
+          const tag = tagMatch?.[1]
+          if (tag === 'latest' || tag === 'main') {
+            throw new GraphQLError(
+              `Tag "${tag}" cannot be used on Akash — providers cache by tag and won't re-pull. Use a versioned tag (e.g. ":v1", ":v2") or a digest.`
+            )
+          }
+          data.dockerImage = trimmed
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(input, 'containerPort')) {
+        const port = input.containerPort
+        if (port === null) {
+          data.containerPort = null
+        } else if (typeof port === 'number') {
+          if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            throw new GraphQLError('containerPort must be an integer between 1 and 65535.')
+          }
+          data.containerPort = port
+        }
+      }
+
+      if (Object.keys(data).length === 0) {
+        // Nothing to change — return the existing service rather than firing
+        // an empty UPDATE.
+        return service
+      }
+
+      return context.prisma.service.update({
+        where: { id: serviceId },
+        data,
+      })
+    },
+
     createAFFunction: async (
       _: unknown,
       {
