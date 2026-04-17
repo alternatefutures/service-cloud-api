@@ -55,7 +55,7 @@ import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInsta
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { ShellEndpoint } from './services/shell/shellEndpoint.js'
 import { createLogger } from './lib/logger.js'
-import { requestContext, getRequestId } from './lib/requestContext.js'
+import { requestContext, getRequestId, getTraceId } from './lib/requestContext.js'
 
 const log = createLogger('server')
 
@@ -173,9 +173,11 @@ const subdomainProxy = new SubdomainProxy(prisma)
 
 async function requestHandler(req: IncomingMessage, res: ServerResponse) {
   const requestId = getRequestId(req)
+  const traceId = getTraceId(req)
   res.setHeader('x-request-id', requestId)
+  res.setHeader('x-af-trace-id', traceId)
 
-  return requestContext.run({ requestId }, async () => {
+  return requestContext.run({ requestId, traceId }, async () => {
     const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
     // Subdomain proxy runs FIRST, before helmet/yoga

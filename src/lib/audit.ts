@@ -129,9 +129,14 @@ export async function withAudit<T>(
   }
 }
 
-/** Current trace id — the per-request requestId, or a fresh uuid. */
+/**
+ * Current trace id — the per-request `traceId` from AsyncLocalStorage
+ * (populated by the top-level request handler in `src/index.ts` from the
+ * `X-AF-Trace-Id` request header), or a fresh uuid for background jobs
+ * that live outside a request scope (billing tick, sweeper).
+ */
 export function currentTraceId(): string {
-  return requestContext.getStore()?.requestId ?? randomUUID()
+  return requestContext.getStore()?.traceId ?? randomUUID()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
