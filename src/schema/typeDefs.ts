@@ -115,6 +115,18 @@ export const typeDefs = /* GraphQL */ `
     Shape: Array<{ name: string; mountPath: string; size: string }>. (Phase 38)
     """
     volumes: JSON
+    """
+    Optional application HTTP health probe (Phase 42). Shape:
+    JSON object with path (required, must start with /), optional port,
+    expectStatus (default 200), intervalSec (default 30, clamped 10-3600),
+    and timeoutSec (default 5, clamped 1-30). Null when no probe is configured.
+    """
+    healthProbe: JSON
+    """
+    Live application-level health derived from the configured healthProbe.
+    Null until the runner has fired at least one probe. (Phase 42)
+    """
+    applicationHealth: ApplicationHealth
     internalHostname: String
     createdByUserId: ID
     parentServiceId: ID
@@ -169,6 +181,37 @@ export const typeDefs = /* GraphQL */ `
     protocol: String!
     createdAt: Date!
     updatedAt: Date!
+  }
+
+  # ============================================
+  # APPLICATION HEALTH (Phase 42)
+  # ============================================
+
+  """
+  Per-attempt result emitted by the application health runner.
+  Newest result is appended to ApplicationHealth.recentResults; the
+  buffer is capped at 20 entries per service.
+  """
+  type ProbeResult {
+    timestamp: Date!
+    ok: Boolean!
+    statusCode: Int
+    latencyMs: Int!
+    error: String
+  }
+
+  """
+  Aggregated application health derived from the in-memory probe ring buffer.
+  The "overall" field summarises the last 3 results: "healthy" if all pass,
+  "unhealthy" if all fail, "starting" if mixed, "unknown" if no probes
+  have run yet.
+  """
+  type ApplicationHealth {
+    overall: String!
+    lastChecked: Date
+    lastStatus: Int
+    lastError: String
+    recentResults: [ProbeResult!]!
   }
 
   # ============================================
@@ -366,6 +409,14 @@ export const typeDefs = /* GraphQL */ `
     Templates ignore this field. (Phase 38)
     """
     volumes: JSON
+    """
+    Optional application HTTP health probe (Phase 42). Pass null to remove
+    the probe; pass an object to set/replace it. Required key: path
+    (must start with "/"). Optional keys: port (1-65535), expectStatus
+    (HTTP code, default 200), intervalSec (default 30, clamped 10-3600),
+    timeoutSec (default 5, clamped 1-30).
+    """
+    healthProbe: JSON
   }
 
   """
