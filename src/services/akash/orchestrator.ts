@@ -15,10 +15,11 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { Prisma } from '@prisma/client'
 import type { PrismaClient, ServiceType } from '@prisma/client'
-import type { ShellSession } from '../providers/types.js'
+import type { ShellSession, LogStream } from '../providers/types.js'
 import { providerSelector } from './providerSelector.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getAkashEnv } from '../../lib/akashEnv.js'
+import { spawnLogStream } from './spawnLogStream.js'
 import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
 import { withWalletLock, isWalletTx } from './walletMutex.js'
@@ -883,6 +884,35 @@ export class AkashOrchestrator {
       log.warn(`getLogs failed for dseq=${dseq}: ${msg}`)
       throw new Error(`Failed to fetch logs for dseq=${dseq}: ${msg}`)
     }
+  }
+
+  /**
+   * Spawn `provider-services lease-logs --follow` as a long-lived child
+   * process and expose the stdout as a line-oriented stream. Used by the SSE
+   * log-streaming endpoint. Caller MUST invoke `close()` on disconnect.
+   *
+   * The child process is the source of truth — when it exits we emit
+   * `onClose`. We do not auto-restart: a restarted process would re-emit the
+   * existing tail, double-printing lines clients already saw.
+   */
+  streamLogs(
+    dseq: number,
+    provider: string,
+    service?: string,
+    tail = 50,
+  ): LogStream {
+    const args = [
+      'lease-logs',
+      '--dseq', String(dseq),
+      '--provider', provider,
+      '--follow',
+    ]
+    if (service) args.push('--service', service)
+    if (tail > 0) args.push('--tail', String(tail))
+
+    const env = getAkashEnv()
+    log.info(`Spawning log stream: provider-services ${args.join(' ')}`)
+    return spawnLogStream('provider-services', args, env)
   }
 
   /**

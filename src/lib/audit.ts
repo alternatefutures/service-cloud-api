@@ -37,6 +37,7 @@ export type AuditCategory =
   | 'deployment'
   | 'provider'
   | 'health'
+  | 'logs'
   | 'ai-proxy'
   | 'cron'
   | 'system'
