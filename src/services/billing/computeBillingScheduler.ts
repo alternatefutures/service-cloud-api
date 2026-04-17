@@ -19,10 +19,12 @@ import {
   settleAkashEscrowToTime,
 } from './deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
+import { audit } from '../../lib/audit.js'
 import { checkPolicyLimits } from '../policy/enforcer.js'
 import { getAkashOrchestrator } from '../akash/orchestrator.js'
 import { opsAlert } from '../../lib/opsAlert.js'
 import { BLOCKS_PER_HOUR } from '../../config/akash.js'
+import { randomUUID } from 'node:crypto'
 
 const log = createLogger('compute-billing')
 
@@ -126,7 +128,12 @@ export class ComputeBillingScheduler {
     this.running = true
 
     const startTime = Date.now()
-    log.info('Starting hourly billing cycle')
+    // Shared trace id for every audit event produced by this tick. Makes it
+    // trivial to fetch "everything that happened in cycle X" from the audit
+    // log (Phase 44). Child processors (processAkashEscrows etc.) can adopt
+    // it once D2 wires a scheduler-scoped AsyncLocalStorage.
+    const tickTraceId = randomUUID()
+    log.info({ tickTraceId }, 'Starting hourly billing cycle')
 
     const stats = {
       akashProcessed: 0,
@@ -176,8 +183,38 @@ export class ComputeBillingScheduler {
         },
         'Cycle complete'
       )
+
+      // Phase 44 audit: one event per tick carrying the full stats blob.
+      // status=warn when any provider errored but the cycle otherwise
+      // completed; status=error lives in the catch block below.
+      const hadErrors = stats.akashErrors > 0 || stats.phalaErrors > 0
+      audit(this.prisma, {
+        traceId: tickTraceId,
+        source: 'cron',
+        category: 'billing',
+        action: 'billing.hourly_tick',
+        status: hadErrors ? 'warn' : 'ok',
+        durationMs: duration,
+        payload: {
+          ...stats,
+          policyBudgetStopped: policyStats.budgetStopped,
+          policyRuntimeExpired: policyStats.runtimeExpired,
+          forceMode: this.forceMode,
+          noPauseMode: this.noPauseMode,
+        },
+      })
     } catch (error) {
       log.error(error, 'Fatal error in billing cycle')
+      audit(this.prisma, {
+        traceId: tickTraceId,
+        source: 'cron',
+        category: 'billing',
+        action: 'billing.hourly_tick',
+        status: 'error',
+        durationMs: Date.now() - startTime,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        payload: { ...stats, forceMode: this.forceMode, noPauseMode: this.noPauseMode },
+      })
     } finally {
       this.running = false
     }
