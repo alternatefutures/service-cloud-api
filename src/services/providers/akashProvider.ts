@@ -24,6 +24,8 @@ import type {
   ContainerStatus,
   OverallHealth,
   LogOptions,
+  LogStream,
+  LogStreamOptions,
   ShellOptions,
   ShellSession,
   ProviderCapabilities,
@@ -363,6 +365,32 @@ export class AkashProvider implements DeploymentProvider {
     )
   }
 
+  async streamLogs(deploymentId: string, opts?: LogStreamOptions): Promise<LogStream> {
+    const deployment = await this.prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      include: { service: { select: { sdlServiceName: true, slug: true } } },
+    })
+    if (!deployment || !deployment.provider) {
+      throw new Error(`Akash deployment not found or has no provider: ${deploymentId}`)
+    }
+    if (deployment.status !== 'ACTIVE') {
+      throw new Error(`Cannot stream logs: deployment is ${deployment.status}, not ACTIVE`)
+    }
+
+    const sdlServiceName = opts?.service
+      || deployment.service?.sdlServiceName
+      || deployment.service?.slug
+      || undefined
+
+    const orchestrator = getAkashOrchestrator(this.prisma)
+    return orchestrator.streamLogs(
+      Number(deployment.dseq),
+      deployment.provider,
+      sdlServiceName,
+      opts?.tail ?? 50,
+    )
+  }
+
   async getShell(deploymentId: string, opts?: ShellOptions): Promise<ShellSession> {
     const deployment = await this.prisma.akashDeployment.findUnique({
       where: { id: deploymentId },
@@ -391,7 +419,7 @@ export class AkashProvider implements DeploymentProvider {
   getCapabilities(): ProviderCapabilities {
     return {
       supportsStop: false,
-      supportsLogStreaming: false,
+      supportsLogStreaming: true,
       supportsTEE: false,
       supportsPersistentStorage: true,
       supportsWebSocket: true,

@@ -56,6 +56,7 @@ import { handleAdminAuditEvents } from './services/admin/auditEventsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { ShellEndpoint } from './services/shell/shellEndpoint.js'
+import { LogStreamEndpoint } from './services/logs/logStreamEndpoint.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId, getTraceId } from './lib/requestContext.js'
 
@@ -268,6 +269,14 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
       return
     }
 
+    {
+      const sseServiceId = LogStreamEndpoint.matchPath(url.pathname)
+      if (sseServiceId && req.method === 'GET') {
+        await logStreamEndpoint.handle(req, res, sseServiceId)
+        return
+      }
+    }
+
     if (url.pathname === '/queue/akash/step' && req.method === 'POST') {
       await handleAkashWebhook(req, res)
       return
@@ -292,6 +301,9 @@ const chatServer = new ChatServer(prisma, effectiveJwtSecret)
 
 // Initialize Shell WebSocket Server
 const shellEndpoint = new ShellEndpoint(prisma, effectiveJwtSecret)
+
+// Initialize SSE log streaming endpoint (Phase 41)
+const logStreamEndpoint = new LogStreamEndpoint(prisma, effectiveJwtSecret)
 
 // Handle WebSocket upgrade for /ws path and proxied subdomains
 server.on('upgrade', async (request, socket, head) => {
@@ -373,6 +385,7 @@ async function gracefulShutdown(signal: string) {
   server.close(async () => {
     try {
       shellEndpoint.shutdown()
+      logStreamEndpoint.shutdown()
       await chatServer.shutdown()
       await usageAggregator.shutdown()
       await telemetryIngestionService.stop()
