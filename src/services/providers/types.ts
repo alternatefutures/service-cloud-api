@@ -77,6 +77,33 @@ export interface ShellSession {
   kill(): void
 }
 
+// ─── Log streaming ───────────────────────────────────────────────
+
+export interface LogStreamOptions {
+  /** Specific service/container within the deployment. */
+  service?: string
+  /** Optional initial tail before live-follow begins. */
+  tail?: number
+}
+
+/**
+ * Long-lived log stream. The provider spawns whatever underlying process
+ * (CLI subprocess, websocket, REST chunked response) and exposes a uniform
+ * line-oriented interface that the SSE endpoint can fan out to clients.
+ *
+ * Implementations MUST:
+ *   - emit `onLine` for every full line of provider output (no trailing \n)
+ *   - emit `onError` for fatal stream errors (after which the stream is dead)
+ *   - emit `onClose` exactly once with the underlying exit code (or null)
+ *   - stop emitting and release all resources after `close()` is called
+ */
+export interface LogStream {
+  onLine(callback: (line: string) => void): void
+  onError(callback: (err: Error) => void): void
+  onClose(callback: (code: number | null) => void): void
+  close(): void
+}
+
 // ─── Deployment result ───────────────────────────────────────────
 
 export interface DeploymentResult {
@@ -217,6 +244,13 @@ export interface DeploymentProvider {
    * Returns a ShellSession that the caller pipes to a WebSocket or terminal.
    */
   getShell?(deploymentId: string, opts?: ShellOptions): Promise<ShellSession>
+
+  /**
+   * Open a long-lived log stream. The SSE endpoint pipes each emitted line
+   * to connected clients. Only providers with `supportsLogStreaming: true`
+   * implement this — others fall back to point-in-time `getLogs`.
+   */
+  streamLogs?(deploymentId: string, opts?: LogStreamOptions): Promise<LogStream>
 
   /**
    * Provider-specific capabilities and metadata.
