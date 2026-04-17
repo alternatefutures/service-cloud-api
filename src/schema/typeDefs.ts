@@ -110,6 +110,11 @@ export const typeDefs = /* GraphQL */ `
     templateId: ID
     dockerImage: String
     containerPort: Int
+    """
+    Persistent volumes for raw Docker images. Templates use template.persistentStorage instead.
+    Shape: Array<{ name: string; mountPath: string; size: string }>. (Phase 38)
+    """
+    volumes: JSON
     internalHostname: String
     createdByUserId: ID
     parentServiceId: ID
@@ -353,6 +358,14 @@ export const typeDefs = /* GraphQL */ `
   input UpdateServiceInput {
     dockerImage: String
     containerPort: Int
+    """
+    Persistent volumes for raw Docker images. Pass an empty array to clear all
+    volumes; pass null to leave unchanged. Each volume requires "name"
+    (lowercase letters/digits/hyphen, max 31 chars), "mountPath" (absolute,
+    no trailing slash), and "size" (e.g. "5Gi", "100Mi"). Max 4 per service.
+    Templates ignore this field. (Phase 38)
+    """
+    volumes: JSON
   }
 
   """

@@ -35,6 +35,39 @@ const SERVICE_POLL_MAX_ATTEMPTS = 24
 /** Default Akash deposit in uact (1 ACT — buffer for bid/lease process). */
 export const DEFAULT_DEPOSIT_UACT = 1_000_000
 
+/**
+ * Phase 38 — persistent volume attached to a raw Docker image. Mirrors the
+ * shape used by `template.persistentStorage` so the SDL builders stay in sync.
+ * Shape is also enforced by the `updateService` resolver before persistence,
+ * but we re-validate at SDL build time as a defence-in-depth check (a
+ * malformed entry slipping through makes Akash reject the entire deploy with
+ * an opaque parse error).
+ */
+export interface ServiceVolume {
+  name: string
+  mountPath: string
+  size: string
+}
+
+const VOLUME_NAME_RE = /^[a-z][a-z0-9-]{0,30}$/
+const VOLUME_SIZE_RE = /^\d+(Mi|Gi|Ti)$/
+
+export function parseServiceVolumes(raw: unknown): ServiceVolume[] {
+  if (!Array.isArray(raw)) return []
+  const out: ServiceVolume[] = []
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue
+    const name = String((entry as any).name ?? '').trim()
+    const mountPath = String((entry as any).mountPath ?? '').trim()
+    const size = String((entry as any).size ?? '').trim()
+    if (!VOLUME_NAME_RE.test(name)) continue
+    if (!mountPath.startsWith('/') || /\/$/.test(mountPath)) continue
+    if (!VOLUME_SIZE_RE.test(size)) continue
+    out.push({ name, mountPath, size })
+  }
+  return out
+}
+
 // Fixed by audit 2026-03: use execFileSync to prevent shell injection (was execSync with string concat)
 function runAkash(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): string {
   const env = getAkashEnv()
@@ -1139,6 +1172,9 @@ export class AkashOrchestrator {
     templateId?: string | null
     containerPort?: number | null
     dockerImage?: string | null
+    // Phase 38 — persistent volumes for raw Docker images. Json column on
+    // Service. Templates own their own volumes via template.persistentStorage.
+    volumes?: unknown
     site?: { id: string } | null
     afFunction?: { id: string; sourceCode: string | null } | null
   }, resourceOverrides?: {
@@ -1222,14 +1258,17 @@ export class AkashOrchestrator {
     const effectiveImage = service.dockerImage || baseImage
     if (effectiveImage) {
       const port = service.containerPort || 80
+      const parsedVolumes = parseServiceVolumes(service.volumes)
       log.info(
+        { volumes: parsedVolumes.length },
         `Generating SDL for Docker image '${effectiveImage}' (port ${port}) for service '${service.slug}'`
       )
       return this.generateCustomDockerSDL(
         service.slug,
         effectiveImage,
         port,
-        resourceOverrides
+        resourceOverrides,
+        parsedVolumes
       )
     }
 
@@ -1369,7 +1408,8 @@ export class AkashOrchestrator {
       memory?: string
       storage?: string
       gpu?: { units: number; vendor: string; model?: string } | null
-    }
+    },
+    volumes: ServiceVolume[] = []
   ): string {
     const needsKeepAlive = /^(ubuntu|debian|alpine|centos|fedora|busybox|amazonlinux|rockylinux|almalinux)(:|$)/i.test(image)
 
@@ -1383,7 +1423,7 @@ export class AkashOrchestrator {
 
     const cpu = resourceOverrides?.cpu ?? 0.5
     const memory = resourceOverrides?.memory ?? '512Mi'
-    const storage = resourceOverrides?.storage ?? '1Gi'
+    const ephemeralStorage = resourceOverrides?.storage ?? '1Gi'
     const gpu = resourceOverrides?.gpu
 
     let gpuBlock = ''
@@ -1401,6 +1441,33 @@ export class AkashOrchestrator {
               ${gpu.vendor}:${modelLine}`
     }
 
+    // Phase 38 — emit `params.storage.<name>` mounts and named storage entries
+    // matching the template generator (templates/sdl.ts:buildStorageProfileBlock).
+    // Akash requires named storage entries to declare `persistent: true` and
+    // `class: beta3` so the provider picks a backing volume that survives pod
+    // restarts.
+    const paramsBlock = volumes.length > 0
+      ? `    params:
+      storage:
+${volumes.map(v => `        ${v.name}:\n          mount: ${v.mountPath}\n          readOnly: false`).join('\n')}
+`
+      : ''
+
+    const ephemeralLine = `          - size: ${ephemeralStorage}`
+    const namedStorageLines = volumes
+      .map(v => `          - name: ${v.name}\n            size: ${v.size}\n            attributes:\n              persistent: true\n              class: beta3`)
+      .join('\n')
+    const storageBlock = volumes.length > 0
+      ? `${ephemeralLine}\n${namedStorageLines}`
+      : `          - size: ${ephemeralStorage}`
+
+    // When using named (non-ephemeral) storage, the resources block uses an
+    // ARRAY syntax (one entry per storage). When only the default ephemeral
+    // exists, Akash also accepts the legacy `storage: { size: "1Gi" }` shape.
+    // Use the array form unconditionally — both work and the array keeps the
+    // builder branch-free.
+    const storageProfile = `        storage:\n${storageBlock}`
+
     return `---
 version: "2.0"
 
@@ -1412,7 +1479,7 @@ ${argsBlock}    expose:
         as: 80
         to:
           - global: true
-
+${paramsBlock}
 profiles:
   compute:
     ${name}:
@@ -1421,8 +1488,7 @@ profiles:
           units: ${cpu}
         memory:
           size: ${memory}
-        storage:
-          size: ${storage}${gpuBlock}
+${storageProfile}${gpuBlock}
 
   placement:
     dcloud:

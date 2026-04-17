@@ -256,6 +256,7 @@ model Service {
   templateId      String?
   dockerImage     String?     // Custom Docker image (e.g. ghcr.io/org/app:v1)
   containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
+  volumes         Json?       // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
   internalHostname String?    // Deterministic hostname: {slug}.{project-slug}.internal
   createdByUserId String?
   parentServiceId String?     // Companion services share the parent's deployment lifecycle
