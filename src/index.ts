@@ -34,6 +34,7 @@ import { initInfisical } from './config/infisical.js'
 import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
 import { AkashOrchestrator } from './services/akash/orchestrator.js'
 import { startHealthPrewarmer } from './services/providers/akashProvider.js'
+import { startApplicationHealthRunner, stopApplicationHealthRunner } from './services/health/applicationHealthRunner.js'
 import {
   registerProvider,
   createAkashProvider,
@@ -360,6 +361,7 @@ server.listen(port, () => {
 
   startStaleDeploymentSweeper(prisma)
   healthPrewarmerInterval = startHealthPrewarmer(prisma)
+  startApplicationHealthRunner(prisma)
 })
 
 async function gracefulShutdown(signal: string) {
@@ -372,6 +374,7 @@ async function gracefulShutdown(signal: string) {
   providerVerificationScheduler.stop()
   auditExportScheduler.stop()
   if (healthPrewarmerInterval) clearInterval(healthPrewarmerInterval)
+  stopApplicationHealthRunner()
 
   const forceExitTimeout = setTimeout(() => {
     log.warn('Graceful shutdown timed out after 15s — forcing exit')

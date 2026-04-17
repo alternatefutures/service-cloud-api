@@ -1575,6 +1575,13 @@ export const resolvers = {
           dockerImage?: string | null
           containerPort?: number | null
           volumes?: Array<{ name: string; mountPath: string; size: string }> | null
+          healthProbe?: {
+            path: string
+            port?: number | null
+            expectStatus?: number
+            intervalSec?: number
+            timeoutSec?: number
+          } | null
         }
       },
       context: Context
@@ -1619,6 +1626,7 @@ export const resolvers = {
         dockerImage?: string | null
         containerPort?: number | null
         volumes?: any
+        healthProbe?: any
       } = {}
 
       if (Object.prototype.hasOwnProperty.call(input, 'dockerImage')) {
@@ -1708,6 +1716,56 @@ export const resolvers = {
           data.volumes = cleaned
         } else {
           throw new GraphQLError('volumes must be an array of { name, mountPath, size } objects, or null to clear.')
+        }
+      }
+
+      // Health probe (Phase 42) — application-level HTTP probe configured per
+      // service. Defaults applied at runtime by `ApplicationHealthRunner`, so
+      // here we only validate field shape + ranges and refuse anything weird.
+      if (Object.prototype.hasOwnProperty.call(input, 'healthProbe')) {
+        const probe = input.healthProbe
+        if (probe === null) {
+          data.healthProbe = null
+        } else if (typeof probe === 'object') {
+          const path = typeof probe.path === 'string' ? probe.path.trim() : ''
+          if (!path.startsWith('/')) {
+            throw new GraphQLError('healthProbe.path must start with "/" (e.g. "/health").')
+          }
+          if (path.length > 2048) {
+            throw new GraphQLError('healthProbe.path is too long (max 2048 chars).')
+          }
+          const cleaned: Record<string, unknown> = { path }
+          if (probe.port !== undefined && probe.port !== null) {
+            const port = Number(probe.port)
+            if (!Number.isInteger(port) || port < 1 || port > 65535) {
+              throw new GraphQLError('healthProbe.port must be an integer between 1 and 65535.')
+            }
+            cleaned.port = port
+          }
+          if (probe.expectStatus !== undefined) {
+            const status = Number(probe.expectStatus)
+            if (!Number.isInteger(status) || status < 100 || status > 599) {
+              throw new GraphQLError('healthProbe.expectStatus must be an HTTP status code between 100 and 599.')
+            }
+            cleaned.expectStatus = status
+          }
+          if (probe.intervalSec !== undefined) {
+            const n = Number(probe.intervalSec)
+            if (!Number.isInteger(n) || n < 10 || n > 3600) {
+              throw new GraphQLError('healthProbe.intervalSec must be an integer between 10 and 3600 seconds.')
+            }
+            cleaned.intervalSec = n
+          }
+          if (probe.timeoutSec !== undefined) {
+            const n = Number(probe.timeoutSec)
+            if (!Number.isInteger(n) || n < 1 || n > 30) {
+              throw new GraphQLError('healthProbe.timeoutSec must be an integer between 1 and 30 seconds.')
+            }
+            cleaned.timeoutSec = n
+          }
+          data.healthProbe = cleaned
+        } else {
+          throw new GraphQLError('healthProbe must be an object with at least { path }, or null to clear.')
         }
       }
 
@@ -2103,6 +2161,27 @@ export const resolvers = {
       return context.prisma.aFFunction.findUnique({
         where: { serviceId: parent.id },
       })
+    },
+    /**
+     * applicationHealth — live read from the in-memory ring buffer maintained
+     * by `ApplicationHealthRunner`. Returns null when no probe is configured
+     * or the runner hasn't observed this service yet (the dashboard renders
+     * a grey "no data" badge in that case). (Phase 42)
+     */
+    applicationHealth: async (parent: any) => {
+      if (!parent?.id || !parent?.healthProbe) return null
+      const { getApplicationHealthRunner } = await import('../services/health/applicationHealthRunner.js')
+      const runner = getApplicationHealthRunner()
+      const snap = runner.getSnapshot(parent.id)
+      if (!snap) return null
+      const last = snap.results[snap.results.length - 1]
+      return {
+        overall: runner.getOverall(parent.id),
+        lastChecked: snap.lastChecked,
+        lastStatus: last?.statusCode ?? null,
+        lastError: last?.error ?? null,
+        recentResults: snap.results,
+      }
     },
     // Merge Akash-related Service field resolvers (akashDeployments, activeAkashDeployment)
     ...(akashFieldResolvers.Service ?? {}),
