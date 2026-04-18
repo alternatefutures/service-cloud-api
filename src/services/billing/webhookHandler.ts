@@ -9,6 +9,7 @@ import Stripe from 'stripe'
 import type { PrismaClient } from '@prisma/client'
 import { StripeService } from './stripeService.js'
 import { createLogger } from '../../lib/logger.js'
+import { audit } from '../../lib/audit.js'
 
 const log = createLogger('webhook-handler')
 
@@ -62,6 +63,15 @@ export async function handleStripeWebhook(
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
     } catch (err) {
       log.error(err, 'Webhook signature verification failed')
+      // Audit signature failures — repeated misses on this endpoint
+      // would indicate a misconfigured webhook secret OR a forged
+      // webhook attempt. Either way, on-call wants to know.
+      audit(prisma, {
+        category: 'billing',
+        action: 'stripe.webhook.signature_invalid',
+        status: 'error',
+        errorMessage: (err as { message?: string })?.message ?? String(err),
+      })
       res.writeHead(400, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Invalid signature' }))
       return
@@ -70,15 +80,32 @@ export async function handleStripeWebhook(
     log.info({ eventType: event.type }, 'Received Stripe webhook')
 
     // Handle the event with StripeService
+    const startedAt = Date.now()
     try {
       const stripeService = new StripeService(prisma)
       await stripeService.handleWebhookEvent(event)
+
+      audit(prisma, {
+        category: 'billing',
+        action: `stripe.webhook.${event.type}`,
+        status: 'ok',
+        durationMs: Date.now() - startedAt,
+        payload: { eventId: event.id, livemode: event.livemode },
+      })
 
       // Return a 200 response to acknowledge receipt
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ received: true }))
     } catch (err) {
       log.error(err, 'Error processing webhook')
+      audit(prisma, {
+        category: 'billing',
+        action: `stripe.webhook.${event.type}`,
+        status: 'error',
+        durationMs: Date.now() - startedAt,
+        errorMessage: (err as { message?: string })?.message ?? String(err),
+        payload: { eventId: event.id, livemode: event.livemode },
+      })
       res.writeHead(500, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Processing failed' }))
     }
