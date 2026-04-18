@@ -10,6 +10,12 @@ on:
       - "pnpm-lock.yaml"
       - "Dockerfile"
       - "docker-entrypoint.sh"
+      # Supply-chain config — a waiver edit must re-deploy or the new
+      # ignore list never reaches staging.
+      - ".trivyignore.yaml"
+      # The workflow itself — otherwise a workflow-only fix sits on
+      # develop without re-running.
+      - ".github/workflows/deploy-aws-staging.yml"
   workflow_dispatch:
 
 concurrency:
@@ -28,6 +34,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # keyless cosign signing via Sigstore OIDC
+      security-events: write   # upload Trivy SARIF to code scanning
 
     steps:
       - name: Checkout into service-cloud-api subdirectory
@@ -51,8 +59,13 @@ jobs:
           push: true
           platforms: linux/amd64
           provenance: false
+          # IMPORTANT: :staging is the rolling pointer staging pulls
+          # (imagePullPolicy:Always). It is only promoted after the
+          # supply-chain gate, rollout, and health check all pass
+          # (see "Promote :staging tag" below). The per-commit
+          # :staging-{sha} tag is fine to publish unconditionally for
+          # traceability and rollback.
           tags: |
-            ${{ env.IMAGE }}:staging
             ${{ env.IMAGE }}:staging-${{ github.sha }}
 
       - name: Resolve immutable image reference
@@ -68,11 +81,128 @@ jobs:
           echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
           echo "Pinned image: ${IMAGE_REF}"
 
+      # ---------------------------------------------------------------
+      # Supply-chain: cosign keyless signing, SBOM (syft), trivy scan.
+      # Staging runs the same gate as production so toolchain breakage
+      # (e.g. a Trivy version yank, a new CRITICAL CVE in akash) is
+      # caught here first. Set SUPPLY_CHAIN_DISABLED=true on the run
+      # to skip during an incident; flip SUPPLY_CHAIN_TRIVY_BLOCK=false
+      # to demote Trivy CRITICAL to a warning.
+      # ---------------------------------------------------------------
+      - name: Install cosign
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Install syft
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Install trivy
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          TRIVY_VERSION: "0.70.0"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Sign image with cosign (keyless / Sigstore OIDC)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: cosign sign --yes "${{ steps.image.outputs.ref }}"
+
+      - name: Generate SBOM (CycloneDX + SPDX)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        run: |
+          syft "${{ steps.image.outputs.ref }}" \
+            -o cyclonedx-json=sbom.cyclonedx.json \
+            -o spdx-json=sbom.spdx.json
+
+      - name: Attach SBOM as cosign attestation
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          cosign attest --yes \
+            --predicate sbom.cyclonedx.json \
+            --type cyclonedx \
+            "${{ steps.image.outputs.ref }}"
+
+      - name: Upload SBOM artifacts
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-staging-${{ github.sha }}
+          path: |
+            sbom.cyclonedx.json
+            sbom.spdx.json
+          retention-days: 90
+
+      - name: Trivy vulnerability scan (blocks on CRITICAL)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          TRIVY_EXIT_CODE: ${{ env.SUPPLY_CHAIN_TRIVY_BLOCK == 'false' && '0' || '1' }}
+          # Same waiver file as production — keeps staging and prod
+          # in lockstep so an expiring waiver re-blocks here first.
+          TRIVY_IGNOREFILE: service-cloud-api/.trivyignore.yaml
+        run: |
+          trivy image \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
+            --exit-code "${TRIVY_EXIT_CODE}" \
+            --no-progress \
+            --format table \
+            "${{ steps.image.outputs.ref }}"
+
+          trivy image \
+            --severity HIGH \
+            --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
+            --no-progress \
+            --format table \
+            "${{ steps.image.outputs.ref }}" || true
+
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
+            --format sarif \
+            --output trivy.sarif \
+            "${{ steps.image.outputs.ref }}" || true
+
+      - name: Upload Trivy SARIF to code scanning
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' && always() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ github.workflow }}
+
       - name: Set up kubectl (staging)
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG_B64_STAGING }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
+
+      - name: Run Prisma migrations (before traffic shift)
+        run: |
+          DB_URL=$(kubectl get secret database-credentials -n ${{ env.NAMESPACE }} \
+            -o jsonpath='{.data.API_DATABASE_URL}' | base64 -d)
+          kubectl run prisma-migrate-staging-${GITHUB_SHA::7} \
+            --image=${{ steps.image.outputs.ref }} \
+            --restart=Never --rm -i \
+            --pod-running-timeout=5m \
+            --overrides='{"spec":{"imagePullSecrets":[{"name":"ghcr-credentials"}]}}' \
+            --env="DATABASE_URL=${DB_URL}" \
+            -n ${{ env.NAMESPACE }} \
+            --command -- npx prisma migrate deploy
 
       - name: Deploy to K3s staging
         run: |
@@ -81,10 +211,6 @@ jobs:
             -n ${{ env.NAMESPACE }}
           kubectl rollout status deployment/service-cloud-api \
             -n ${{ env.NAMESPACE }} --timeout=180s
-
-      - name: Run Prisma migrations (staging)
-        run: |
-          kubectl exec deployment/service-cloud-api -n ${{ env.NAMESPACE }} -- prisma migrate deploy
 
       - name: Verify deployment (staging)
         id: verify
@@ -100,3 +226,16 @@ jobs:
             echo "healthy=false" >> $GITHUB_OUTPUT
             exit 1
           fi
+
+      # ---------------------------------------------------------------
+      # Promote :staging only after the full pipeline passes. Same
+      # reasoning as production :latest — the rolling tag must never
+      # point at an image that didn't successfully roll out.
+      # ---------------------------------------------------------------
+      - name: Promote :staging tag (post-verify)
+        if: success()
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${{ env.IMAGE }}:staging" \
+            "${{ steps.image.outputs.ref }}"
