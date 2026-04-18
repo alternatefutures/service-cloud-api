@@ -18,6 +18,7 @@ import { getPhalaOrchestrator } from '../phala/index.js'
 import { settleAkashEscrowToTime } from '../billing/deploymentSettlement.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getAvailableProviders } from '../providers/registry.js'
+import { decrementOrgConcurrency } from '../concurrency/concurrencyService.js'
 import { createLogger } from '../../lib/logger.js'
 import { audit } from '../../lib/audit.js'
 import { randomUUID } from 'node:crypto'
@@ -56,27 +57,65 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         status: { in: [...AKASH_INTERMEDIATE_STATES] },
         updatedAt: { lt: cutoff },
       },
-      select: { id: true, status: true, updatedAt: true, retryCount: true, dseq: true },
+      select: {
+        id: true,
+        status: true,
+        updatedAt: true,
+        retryCount: true,
+        dseq: true,
+        service: { select: { project: { select: { organizationId: true } } } },
+      },
     })
 
     for (const dep of staleAkash) {
       log.warn(`Akash deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+
+      // Switch on the structured close result so a
+      // failed on-chain close doesn't get masked as success. A
+      // FAILED close means the lease is potentially still live and
+      // draining escrow; we mark CLOSE_FAILED so the next sweeper
+      // pass / operator knows to retry.
+      let closeStatus: 'CLOSED' | 'ALREADY_CLOSED' | 'FAILED' | 'NO_DSEQ' = 'NO_DSEQ'
+      let closeError: string | undefined
       if (dep.dseq && Number(dep.dseq) > 0) {
-        try {
-          const orchestrator = getAkashOrchestrator(prisma)
-          await orchestrator.closeDeployment(Number(dep.dseq))
-          log.info(`Closed on-chain deployment dseq=${dep.dseq} during stale sweep`)
-        } catch (closeErr) {
-          log.warn({ dseq: String(dep.dseq), err: closeErr }, 'Failed to close on-chain deployment during sweep — may still be leaking')
+        const orchestrator = getAkashOrchestrator(prisma)
+        const result = await orchestrator.closeDeployment(Number(dep.dseq))
+        closeStatus = result.chainStatus
+        if (result.chainStatus === 'CLOSED' || result.chainStatus === 'ALREADY_CLOSED') {
+          log.info(
+            { dseq: String(dep.dseq), chainStatus: result.chainStatus },
+            'On-chain deployment closed during stale sweep',
+          )
+        } else {
+          closeError = result.error
+          log.warn(
+            { dseq: String(dep.dseq), chainStatus: result.chainStatus, error: closeError },
+            'On-chain close FAILED during sweep — marking CLOSE_FAILED for retry',
+          )
         }
       }
-      await prisma.akashDeployment.updateMany({
+
+      const finalStatus = closeStatus === 'FAILED' ? 'CLOSE_FAILED' : 'FAILED'
+      const errorMessage =
+        closeStatus === 'FAILED'
+          ? `Stale deployment swept but on-chain close failed: ${closeError ?? 'unknown'} (swept at ${new Date().toISOString()})`
+          : `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`
+
+      const result = await prisma.akashDeployment.updateMany({
         where: { id: dep.id, status: dep.status },
         data: {
-          status: 'FAILED',
-          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`,
+          status: finalStatus,
+          errorMessage,
         },
       })
+
+      // Only release a slot if we actually transitioned the row this
+      // pass — `updateMany` returns count=0 when another worker beat us
+      // to it (in which case THEY decremented, not us).
+      if (result.count > 0) {
+        await decrementOrgConcurrency(prisma, dep.service?.project?.organizationId)
+          .catch((err) => log.warn({ err, deploymentId: dep.id }, 'Concurrency decrement failed (stale Akash)'))
+      }
     }
 
     if (staleAkash.length > 0) {
@@ -93,7 +132,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         status: { in: [...PHALA_INTERMEDIATE_STATES] },
         updatedAt: { lt: cutoff },
       },
-      select: { id: true, status: true, updatedAt: true, retryCount: true, appId: true },
+      select: { id: true, status: true, updatedAt: true, retryCount: true, appId: true, organizationId: true },
     })
 
     for (const dep of stalePhala) {
@@ -107,13 +146,17 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
           log.warn({ appId: dep.appId, err: delErr }, 'Failed to delete CVM during sweep')
         }
       }
-      await prisma.phalaDeployment.updateMany({
+      const result = await prisma.phalaDeployment.updateMany({
         where: { id: dep.id, status: dep.status },
         data: {
           status: 'FAILED',
           errorMessage: `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`,
         },
       })
+      if (result.count > 0) {
+        await decrementOrgConcurrency(prisma, dep.organizationId)
+          .catch((err) => log.warn({ err, deploymentId: dep.id }, 'Concurrency decrement failed (stale Phala)'))
+      }
     }
 
     if (stalePhala.length > 0) {

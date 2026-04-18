@@ -99,6 +99,212 @@ async function runAkashAsync(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Pr
   return invoke()
 }
 
+// ── Cosmos chain transaction helpers ─────────────────────────────────
+//
+// Every call to `akash tx <subcommand> ...` returns a JSON envelope of
+// the form:
+//
+//   {
+//     "code": 0,             // 0 = ABCI accepted, non-zero = chain rejected
+//     "txhash": "...",       // tx hash; tx may still be pending inclusion
+//     "raw_log": "...",      // human-readable error message when code != 0
+//     "logs": [...],         // populated when broadcast mode = block
+//     "height": "12345"      // populated only after block inclusion
+//   }
+//
+// Historically each call site parsed this envelope inline, often
+// silently treating "broadcast OK but chain rejected" as success.
+// That class of bug — a `tx market lease create` that returned
+// `code != 0` (e.g. bid taken by another lease, account-sequence
+// mismatch) would happily proceed to the next step
+// and mysteriously fail in a totally different place (manifest send,
+// service URLs, etc.) hours later — with no telemetry pointing back
+// to the rejected chain tx.
+//
+// `runAkashTxAsync` is the ONE entry-point for chain submissions:
+//   1. forwards through the wallet mutex (via runAkashAsync)
+//   2. parses the JSON envelope strictly
+//   3. asserts code === 0 (throws AkashTxRejectedError otherwise)
+//   4. waits for block inclusion by querying `akash query tx` if the
+//      broadcast didn't already include it (sync-mode broadcasts).
+//
+// CI gate: `tools/check-no-raw-akash-tx.mjs` (also a vitest spec)
+// prevents any new `runAkashAsync(['tx', ...])` call site from
+// landing without going through this helper.
+
+/**
+ * Outcome of an Akash on-chain deployment close. See
+ * `AkashOrchestrator.closeDeployment` for semantics.
+ */
+export type CloseDeploymentResult =
+  | { chainStatus: 'CLOSED'; txhash: string }
+  | { chainStatus: 'ALREADY_CLOSED'; reason: string }
+  | { chainStatus: 'FAILED'; error: string }
+
+/**
+ * Substrings the Akash chain returns when a close was a no-op
+ * because the deployment is already gone (closed by the provider,
+ * never created, expired). Caller can safely treat these as success.
+ */
+const CLOSE_ALREADY_GONE_PATTERNS =
+  /deployment closed|deployment not found|not active|does not exist|already closed/i
+
+export class AkashTxRejectedError extends Error {
+  readonly op: string
+  readonly code: number
+  readonly rawLog: string
+  readonly txhash?: string
+  constructor(op: string, code: number, rawLog: string, txhash?: string) {
+    super(`${op}: tx rejected on-chain (code ${code}): ${rawLog.slice(0, 300)}`)
+    this.name = 'AkashTxRejectedError'
+    this.op = op
+    this.code = code
+    this.rawLog = rawLog
+    this.txhash = txhash
+  }
+}
+
+function parseTxCode(raw: unknown): number {
+  if (typeof raw === 'number') return raw
+  if (typeof raw === 'string') {
+    const parsed = parseInt(raw, 10)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
+const TX_INCLUSION_DELAYS_MS = [6000, 6000, 8000, 8000, 8000]
+
+/**
+ * Wait for a broadcast tx to be included in a block. Returns the
+ * full `akash query tx` JSON once it's available. Throws if the
+ * indexer never returns the tx (RPC lag, dropped from mempool, etc.).
+ */
+async function waitForTxInclusion(
+  txhash: string,
+  op: string,
+): Promise<Record<string, unknown>> {
+  for (const delay of TX_INCLUSION_DELAYS_MS) {
+    await new Promise(r => setTimeout(r, delay))
+    try {
+      const txOutput = runAkash(
+        ['query', 'tx', txhash, '-o', 'json'],
+        15_000,
+      )
+      const txResult = extractJson(txOutput) as Record<string, unknown>
+      const txCode = parseTxCode(txResult.code)
+      if (txCode !== 0) {
+        // Tx made it on-chain but the deliver-tx phase rejected it.
+        const rawLog = (txResult.raw_log || txResult.rawLog || '') as string
+        throw new AkashTxRejectedError(op, txCode, rawLog, txhash)
+      }
+      return txResult
+    } catch (err) {
+      if (err instanceof AkashTxRejectedError) throw err
+      log.warn(
+        `${op}: tx ${txhash} inclusion poll failed, retrying: ${
+          (err as Error).message?.slice(0, 120)
+        }`,
+      )
+    }
+  }
+  throw new Error(
+    `${op}: tx ${txhash} not found after ${TX_INCLUSION_DELAYS_MS.length} polls — RPC indexer may be lagging`,
+  )
+}
+
+export interface AkashTxResult {
+  /** Hash of the broadcast transaction. */
+  txhash: string
+  /** Raw broadcast envelope (code, raw_log, logs, height). */
+  broadcast: Record<string, unknown>
+  /**
+   * Confirmed envelope from `akash query tx <hash>`. Populated even
+   * for sync-mode broadcasts where the broadcast envelope itself was
+   * empty. Same shape as `broadcast` once the chain has indexed it.
+   */
+  confirmed: Record<string, unknown>
+}
+
+/**
+ * Broadcast a chain tx through the wallet mutex, assert acceptance,
+ * and wait for block inclusion.
+ *
+ * Every Akash `tx ...` call site MUST go through this helper.
+ */
+export async function runAkashTxAsync(
+  args: string[],
+  ctx: { op: string; meta?: Record<string, unknown> },
+  timeout = AKASH_CLI_TIMEOUT_MS,
+): Promise<AkashTxResult> {
+  if (args[0] !== 'tx') {
+    throw new Error(
+      `runAkashTxAsync called with non-tx args (op=${ctx.op}): ${args.join(' ')}`,
+    )
+  }
+  // Force JSON output and auto-confirm so callers can't accidentally
+  // forget. Tolerate the flags already being present.
+  const finalArgs = [...args]
+  if (!finalArgs.includes('-o')) finalArgs.push('-o', 'json')
+  if (!finalArgs.includes('-y')) finalArgs.push('-y')
+
+  const output = await runAkashAsync(finalArgs, timeout)
+
+  let broadcast: Record<string, unknown>
+  try {
+    broadcast = extractJson(output) as Record<string, unknown>
+  } catch (err) {
+    throw new Error(
+      `${ctx.op}: tx broadcast returned unparseable output: ${
+        (err as Error).message
+      }`,
+    )
+  }
+
+  const txhash = broadcast.txhash as string | undefined
+  const code = parseTxCode(broadcast.code)
+  if (code !== 0) {
+    const rawLog = (broadcast.raw_log || broadcast.rawLog || '') as string
+    log.error(
+      { op: ctx.op, code, txhash, rawLog: rawLog.slice(0, 200), ...ctx.meta },
+      `${ctx.op}: chain rejected tx`,
+    )
+    throw new AkashTxRejectedError(ctx.op, code, rawLog, txhash)
+  }
+  if (!txhash) {
+    throw new Error(`${ctx.op}: tx accepted but broadcast envelope had no txhash`)
+  }
+
+  // If broadcast envelope already contains inclusion data (block-mode
+  // broadcasts), short-circuit the inclusion wait.
+  const heightStr = broadcast.height as string | number | undefined
+  const height =
+    typeof heightStr === 'number'
+      ? heightStr
+      : typeof heightStr === 'string'
+        ? parseInt(heightStr, 10)
+        : 0
+  if (height > 0) {
+    log.info(
+      { op: ctx.op, txhash, height, ...ctx.meta },
+      `${ctx.op}: tx accepted in block ${height}`,
+    )
+    return { txhash, broadcast, confirmed: broadcast }
+  }
+
+  const confirmed = await waitForTxInclusion(txhash, ctx.op)
+  log.info(
+    {
+      op: ctx.op,
+      txhash,
+      height: confirmed.height,
+      ...ctx.meta,
+    },
+    `${ctx.op}: tx included in block`,
+  )
+  return { txhash, broadcast, confirmed }
+}
+
 /**
  * Run provider-services CLI (used for manifest sending and lease operations).
  * Falls back to akash CLI if provider-services is not available.
@@ -238,51 +444,37 @@ export class AkashOrchestrator {
     deposit: number
   ): Promise<{ dseq: number; owner: string }> {
     log.info('Creating deployment...')
-    const output = await runAkashAsync([
-      'tx',
-      'deployment',
-      'create',
-      sdlPath,
-      '--deposit',
-      `${deposit}uact`,
-      '-o',
-      'json',
-      '-y',
-    ])
-
-    const result = extractJson(output) as Record<string, unknown>
+    const { broadcast, confirmed, txhash } = await runAkashTxAsync(
+      [
+        'tx', 'deployment', 'create', sdlPath,
+        '--deposit', `${deposit}uact`,
+      ],
+      { op: 'createDeployment', meta: { deposit } },
+    )
     log.info(
-      `createDeployment broadcast result: code=${result.code}, txhash=${result.txhash}, has_logs=${!!(result.logs as unknown[])?.length}`
+      `createDeployment tx confirmed: txhash=${txhash}, height=${confirmed.height}`,
     )
 
-    // Tx was broadcast but rejected by the mempool (e.g. account sequence mismatch from rapid re-deploys)
-    const txCode =
-      typeof result.code === 'number'
-        ? result.code
-        : typeof result.code === 'string'
-          ? parseInt(result.code, 10)
-          : undefined
-    if (txCode !== undefined && txCode !== 0) {
-      const rawLog = (result.raw_log || result.rawLog || '') as string
-      throw new Error(
-        `Akash tx rejected (code ${txCode}): ${rawLog.slice(0, 300)}`
-      )
-    }
-
-    // Parse dseq from transaction response (populated in block broadcast mode)
-    const logs = result.logs as
-      | Array<{
-          events?: Array<{
-            type: string
-            attributes?: Array<{ key: string; value: string }>
-          }>
-        }>
-      | undefined
+    // Walk both broadcast and confirmed envelopes for the dseq —
+    // different akash CLI versions populate different shapes:
+    //   * block-mode broadcast → broadcast.logs[].events[]
+    //   * sync-mode broadcast  → confirmed.logs[].events[]
+    //   * akash CLI v1.1.1+    → confirmed.tx.body.messages[0].id.dseq
+    const candidates: Record<string, unknown>[] = [broadcast, confirmed]
     let dseq: number | undefined
-
-    if (logs) {
-      for (const log of logs) {
-        for (const event of log.events || []) {
+    for (const candidate of candidates) {
+      if (dseq) break
+      const logs = candidate.logs as
+        | Array<{
+            events?: Array<{
+              type: string
+              attributes?: Array<{ key: string; value: string }>
+            }>
+          }>
+        | undefined
+      if (!logs) continue
+      for (const entry of logs) {
+        for (const event of entry.events || []) {
           if (
             event.type === 'akash.deployment.v1.EventDeploymentCreated' ||
             event.type === 'akash.v1beta3.EventDeploymentCreated' ||
@@ -291,80 +483,31 @@ export class AkashOrchestrator {
             const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
             if (dseqAttr) {
               dseq = parseInt(dseqAttr.value, 10)
-            }
-          }
-        }
-      }
-    }
-
-    // Fallback: query the confirmed tx by hash (sync mode doesn't include logs)
-    if (!dseq && result.txhash) {
-      let txResult: Record<string, unknown> | null = null
-      const delays = [8000, 6000, 6000, 8000, 8000] // ~36s total; block time ~6s + indexer lag
-      for (const delay of delays) {
-        await new Promise(r => setTimeout(r, delay))
-        try {
-          const txOutput = runAkash(
-            ['query', 'tx', result.txhash as string, '-o', 'json'],
-            15_000
-          )
-          txResult = extractJson(txOutput) as Record<string, unknown>
-          break
-        } catch (err) {
-          log.warn(
-            `tx query attempt failed, retrying: ${(err as Error).message?.slice(0, 120)}`
-          )
-        }
-      }
-      if (!txResult) {
-        throw new Error(
-          `Transaction ${result.txhash} not found after retries — RPC may be lagging`
-        )
-      }
-
-      // Try logs first (older CLI versions)
-      const txLogs = txResult.logs as
-        | Array<{
-            events?: Array<{
-              type: string
-              attributes?: Array<{ key: string; value: string }>
-            }>
-          }>
-        | undefined
-      if (txLogs) {
-        for (const log of txLogs) {
-          for (const event of log.events || []) {
-            const dseqAttr = event.attributes?.find(a => a.key === 'dseq')
-            if (dseqAttr) {
-              dseq = parseInt(dseqAttr.value, 10)
               break
             }
           }
-          if (dseq) break
         }
+        if (dseq) break
       }
+    }
 
-      // Fallback: parse dseq from tx.body.messages (akash CLI v1.1.1+ returns empty logs)
-      if (!dseq) {
-        const tx = txResult.tx as
-          | { body?: { messages?: Array<{ id?: { dseq?: string } }> } }
-          | undefined
-        const msgDseq = tx?.body?.messages?.[0]?.id?.dseq
-        if (msgDseq) {
-          dseq = parseInt(msgDseq, 10)
-          log.info(
-            `Parsed dseq from tx.body.messages: ${dseq}`
-          )
-        }
+    if (!dseq) {
+      const tx = confirmed.tx as
+        | { body?: { messages?: Array<{ id?: { dseq?: string } }> } }
+        | undefined
+      const msgDseq = tx?.body?.messages?.[0]?.id?.dseq
+      if (msgDseq) {
+        dseq = parseInt(msgDseq, 10)
+        log.info(`Parsed dseq from tx.body.messages: ${dseq}`)
       }
     }
 
     if (!dseq || isNaN(dseq) || dseq <= 0) {
-      const safeResult = JSON.stringify(result, (_k, v) =>
-        typeof v === 'bigint' ? v.toString() : v
+      const safeResult = JSON.stringify(confirmed, (_k, v) =>
+        typeof v === 'bigint' ? v.toString() : v,
       ).slice(0, 500)
       throw new Error(
-        `Failed to create deployment: could not extract dseq from response. Broadcast result: ${safeResult}`
+        `Failed to create deployment: could not extract dseq from confirmed tx. Confirmed: ${safeResult}`,
       )
     }
 
@@ -383,46 +526,15 @@ export class AkashOrchestrator {
   async topUpDeploymentDeposit(dseq: number, amountUact: number): Promise<void> {
     if (amountUact <= 0) return
     log.info({ dseq, amountUact }, 'Topping up deployment escrow')
-    const output = await runAkashAsync([
-      'tx',
-      'escrow',
-      'deposit',
-      'deployment',
-      `${amountUact}uact`,
-      '--dseq',
-      String(dseq),
-      '-y',
-      '-o', 'json',
-    ])
-
-    // A non-zero code here means the chain accepted the tx envelope but the
-    // state transition was rejected (e.g. insufficient wallet funds, unknown
-    // dseq, deployment already closed). We MUST throw so callers treat this as
-    // a failure — a silent return previously caused chain-escrow depletion to
-    // go unnoticed until the provider closed the lease.
-    let result: Record<string, unknown>
-    try {
-      result = extractJson(output) as Record<string, unknown>
-    } catch {
-      // Parse failure after a successful CLI invocation usually means the
-      // broadcast went through but stdout had trailing noise. Keep as warn.
-      log.warn({ dseq, amountUact }, 'Escrow top-up completed but could not parse TX response')
-      return
-    }
-
-    const code =
-      typeof result.code === 'number'
-        ? result.code
-        : typeof result.code === 'string'
-          ? parseInt(result.code, 10)
-          : 0
-    if (code !== 0) {
-      const rawLog = (result.raw_log || result.rawLog || '') as string
-      const msg = `Escrow top-up TX rejected on-chain (code ${code}): ${rawLog.slice(0, 300)}`
-      log.error({ dseq, amountUact, code, rawLog: rawLog.slice(0, 200) }, msg)
-      throw new Error(msg)
-    }
-    log.info({ dseq, amountUact, txhash: result.txhash }, 'Deployment escrow topped up')
+    const { txhash } = await runAkashTxAsync(
+      [
+        'tx', 'escrow', 'deposit', 'deployment',
+        `${amountUact}uact`,
+        '--dseq', String(dseq),
+      ],
+      { op: 'topUpDeploymentDeposit', meta: { dseq, amountUact } },
+    )
+    log.info({ dseq, amountUact, txhash }, 'Deployment escrow topped up')
   }
 
   /**
@@ -490,7 +602,16 @@ export class AkashOrchestrator {
   }
 
   /**
-   * Create a lease with a provider
+   * Create a lease with a provider.
+   *
+   * Goes through `runAkashTxAsync` so the chain's `code === 0`
+   * acceptance is asserted and the tx's block inclusion is awaited
+   * before we return. Previously this used a fire-and-forget
+   * `runAkashAsync` followed by a 6-second `setTimeout` which
+   * silently swallowed bid-taken / sequence-mismatch / insufficient-
+   * funds rejections — those then surfaced hours later as
+   * "manifest send failed" or "no service URLs" with no audit trail
+   * pointing back to the dropped tx.
    */
   async createLease(
     owner: string,
@@ -499,25 +620,19 @@ export class AkashOrchestrator {
     oseq: number,
     provider: string
   ): Promise<void> {
-    await runAkashAsync([
-      'tx',
-      'market',
-      'lease',
-      'create',
-      '--dseq',
-      String(dseq),
-      '--gseq',
-      String(gseq),
-      '--oseq',
-      String(oseq),
-      '--provider',
-      provider,
-      '-o',
-      'json',
-      '-y',
-    ])
-    // Wait for lease to be confirmed
-    await new Promise(r => setTimeout(r, 6000))
+    await runAkashTxAsync(
+      [
+        'tx',
+        'market',
+        'lease',
+        'create',
+        '--dseq', String(dseq),
+        '--gseq', String(gseq),
+        '--oseq', String(oseq),
+        '--provider', provider,
+      ],
+      { op: 'createLease', meta: { owner, dseq, gseq, oseq, provider } },
+    )
   }
 
   /**
@@ -818,47 +933,49 @@ export class AkashOrchestrator {
   /**
    * Close a deployment.
    *
-   * Throws if the chain rejects the tx (e.g. deployment already closed,
-   * deployment not found). Callers that tolerate benign "already gone" states
-   * match on the thrown message (which includes the chain's raw_log) using
-   * patterns like /deployment not found|deployment closed|not active|does not exist/.
+   * Returns a structured result so callers can distinguish:
+   *   * `CLOSED`         — chain accepted the close tx; the deployment
+   *                        is gone on-chain. Local row should go to CLOSED.
+   *   * `ALREADY_CLOSED` — chain rejected because the deployment is
+   *                        already closed / not found. Treated as
+   *                        idempotent success; local row should go to
+   *                        CLOSED with no escrow drain remaining.
+   *   * `FAILED`         — close attempt failed for environmental
+   *                        reasons (RPC down, wallet out of gas,
+   *                        account-sequence collision, etc.). The lease
+   *                        may still be live on-chain and continue to
+   *                        drain escrow until a retry succeeds. Local
+   *                        row SHOULD go to CLOSE_FAILED so the stale-
+   *                        deployment sweeper / ops will retry.
+   *
+   * Never throws — every chain or RPC error is captured in the returned
+   * `FAILED` result. The previous void return collapsed every outcome
+   * into "looks closed", masking stuck leases that kept billing.
    */
-  async closeDeployment(dseq: number): Promise<void> {
-    const output = await runAkashAsync([
-      'tx',
-      'deployment',
-      'close',
-      '--dseq',
-      String(dseq),
-      '-o',
-      'json',
-      '-y',
-    ])
-
-    let result: Record<string, unknown>
+  async closeDeployment(dseq: number): Promise<CloseDeploymentResult> {
     try {
-      result = extractJson(output) as Record<string, unknown>
-    } catch {
-      // CLI exited 0 but output was unparseable — treat as provisional success
-      // rather than block close paths. Downstream liveness reconciliation will
-      // catch any stuck-open deployment.
-      log.warn({ dseq }, 'Close TX completed but response could not be parsed')
-      return
+      const { txhash } = await runAkashTxAsync(
+        ['tx', 'deployment', 'close', '--dseq', String(dseq)],
+        { op: 'closeDeployment', meta: { dseq } },
+      )
+      log.info({ dseq, txhash }, 'Deployment close TX accepted')
+      return { chainStatus: 'CLOSED', txhash }
+    } catch (err) {
+      const error = err as Error
+      const message = error.message ?? String(err)
+      if (CLOSE_ALREADY_GONE_PATTERNS.test(message)) {
+        log.info(
+          { dseq, message: message.slice(0, 200) },
+          'closeDeployment: chain reports deployment already gone — treating as idempotent success',
+        )
+        return { chainStatus: 'ALREADY_CLOSED', reason: message.slice(0, 200) }
+      }
+      log.error(
+        { dseq, error: message.slice(0, 300) },
+        'closeDeployment: chain close failed — leaving lease open, caller MUST mark CLOSE_FAILED',
+      )
+      return { chainStatus: 'FAILED', error: message.slice(0, 300) }
     }
-
-    const code =
-      typeof result.code === 'number'
-        ? result.code
-        : typeof result.code === 'string'
-          ? parseInt(result.code, 10)
-          : 0
-    if (code !== 0) {
-      const rawLog = (result.raw_log || result.rawLog || '') as string
-      const msg = `Close TX rejected on-chain (code ${code}): ${rawLog.slice(0, 300)}`
-      log.error({ dseq, code, rawLog: rawLog.slice(0, 200) }, msg)
-      throw new Error(msg)
-    }
-    log.info({ dseq, txhash: result.txhash }, 'Deployment close TX accepted')
   }
 
   /**

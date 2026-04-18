@@ -1134,17 +1134,131 @@ enum AkashDeploymentStatus {
   CLOSED             // Deployment closed (permanent)
   SUSPENDED          // Paused due to low balance (will auto-resume on topup)
   PERMANENTLY_FAILED // Failed after all retries exhausted
+  CLOSE_FAILED       // Local close attempt failed on-chain (RPC down, wallet empty, etc.) — needs operator/sweeper retry
 }
 
 // ============================================
 // DEPLOYMENT ESCROW (Platform-level USD escrow for Akash)
 // ============================================
 
+// Heartbeat-based leader lease for singleton schedulers.
+//
+// With REPLICAS > 1 every pod would otherwise start its own copy of the
+// billing cron, escrow monitor, etc. The lease ensures exactly one pod
+// (the "leader") runs each scheduler at any given time. The leader
+// renews `expiresAt` every `LEADER_HEARTBEAT_MS`; if it crashes,
+// followers see an expired lease and one of them grabs it. There is a
+// brief gap (< heartbeat interval) where no scheduler runs — that is
+// acceptable because every scheduler in this codebase is built to
+// tolerate "skipped a tick" (cron-style catch-up logic).
+//
+// `schedulerKey` doubles as a discriminator: each scheduler claims its
+// own row. That lets billing run on pod A while audit-export runs on
+// pod B, instead of forcing all schedulers onto a single leader pod.
+model SchedulerLeaderLease {
+  schedulerKey String   @id @map("scheduler_key")
+  leaderId     String   @map("leader_id")
+  acquiredAt   DateTime @map("acquired_at")
+  expiresAt    DateTime @map("expires_at")
+  updatedAt    DateTime @updatedAt
+
+  @@map("scheduler_leader_lease")
+}
+
+// Per-org concurrent-deployment counter.
+//
+// COUNT(*) on AkashDeployment + PhalaDeployment is racy under concurrent
+// launches: two requests both see 9/10 active, both insert, both succeed
+// → org now has 11 active. The counter row is the source of truth for
+// "claim a concurrency slot" — increments are guarded by SELECT FOR
+// UPDATE inside a transaction, so concurrent claimants serialize.
+//
+// `activeCount` MAY drift from the actual deployment count if a close
+// path forgets to decrement. The hourly reconciler in
+// `concurrencyService.reconcileAll()` recomputes from the deployments
+// table and clamps drift before it accumulates into a permanent over-
+// count that locks the org out of new launches.
+model OrganizationConcurrencyCounter {
+  organizationId String   @id @map("organization_id")
+  activeCount    Int      @default(0) @map("active_count")
+  updatedAt      DateTime @updatedAt
+
+  @@map("organization_concurrency_counter")
+}
+
+// Write-ahead ledger for deployment settlement charges (pre-close prorated
+// debits, hourly accrual, etc.). Every settlement debit MUST be reflected
+// here BEFORE the auth-side computeDebit is invoked, so a crash between
+// "advance local state" and "auth credited the charge" is recoverable:
+//
+//   * PENDING row exists, no auth charge → reconciler retries the debit
+//     using the row's stored idempotencyKey + amountCents (deterministic).
+//   * PENDING row exists, auth charge already landed → reconciler retries
+//     get alreadyProcessed=true, row promotes to COMMITTED.
+//   * Persistent failure → row marked FAILED, ops paged.
+//
+// The idempotencyKey column is UNIQUE so the table doubles as a duplicate-
+// charge guard: even a buggy caller cannot insert two rows for the same
+// settlement window and end up double-billing the user.
+model PolicySettlementLedger {
+  id              String                  @id @default(cuid())
+
+  provider        SettlementProvider
+  kind            SettlementKind
+  deploymentRef   String                  @map("deployment_ref")
+
+  idempotencyKey  String                  @unique @map("idempotency_key")
+
+  orgBillingId    String                  @map("org_billing_id")
+  amountCents     Int                     @map("amount_cents")
+  settledTo       DateTime                @map("settled_to")
+
+  status          PolicySettlementStatus  @default(PENDING)
+  attemptCount    Int                     @default(0) @map("attempt_count")
+  lastError       String?                 @map("last_error")
+  committedAt     DateTime?               @map("committed_at")
+
+  policyId        String?                 @map("policy_id")
+  metadata        Json?
+
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@index([status, createdAt])
+  @@index([deploymentRef])
+  @@map("policy_settlement_ledger")
+}
+
+enum SettlementProvider {
+  AKASH
+  PHALA
+}
+
+enum SettlementKind {
+  FINAL_SETTLEMENT
+  HOURLY_ACCRUAL
+}
+
+enum PolicySettlementStatus {
+  PENDING
+  COMMITTED
+  FAILED
+}
+
 enum EscrowStatus {
-  ACTIVE      // Funds locked, daily consumption active
-  DEPLETED    // Escrow consumed, needs top-up or auto-top-up from wallet
-  REFUNDED    // Deployment closed, remaining refunded to wallet
-  PAUSED      // Deployment paused due to low org balance
+  PENDING_DEPOSIT // Write-ahead: row created BEFORE the deposit RPC.
+                  // Reconciler retries / fails-out stuck rows so we never end up
+                  // in a state where the wallet was debited but no row exists
+                  // (or vice-versa: the row was created but the deposit failed).
+  ACTIVE          // Funds locked, daily consumption active
+  DEPLETED        // Escrow consumed, needs top-up or auto-top-up from wallet
+  REFUNDING       // Write-ahead for refund: row marked BEFORE the
+                  // refund RPC so we can reconcile if the credit RPC succeeded
+                  // but our local update never landed.
+  REFUNDED        // Deployment closed, remaining refunded to wallet
+  PAUSED          // Deployment paused due to low org balance
+  FAILED          // Terminal: write-ahead deposit could not be
+                  // completed (insufficient balance, persistent RPC failure).
 }
 
 model DeploymentEscrow {

@@ -24,6 +24,33 @@ vi.mock('../../config/pricing.js', () => ({
   applyMargin: vi.fn((raw: number, margin: number) => raw * (1 + margin)),
 }))
 
+/**
+ * Add a stub policySettlementLedger to a prisma test double so the new
+ * write-ahead settle path can run without exploding. We do NOT track
+ * call assertions on the ledger here — that is exercised in
+ * settlementLedger.test.ts. The stub just needs to behave like the
+ * happy-path Prisma client (create returns the row, update returns it
+ * back).
+ */
+function stubLedger(prisma: any) {
+  prisma.policySettlementLedger = {
+    create: vi.fn().mockImplementation(({ data }: { data: any }) => Promise.resolve({
+      id: `ledger-${data.idempotencyKey}`,
+      ...data,
+      attemptCount: 0,
+      committedAt: null,
+      lastError: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    findUnique: vi.fn(),
+    update: vi.fn().mockImplementation(({ where, data }: { where: any; data: any }) =>
+      Promise.resolve({ id: where.id, ...data }),
+    ),
+  }
+  return prisma
+}
+
 describe('deploymentSettlement', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -67,9 +94,10 @@ describe('deploymentSettlement', () => {
       deploymentPolicy: {
         update: vi.fn(),
       },
-    } as unknown as PrismaClient
+    }
+    stubLedger(prisma)
 
-    const additionalCents = await settleAkashEscrowToTime(prisma, 'akash-1', settledAt)
+    const additionalCents = await settleAkashEscrowToTime(prisma as unknown as PrismaClient, 'akash-1', settledAt)
 
     expect(additionalCents).toBe(40)
     expect(prisma.deploymentEscrow.update).toHaveBeenCalledWith({
@@ -117,9 +145,10 @@ describe('deploymentSettlement', () => {
       deploymentPolicy: {
         update: vi.fn(),
       },
-    } as unknown as PrismaClient
+    }
+    stubLedger(prisma)
 
-    const additionalCents = await settleAkashEscrowToTime(prisma, 'akash-payg', settledAt)
+    const additionalCents = await settleAkashEscrowToTime(prisma as unknown as PrismaClient, 'akash-payg', settledAt)
 
     expect(additionalCents).toBe(60)
     expect(computeDebitMock).toHaveBeenCalledWith(
@@ -129,7 +158,7 @@ describe('deploymentSettlement', () => {
         serviceType: 'akash_compute',
         provider: 'akash',
         resource: 'test-svc',
-        idempotencyKey: `akash_final:akash-payg:${settledAt.toISOString()}`,
+        idempotencyKey: expect.stringMatching(/^akash_final:akash-payg:\d+$/),
       })
     )
   })
@@ -158,10 +187,11 @@ describe('deploymentSettlement', () => {
       deploymentPolicy: {
         update: vi.fn(),
       },
-    } as unknown as PrismaClient
+    }
+    stubLedger(prisma)
 
     const additionalCents = await settleAkashEscrowToTime(
-      prisma,
+      prisma as unknown as PrismaClient,
       'akash-missing-escrow',
       settledAt
     )
@@ -174,8 +204,9 @@ describe('deploymentSettlement', () => {
         serviceType: 'akash_compute',
         provider: 'akash',
         resource: 'milady-gateway-vlxk',
-        idempotencyKey:
-          'akash_final_no_escrow:akash-missing-escrow:2026-03-31T01:00:00.000Z',
+        idempotencyKey: expect.stringMatching(
+          /^akash_final_no_escrow:akash-missing-escrow:\d+$/,
+        ),
       })
     )
     expect(prisma.deploymentPolicy.update).toHaveBeenCalledWith({
@@ -204,10 +235,11 @@ describe('deploymentSettlement', () => {
       deploymentPolicy: {
         update: vi.fn(),
       },
-    } as unknown as PrismaClient
+    }
+    stubLedger(prisma)
 
     const finalChargeCents = await processFinalPhalaBilling(
-      prisma,
+      prisma as unknown as PrismaClient,
       'phala-1',
       billedAt,
       'test_final'
@@ -218,7 +250,7 @@ describe('deploymentSettlement', () => {
       expect.objectContaining({
         orgBillingId: 'org-billing-1',
         amountCents: 80,
-        idempotencyKey: 'test_final:phala-1:2026-03-29T00:40:00.000Z',
+        idempotencyKey: expect.stringMatching(/^test_final:phala-1:\d+$/),
       })
     )
     expect(prisma.phalaDeployment.update).toHaveBeenCalledWith({

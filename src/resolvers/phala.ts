@@ -7,6 +7,7 @@ import { processFinalPhalaBilling } from '../services/billing/deploymentSettleme
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
 import { assertLaunchAllowed } from './launchGuards.js'
+import { decrementOrgConcurrency } from '../services/concurrency/concurrencyService.js'
 import { BILLING_CONFIG } from '../config/billing.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
@@ -590,6 +591,13 @@ export const phalaMutations = {
         data: { stopReason: 'MANUAL_STOP', stoppedAt, reservedCents: 0 },
       })
     }
+
+    await decrementOrgConcurrency(
+      context.prisma,
+      deployment.organizationId,
+    ).catch((err) => {
+      log.warn({ err, deploymentId: id }, 'Concurrency decrement failed (Phala manual stop)')
+    })
 
     audit(context.prisma, {
       category: 'deployment',

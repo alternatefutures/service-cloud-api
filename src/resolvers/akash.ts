@@ -12,6 +12,7 @@ import { settleAkashEscrowToTime } from '../services/billing/deploymentSettlemen
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance, checkTimeLimitedDeployBalance } from './balanceCheck.js'
 import { assertLaunchAllowed } from './launchGuards.js'
+import { decrementOrgConcurrency } from '../services/concurrency/concurrencyService.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
@@ -622,6 +623,15 @@ export const akashMutations = {
           dseq: deployment.dseq?.toString() ?? null,
         },
       })
+      // SUSPENDED already released the slot in the billing scheduler;
+      // calling again is a no-op thanks to the GREATEST(0, …) clamp,
+      // but we do it for paranoia in case scheduler decrement was lost.
+      await decrementOrgConcurrency(
+        context.prisma,
+        deployment.service.project.organizationId,
+      ).catch((err) => {
+        log.warn({ err, deploymentId: id }, 'Concurrency decrement failed (SUSPENDED→CLOSED)')
+      })
       return formatDeployment(updated)
     }
 
@@ -703,6 +713,13 @@ export const akashMutations = {
         data: { stopReason: 'MANUAL_STOP', stoppedAt: closedAt, reservedCents: 0 },
       })
     }
+
+    await decrementOrgConcurrency(
+      context.prisma,
+      deployment.service.project.organizationId,
+    ).catch((err) => {
+      log.warn({ err, deploymentId: id }, 'Concurrency decrement failed (manual close)')
+    })
 
     // Cancel any in-progress sibling/retry deployments for the same service
     const IN_PROGRESS = ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING'] as const

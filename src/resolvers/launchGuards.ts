@@ -34,6 +34,14 @@ import { GraphQLError } from 'graphql'
 import type { PrismaClient } from '@prisma/client'
 import type { SubscriptionStatusInfo } from './subscriptionCheck.js'
 import { opsAlert } from '../lib/opsAlert.js'
+import {
+  assertAndIncrementOrgConcurrency,
+  ConcurrencyCapExceededError,
+  recomputeOrgConcurrency,
+} from '../services/concurrency/concurrencyService.js'
+import { createLogger } from '../lib/logger.js'
+
+const concLog = createLogger('launch-guards-concurrency')
 
 /**
  * How long between disabled-guard alerts (per process). The guard being off is
@@ -219,41 +227,82 @@ export async function assertOrgConcurrency(
     return
   }
 
-  const [akashActive, phalaActive] = await Promise.all([
-    prisma.akashDeployment.count({
-      where: {
-        status: { in: ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING', 'ACTIVE'] },
-        service: { project: { organizationId } },
-      },
-    }),
-    prisma.phalaDeployment.count({
-      where: {
-        status: { in: ['CREATING', 'STARTING', 'ACTIVE'] },
-        organizationId,
-      },
-    }),
-  ])
+  // Counter-based claim. The concurrency service handles the
+  // SELECT FOR UPDATE inside a transaction, so two concurrent launches
+  // serialize and only the second one (under the cap) succeeds. The
+  // counter must be released by the close paths via
+  // `decrementOrgConcurrency` — see `services/concurrency` for the
+  // reconciler that catches missed decrements.
+  try {
+    await assertAndIncrementOrgConcurrency(prisma, organizationId, cap)
+  } catch (err) {
+    if (err instanceof ConcurrencyCapExceededError) {
+      const upgradeHint = tier === 'trial'
+        ? ' Subscribe to a paid plan for a higher limit.'
+        : ' Close some before launching more, or contact support to raise your limit.'
 
-  const total = akashActive + phalaActive
-  if (total >= cap) {
-    const upgradeHint = tier === 'trial'
-      ? ' Subscribe to a paid plan for a higher limit.'
-      : ' Close some before launching more, or contact support to raise your limit.'
-
-    throw new GraphQLError(
-      `You have ${total} active deployments, which is at the current limit of ${cap} for your ${tier} plan.${upgradeHint}`,
-      {
-        extensions: {
-          code: 'CONCURRENCY_LIMIT_REACHED',
-          tier,
-          activeDeployments: total,
-          maxActiveDeployments: cap,
-          akashActive,
-          phalaActive,
-          upgradeable: tier === 'trial',
+      throw new GraphQLError(
+        `You have ${err.activeCount} active deployments, which is at the current limit of ${cap} for your ${tier} plan.${upgradeHint}`,
+        {
+          extensions: {
+            code: 'CONCURRENCY_LIMIT_REACHED',
+            tier,
+            activeDeployments: err.activeCount,
+            maxActiveDeployments: cap,
+            upgradeable: tier === 'trial',
+          },
         },
-      },
+      )
+    }
+    // Counter row poisoned (e.g. a stale value from before the
+    // reconciler's first run). Bootstrap from real deployments and let
+    // the next attempt go through. We do NOT block the launch on a
+    // counter-internal error — the legacy COUNT(*) check below is the
+    // safety net that still enforces a (racy but conservative) cap.
+    concLog.error(
+      { organizationId, err },
+      'Concurrency counter check failed — falling back to COUNT(*)',
     )
+    try {
+      await recomputeOrgConcurrency(prisma, organizationId)
+    } catch (recErr) {
+      concLog.error({ organizationId, recErr }, 'Recompute failed too — proceeding with raw count')
+    }
+
+    const [akashActive, phalaActive] = await Promise.all([
+      prisma.akashDeployment.count({
+        where: {
+          status: { in: ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING', 'ACTIVE'] },
+          service: { project: { organizationId } },
+        },
+      }),
+      prisma.phalaDeployment.count({
+        where: {
+          status: { in: ['CREATING', 'STARTING', 'ACTIVE'] },
+          organizationId,
+        },
+      }),
+    ])
+    const total = akashActive + phalaActive
+    if (total >= cap) {
+      const upgradeHint = tier === 'trial'
+        ? ' Subscribe to a paid plan for a higher limit.'
+        : ' Close some before launching more, or contact support to raise your limit.'
+      throw new GraphQLError(
+        `You have ${total} active deployments, which is at the current limit of ${cap} for your ${tier} plan.${upgradeHint}`,
+        {
+          extensions: {
+            code: 'CONCURRENCY_LIMIT_REACHED',
+            tier,
+            activeDeployments: total,
+            maxActiveDeployments: cap,
+            akashActive,
+            phalaActive,
+            upgradeable: tier === 'trial',
+          },
+        },
+      )
+    }
   }
 }
 
