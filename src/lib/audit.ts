@@ -68,10 +68,57 @@ export interface AuditEventInput {
 
 const DEFAULT_SOURCE = 'cloud-api'
 
+// Rolling 5-min counters exposed via getAuditWriteStats() for /health.
+// Mirrors the same shape in service-auth/src/lib/audit.ts so the
+// silent-failure alert can compare both halves uniformly.
+interface BucketCounters {
+  attempted: number
+  succeeded: number
+  failed: number
+  rejected: number
+}
+const BUCKET_MS = 60_000
+const BUCKETS = 5
+const buckets: BucketCounters[] = Array.from({ length: BUCKETS }, () => ({
+  attempted: 0,
+  succeeded: 0,
+  failed: 0,
+  rejected: 0,
+}))
+
+function bucketIndex(): number {
+  return Math.floor(Date.now() / BUCKET_MS) % BUCKETS
+}
+
+function bumpCounter(field: keyof BucketCounters): void {
+  buckets[bucketIndex()][field] += 1
+}
+
+export function getAuditWriteStats(): {
+  windowMs: number
+  attempted: number
+  succeeded: number
+  failed: number
+  rejected: number
+} {
+  const totals = buckets.reduce(
+    (acc, b) => {
+      acc.attempted += b.attempted
+      acc.succeeded += b.succeeded
+      acc.failed += b.failed
+      acc.rejected += b.rejected
+      return acc
+    },
+    { attempted: 0, succeeded: 0, failed: 0, rejected: 0 }
+  )
+  return { windowMs: BUCKET_MS * BUCKETS, ...totals }
+}
+
 /**
  * Write one audit event. Fire-and-forget; never throws.
  */
 export function audit(prisma: PrismaClient, evt: AuditEventInput): void {
+  bumpCounter('attempted')
   try {
     const payload = sanitize(evt.payload ?? {}) as Prisma.InputJsonValue
     const data: Prisma.AuditEventUncheckedCreateInput = {
@@ -92,9 +139,30 @@ export function audit(prisma: PrismaClient, evt: AuditEventInput): void {
     }
     prisma.auditEvent
       .create({ data })
-      .catch((err) => log.error({ err, action: evt.action }, 'audit write failed'))
+      .then(() => bumpCounter('succeeded'))
+      .catch((err) => {
+        bumpCounter('failed')
+        log.error(
+          {
+            traceId: data.traceId,
+            action: evt.action,
+            category: evt.category,
+            errCode: (err as { code?: string })?.code,
+            errMsg: (err as { message?: string })?.message,
+          },
+          'audit write failed'
+        )
+      })
   } catch (err) {
-    log.error({ err, action: evt.action }, 'audit write rejected')
+    bumpCounter('rejected')
+    log.error(
+      {
+        action: evt.action,
+        category: evt.category,
+        errMsg: (err as { message?: string })?.message ?? String(err),
+      },
+      'audit write rejected'
+    )
   }
 }
 

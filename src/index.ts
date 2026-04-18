@@ -63,6 +63,8 @@ import { ShellEndpoint } from './services/shell/shellEndpoint.js'
 import { LogStreamEndpoint } from './services/logs/logStreamEndpoint.js'
 import { createLogger } from './lib/logger.js'
 import { requestContext, getRequestId, getTraceId } from './lib/requestContext.js'
+import { useAuditPlugin } from './lib/auditPlugin.js'
+import { getAuditWriteStats } from './lib/audit.js'
 
 const log = createLogger('server')
 
@@ -204,7 +206,11 @@ const yoga = createYoga({
   landingPage: !IS_PRODUCTION,
   graphiql: !IS_PRODUCTION,
   maskedErrors: IS_PRODUCTION,
-  plugins: [useValidationRules(), useLogging()],
+  // Order matters here: useAuditPlugin runs after useLogging so that any
+  // audit write that itself errors out is logged via the gql logger
+  // pipeline (and surfaced in /health/audit counters) instead of being
+  // silently swallowed.
+  plugins: [useValidationRules(), useLogging(), useAuditPlugin(prisma)],
 })
 
 // Apply security headers middleware
@@ -296,6 +302,26 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/admin/audit-events' && req.method === 'GET') {
       await handleAdminAuditEvents(req, res, prisma)
+      return
+    }
+
+    // Liveness probe for Docker HEALTHCHECK + K8s readiness/liveness
+    // probes. Intentionally ultra-cheap: no DB call, no upstream check.
+    // (Deeper readiness — DB + Redis — lives in /internal/audit/health
+    // because that's the alarm a silent-audit failure would trip.)
+    if (url.pathname === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ status: 'ok', service: 'cloud-api' }))
+      return
+    }
+
+    // Per-side audit-write counter. Compared against the service-auth
+    // equivalent by an external alert: any side reporting attempted=0
+    // for >30min during business hours = silent failure, page on-call.
+    if (url.pathname === '/internal/audit/health' && req.method === 'GET') {
+      const stats = getAuditWriteStats()
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ source: 'cloud-api', ...stats }))
       return
     }
 
