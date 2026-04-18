@@ -107,6 +107,14 @@ export const typeDefs = /* GraphQL */ `
     name: String!
     slug: String!
     projectId: ID!
+    """
+    Create-time discriminator describing the catalog flow that produced
+    this service. One of 'docker' | 'server' | 'function' | 'template'.
+    Null on legacy rows; the web app falls through to 'docker' for VM
+    rows and 'function' for FUNCTION rows. Immutable after creation.
+    (Phase 39)
+    """
+    flavor: String
     templateId: ID
     dockerImage: String
     containerPort: Int
@@ -429,6 +437,12 @@ export const typeDefs = /* GraphQL */ `
     projectId: ID!
     type: ServiceType
     templateId: String
+    """
+    Catalog flow discriminator. One of 'docker' | 'server' | 'function' | 'template'.
+    Validated server-side; rejected if any other value. Immutable post-creation.
+    (Phase 39)
+    """
+    flavor: String
     dockerImage: String
     containerPort: Int
   }

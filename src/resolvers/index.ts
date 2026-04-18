@@ -1506,7 +1506,7 @@ export const resolvers = {
       _: unknown,
       {
         input,
-      }: { input: { name: string; projectId: string; type?: string; templateId?: string; dockerImage?: string; containerPort?: number } },
+      }: { input: { name: string; projectId: string; type?: string; templateId?: string; flavor?: string | null; dockerImage?: string; containerPort?: number } },
       context: Context
     ) => {
       requireAuth(context)
@@ -1521,6 +1521,24 @@ export const resolvers = {
       const slug = generateSlug(input.name)
       const serviceType = (input.type as any) || 'FUNCTION'
 
+      // Phase 39 — validate the catalog-flow discriminator. Templates always
+      // resolve to 'template' regardless of what the caller sent (so the UI
+      // can't mis-tag a template-backed service). Anything else must be one
+      // of the known flavors or null (legacy/unspecified — readers default
+      // to 'docker' for VM, 'function' for FUNCTION).
+      const ALLOWED_FLAVORS = new Set(['docker', 'server', 'function', 'template'])
+      let flavor: string | null = null
+      if (input.templateId) {
+        flavor = 'template'
+      } else if (input.flavor != null) {
+        if (!ALLOWED_FLAVORS.has(input.flavor)) {
+          throw new GraphQLError(
+            `Invalid flavor "${input.flavor}". Must be one of: docker, server, function, template.`
+          )
+        }
+        flavor = input.flavor
+      }
+
       return context.prisma.service.create({
         data: {
           type: serviceType,
@@ -1528,6 +1546,7 @@ export const resolvers = {
           slug,
           projectId: input.projectId,
           templateId: input.templateId ?? null,
+          flavor,
           dockerImage: input.dockerImage ?? null,
           containerPort: input.containerPort ?? null,
           createdByUserId: context.userId ?? null,
@@ -1863,6 +1882,10 @@ export const resolvers = {
             name,
             slug,
             projectId: context.projectId!,
+            // Phase 39 — function services are always 'function' flavor; this
+            // is the only catalog flow that produces them, so we hardcode
+            // rather than accepting it from the caller.
+            flavor: 'function',
             createdByUserId: context.userId ?? null,
             internalHostname: generateInternalHostname(slug, project.slug),
           },
