@@ -255,6 +255,7 @@ model Service {
   projectId       String
   templateId      String?
   dockerImage     String?     // Custom Docker image (e.g. ghcr.io/org/app:v1)
+  flavor          String?     // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation. (Phase 39)
   containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
   volumes         Json?       // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
   healthProbe     Json?       // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
