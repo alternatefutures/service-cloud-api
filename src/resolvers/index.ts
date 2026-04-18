@@ -1506,7 +1506,7 @@ export const resolvers = {
       _: unknown,
       {
         input,
-      }: { input: { name: string; projectId: string; type?: string; templateId?: string; dockerImage?: string; containerPort?: number } },
+      }: { input: { name: string; projectId: string; type?: string; templateId?: string; flavor?: string | null; dockerImage?: string; containerPort?: number } },
       context: Context
     ) => {
       requireAuth(context)
@@ -1521,6 +1521,22 @@ export const resolvers = {
       const slug = generateSlug(input.name)
       const serviceType = (input.type as any) || 'FUNCTION'
 
+      // Phase 39: validate the create-time flavor discriminator. Templates
+      // override an explicit flavor (a templated row is always 'template'),
+      // and we never persist anything outside the allowed set.
+      const ALLOWED_FLAVORS = new Set(['docker', 'server', 'function', 'template'])
+      let flavor: string | null = null
+      if (input.templateId) {
+        flavor = 'template'
+      } else if (input.flavor != null) {
+        if (!ALLOWED_FLAVORS.has(input.flavor)) {
+          throw new GraphQLError(
+            `Invalid flavor "${input.flavor}". Expected one of: docker, server, function, template.`
+          )
+        }
+        flavor = input.flavor
+      }
+
       return context.prisma.service.create({
         data: {
           type: serviceType,
@@ -1528,6 +1544,7 @@ export const resolvers = {
           slug,
           projectId: input.projectId,
           templateId: input.templateId ?? null,
+          flavor,
           dockerImage: input.dockerImage ?? null,
           containerPort: input.containerPort ?? null,
           createdByUserId: context.userId ?? null,
@@ -1863,6 +1880,7 @@ export const resolvers = {
             name,
             slug,
             projectId: context.projectId!,
+            flavor: 'function', // Phase 39: AFFunction-backed services are always 'function' flavor.
             createdByUserId: context.userId ?? null,
             internalHostname: generateInternalHostname(slug, project.slug),
           },

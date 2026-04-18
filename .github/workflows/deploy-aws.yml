@@ -87,9 +87,15 @@ jobs:
 
       - name: Install trivy
         if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
-        uses: aquasecurity/setup-trivy@v0.2.0
-        with:
-          version: v0.56.2
+        env:
+          TRIVY_VERSION: "0.70.0"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          trivy --version
 
       - name: Sign image with cosign (keyless / Sigstore OIDC)
         if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
