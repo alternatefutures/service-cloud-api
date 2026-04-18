@@ -10,6 +10,12 @@ on:
       - "pnpm-lock.yaml"
       - "Dockerfile"
       - "docker-entrypoint.sh"
+      # Supply-chain config — a waiver edit must re-deploy or the new
+      # ignore list never reaches production.
+      - ".trivyignore.yaml"
+      # The workflow itself — otherwise a workflow-only fix sits on main
+      # without re-running and never validates against a live build.
+      - ".github/workflows/deploy-aws.yml"
   workflow_dispatch:
 
 concurrency:
@@ -52,8 +58,14 @@ jobs:
           push: true
           platforms: linux/amd64
           provenance: false
+          # IMPORTANT: do NOT tag :latest here. The cluster's deployment
+          # manifest pins to a digest now, but a :latest tag in GHCR is
+          # still a footgun for any pod with imagePullPolicy:Always or
+          # for ad-hoc `docker run`. We promote :latest only after the
+          # supply-chain gate AND the rollout health check succeed
+          # (see "Promote :latest tag" step below). That way :latest is
+          # always a known-good, scanned, deployed image.
           tags: |
-            ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
 
       - name: Resolve immutable image reference
@@ -216,6 +228,23 @@ jobs:
             echo "healthy=false" >> $GITHUB_OUTPUT
             exit 1
           fi
+
+      # ---------------------------------------------------------------
+      # Only now — after build, sign, scan, migrate, rollout, and health
+      # check have all succeeded — do we move the :latest pointer. A
+      # failed Trivy scan, failed migration, or failed health check
+      # therefore CANNOT silently leak a bad image into the cluster via
+      # imagePullPolicy:Always or via any operator who pulls :latest by
+      # hand. Uses `buildx imagetools create`, which copies only the
+      # manifest (no layer re-upload).
+      # ---------------------------------------------------------------
+      - name: Promote :latest tag (post-verify)
+        if: success()
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${{ env.IMAGE }}:latest" \
+            "${{ steps.image.outputs.ref }}"
 
       - name: Discord notification (success)
         if: success()
