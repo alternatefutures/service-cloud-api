@@ -50,7 +50,7 @@ export type { Context }
 
 // Service factory for storage tracking (billing is now handled by service-auth)
 const storageTracker = (prisma: any) => new StorageTracker(prisma)
-
+ 
 /**
  * Validate that context.projectId is owned by the authenticated user.
  * Prevents IDOR via spoofed x-project-id header.
