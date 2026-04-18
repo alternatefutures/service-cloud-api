@@ -31,6 +31,7 @@ import {
 const log = createLogger('stale-sweeper')
 
 const STALE_THRESHOLD_MS = 25 * 60 * 1000 // 25 minutes
+const STALE_THRESHOLD_MIN = STALE_THRESHOLD_MS / 60_000
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000   // 5 minutes
 const LIVENESS_MIN_AGE_MS = 10 * 60 * 1000 // only check deployments ACTIVE for >10 min
 
@@ -48,7 +49,7 @@ let activeSweep: Promise<void> | null = null
 async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_THRESHOLD_MS)
 
-  // Akash: find deployments stuck in intermediate states for >15 min
+  // Akash: find deployments stuck in intermediate states past the threshold
   try {
     const staleAkash = await prisma.akashDeployment.findMany({
       where: {
@@ -73,7 +74,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         where: { id: dep.id, status: dep.status },
         data: {
           status: 'FAILED',
-          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >15 minutes (swept at ${new Date().toISOString()})`,
+          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`,
         },
       })
     }
@@ -85,7 +86,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
     log.error(err as Error, 'Error sweeping Akash deployments')
   }
 
-  // Phala: find deployments stuck in intermediate states for >15 min
+  // Phala: find deployments stuck in intermediate states past the threshold
   try {
     const stalePhala = await prisma.phalaDeployment.findMany({
       where: {
@@ -110,7 +111,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
         where: { id: dep.id, status: dep.status },
         data: {
           status: 'FAILED',
-          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >15 minutes (swept at ${new Date().toISOString()})`,
+          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`,
         },
       })
     }

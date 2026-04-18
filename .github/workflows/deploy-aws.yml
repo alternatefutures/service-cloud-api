@@ -42,15 +42,30 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: service-cloud-api/Dockerfile
           push: true
           platforms: linux/amd64
+          provenance: false
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Resolve immutable image reference
+        id: image
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::docker/build-push-action did not emit a digest"
+            exit 1
+          fi
+          IMAGE_REF="${{ env.IMAGE }}@${DIGEST}"
+          echo "ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "Pinned image: ${IMAGE_REF}"
 
       - name: Set up kubectl
         run: |
@@ -63,7 +78,7 @@ jobs:
           DB_URL=$(kubectl get secret database-credentials -n af-production \
             -o jsonpath='{.data.API_DATABASE_URL}' | base64 -d)
           kubectl run prisma-migrate-${GITHUB_SHA::7} \
-            --image=${{ env.IMAGE }}:${{ github.sha }} \
+            --image=${{ steps.image.outputs.ref }} \
             --restart=Never --rm -i \
             --pod-running-timeout=5m \
             --overrides='{"spec":{"imagePullSecrets":[{"name":"ghcr-credentials"}]}}' \
@@ -74,7 +89,7 @@ jobs:
       - name: Deploy to K3s
         run: |
           kubectl set image deployment/service-cloud-api \
-            service-cloud-api=${{ env.IMAGE }}:${{ github.sha }} \
+            service-cloud-api=${{ steps.image.outputs.ref }} \
             -n af-production
           kubectl rollout status deployment/service-cloud-api \
             -n af-production --timeout=180s
@@ -103,7 +118,7 @@ jobs:
           curl -sf -H "Content-Type: application/json" -d "{
             \"embeds\": [{
               \"title\": \"✅ service-cloud-api deployed\",
-              \"description\": \"Commit: \`${GITHUB_SHA::7}\`\nHealth: ${{ steps.verify.outputs.healthy == 'true' && 'passing' || 'pending' }}\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
+              \"description\": \"Commit: \`${GITHUB_SHA::7}\`\nDigest: \`${{ steps.image.outputs.digest }}\`\nHealth: ${{ steps.verify.outputs.healthy == 'true' && 'passing' || 'pending' }}\n[View run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\",
               \"color\": 3066993,
               \"footer\": {\"text\": \"Alternate Clouds Deploy\"},
               \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
