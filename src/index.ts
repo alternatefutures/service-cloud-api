@@ -29,6 +29,7 @@ import {
 import { startSslRenewalJob } from './jobs/sslRenewal.js'
 import depthLimit from 'graphql-depth-limit'
 import { createComplexityLimitRule } from 'graphql-validation-complexity'
+import { NoSchemaIntrospectionCustomRule } from 'graphql/validation/index.js'
 import helmet from 'helmet'
 import { initInfisical } from './config/infisical.js'
 import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
@@ -100,7 +101,16 @@ const MAX_DEPTH = 10
 // exceed conservative complexity limits in development.
 const MAX_COMPLEXITY = 15000
 
-// Custom plugin to add validation rules for depth and complexity limits
+const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+// Allow staging/internal envs to keep introspection (e.g. for SDK codegen
+// against staging) by setting GRAPHQL_FORCE_ENABLE_INTROSPECTION=true.
+// In production, default is to *block* introspection to reduce schema
+// fingerprinting and to keep the GraphiQL landing page off.
+const ALLOW_INTROSPECTION =
+  !IS_PRODUCTION || process.env.GRAPHQL_FORCE_ENABLE_INTROSPECTION === 'true'
+
+// Custom plugin to add validation rules for depth, complexity, and (in prod)
+// introspection blocking.
 const useValidationRules = (): Plugin => {
   return {
     onValidate({ addValidationRule }) {
@@ -112,17 +122,54 @@ const useValidationRules = (): Plugin => {
           listFactor: 10,
         })
       )
+      if (!ALLOW_INTROSPECTION) {
+        addValidationRule(NoSchemaIntrospectionCustomRule)
+      }
     },
   }
 }
 
 const gqlLog = createLogger('graphql')
 
+/**
+ * Defensive redactor for the GraphQL query body before it lands in the log.
+ *
+ * Tokens / secrets should never appear in a query string (they belong in
+ * HTTP headers or variables, neither of which we log) but a buggy client
+ * could embed one as a string literal. We strip the patterns we know about
+ * so a single misbehaving caller can't leak a credential to our log
+ * pipeline.
+ *
+ * Patterns covered:
+ *  - AlternateFutures personal access tokens: `af_live_…`, `af_test_…`
+ *    (see service-auth/src/services/token.service.ts:129)
+ *  - JWT shaped tokens: `eyJ…\.eyJ…\.[A-Za-z0-9_-]+`
+ *  - Bearer tokens: `Bearer <opaque>`
+ *  - Stripe-style keys: `(sk|pk|rk)_(live|test)_…`
+ *  - OpenAI/Anthropic-style keys: `sk-[A-Za-z0-9_-]{20,}`
+ */
+const TOKEN_REDACTORS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /af_(live|test)_[A-Za-z0-9]{8,}/g, replacement: 'af_$1_<redacted>' },
+  { pattern: /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, replacement: '<jwt:redacted>' },
+  { pattern: /Bearer\s+[A-Za-z0-9._\-]+/gi, replacement: 'Bearer <redacted>' },
+  { pattern: /(?<![A-Za-z0-9])(sk|pk|rk)_(live|test)_[A-Za-z0-9]{10,}/g, replacement: '$1_$2_<redacted>' },
+  { pattern: /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}/g, replacement: 'sk-<redacted>' },
+]
+
+function redactQueryForLogging(input: string): string {
+  let out = input
+  for (const { pattern, replacement } of TOKEN_REDACTORS) {
+    out = out.replace(pattern, replacement)
+  }
+  return out
+}
+
 const useLogging = (): Plugin => {
   return {
     onExecute({ args }) {
       const operationName = args.operationName || 'anonymous'
-      const query = args.document?.loc?.source?.body?.substring(0, 300) || 'unknown'
+      const rawQuery = args.document?.loc?.source?.body?.substring(0, 300) || 'unknown'
+      const query = redactQueryForLogging(rawQuery)
       gqlLog.info({ operationName, query }, 'executing operation')
     },
     onResultProcess({ result }) {
@@ -149,8 +196,12 @@ const yoga = createYoga({
     credentials: true,
   },
   graphqlEndpoint: '/graphql',
-  landingPage: true,
-  maskedErrors: process.env.NODE_ENV === 'production',
+  // In production, hide the GraphiQL landing page so unauthenticated users
+  // browsing /graphql see a plain HTTP error rather than a UI that hints at
+  // schema shape / sample queries. Yoga still serves the JSON API.
+  landingPage: !IS_PRODUCTION,
+  graphiql: !IS_PRODUCTION,
+  maskedErrors: IS_PRODUCTION,
   plugins: [useValidationRules(), useLogging()],
 })
 
