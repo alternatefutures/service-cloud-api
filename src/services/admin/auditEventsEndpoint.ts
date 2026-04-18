@@ -83,6 +83,13 @@ interface ResponseBody {
     action: string | null
     status: string | null
     traceId: string | null
+    /**
+     * Resolved source filter. `null` = no filter (all sources).
+     * Comma-separated string when one or more sources are selected
+     * (e.g. "auth,cloud-api"). Kept stringly-typed so the response
+     * shape remains backwards compatible with the original
+     * single-source contract — clients that need an array can split.
+     */
     source: string | null
     limit: number
   }
@@ -131,7 +138,7 @@ export async function handleAdminAuditEvents(
         action: filter.action,
         status: filter.status,
         traceId: filter.traceId,
-        source: filter.source,
+        source: filter.sources ? [...filter.sources].join(',') : null,
         limit: filter.limit,
       },
     }
@@ -157,8 +164,14 @@ interface ParsedFilter {
   action: string | null
   status: string | null
   traceId: string | null
-  /** `auth` | `cloud-api` | `cron` | `monitor` — narrows which half to query. */
-  source: string | null
+  /**
+   * Set of source names to include. `null` means "no filter, return
+   * everything". Each entry is one of `auth` | `cloud-api` | `cron` |
+   * `monitor`. Multi-select replaces the original single-source
+   * contract — the URL accepts a comma-separated `source` param now,
+   * but a single value (the legacy shape) still works.
+   */
+  sources: Set<string> | null
   limit: number
 }
 
@@ -184,6 +197,16 @@ function parseFilter(q: URLSearchParams): ParsedFilter | { error: string } {
     ? Math.min(Math.max(1, Math.floor(limitParam)), MAX_LIMIT)
     : DEFAULT_LIMIT
 
+  const sourceRaw = nullableTrim(q.get('source'))
+  const sources = sourceRaw
+    ? new Set(
+        sourceRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      )
+    : null
+
   return {
     from,
     to,
@@ -192,7 +215,7 @@ function parseFilter(q: URLSearchParams): ParsedFilter | { error: string } {
     action: nullableTrim(q.get('action')),
     status: nullableTrim(q.get('status')),
     traceId: nullableTrim(q.get('traceId')),
-    source: nullableTrim(q.get('source')),
+    sources,
     limit,
   }
 }
@@ -207,15 +230,21 @@ function nullableTrim(s: string | null): string | null {
 // Fetchers
 // ─────────────────────────────────────────────────────────────────────
 
+// Sources the cloud-api Postgres half can possibly emit. Used to
+// narrow `source IN (…)` when the caller's filter overlaps this set.
+const CLOUD_API_SIDE_SOURCES = ['cloud-api', 'cron', 'monitor'] as const
+
 async function fetchCloudApiSide(
   prisma: PrismaClient,
   f: ParsedFilter,
 ): Promise<AuditEventRow[]> {
-  // Skip the cloud-api half entirely if the caller pinned the source
-  // to something else — saves a query on a known-empty half.
-  if (f.source && f.source !== 'cloud-api' && f.source !== 'cron' && f.source !== 'monitor') {
-    return []
-  }
+  // Skip this half entirely if the caller filtered to sources that
+  // can't appear here (e.g. only `auth`). Saves a roundtrip on a
+  // known-empty half.
+  const allowedSources = f.sources
+    ? CLOUD_API_SIDE_SOURCES.filter((s) => f.sources!.has(s))
+    : CLOUD_API_SIDE_SOURCES.slice()
+  if (f.sources && allowedSources.length === 0) return []
 
   const where: Prisma.AuditEventWhereInput = {
     timestamp: { gte: f.from, lt: f.to },
@@ -225,7 +254,10 @@ async function fetchCloudApiSide(
   if (f.action) where.action = { contains: f.action, mode: 'insensitive' }
   if (f.status) where.status = f.status
   if (f.traceId) where.traceId = f.traceId
-  if (f.source) where.source = f.source
+  // Only constrain by source if the caller asked us to — otherwise
+  // letting Prisma omit the predicate is faster than a redundant
+  // `IN (…all…)`.
+  if (f.sources) where.source = { in: allowedSources }
 
   // DESC because the UI wants newest first. We over-fetch by `limit`
   // per-side so the merge has enough to pick from; the caller slices
@@ -257,9 +289,9 @@ async function fetchCloudApiSide(
 }
 
 async function fetchAuthSide(f: ParsedFilter): Promise<AuditEventRow[]> {
-  // Caller pinned to a non-auth source, or no introspection secret →
+  // Caller pinned to non-auth sources, or no introspection secret →
   // skip the auth half. Same reasoning as the cloud-api skip above.
-  if (f.source && f.source !== 'auth') return []
+  if (f.sources && !f.sources.has('auth')) return []
   if (!INTROSPECTION_SECRET) {
     log.warn('AUTH_INTROSPECTION_SECRET not set — auth side of audit query is empty')
     return []
