@@ -10,7 +10,9 @@ const {
   opsAlertMock,
 } = vi.hoisted(() => ({
   execAsyncMock: vi.fn(),
-  closeDeploymentMock: vi.fn().mockResolvedValue(undefined),
+  closeDeploymentMock: vi
+    .fn()
+    .mockResolvedValue({ chainStatus: 'CLOSED', txhash: 'mock-tx' }),
   refundEscrowMock: vi.fn().mockResolvedValue(undefined),
   settleAkashEscrowToTimeMock: vi.fn().mockResolvedValue(undefined),
   opsAlertMock: vi.fn().mockResolvedValue(undefined),
@@ -155,7 +157,7 @@ function installAkashCli(overrides: {
 describe('EscrowHealthMonitor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    closeDeploymentMock.mockResolvedValue(undefined)
+    closeDeploymentMock.mockResolvedValue({ chainStatus: 'CLOSED', txhash: 'mock-tx' })
     refundEscrowMock.mockResolvedValue(undefined)
     settleAkashEscrowToTimeMock.mockResolvedValue(undefined)
     opsAlertMock.mockResolvedValue(undefined)

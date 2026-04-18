@@ -27,6 +27,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write   # keyless cosign signing via Sigstore OIDC
+      security-events: write   # upload Trivy SARIF to code scanning
 
     steps:
       - name: Checkout into service-cloud-api subdirectory
@@ -66,6 +68,98 @@ jobs:
           echo "ref=${IMAGE_REF}" >> $GITHUB_OUTPUT
           echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
           echo "Pinned image: ${IMAGE_REF}"
+
+      # ---------------------------------------------------------------
+      # Supply-chain: cosign keyless signing, SBOM (syft), trivy scan.
+      # Set SUPPLY_CHAIN_DISABLED=true on the run to skip during an
+      # incident. Trivy blocks on CRITICAL by default; flip
+      # SUPPLY_CHAIN_TRIVY_BLOCK=false to demote to warnings.
+      # ---------------------------------------------------------------
+      - name: Install cosign
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      - name: Install syft
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Install trivy
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: aquasecurity/setup-trivy@v0.2.0
+        with:
+          version: v0.56.2
+
+      - name: Sign image with cosign (keyless / Sigstore OIDC)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: cosign sign --yes "${{ steps.image.outputs.ref }}"
+
+      - name: Generate SBOM (CycloneDX + SPDX)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        run: |
+          syft "${{ steps.image.outputs.ref }}" \
+            -o cyclonedx-json=sbom.cyclonedx.json \
+            -o spdx-json=sbom.spdx.json
+
+      - name: Attach SBOM as cosign attestation
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: |
+          cosign attest --yes \
+            --predicate sbom.cyclonedx.json \
+            --type cyclonedx \
+            "${{ steps.image.outputs.ref }}"
+
+      - name: Upload SBOM artifacts
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: |
+            sbom.cyclonedx.json
+            sbom.spdx.json
+          retention-days: 90
+
+      - name: Trivy vulnerability scan (blocks on CRITICAL)
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
+        env:
+          TRIVY_EXIT_CODE: ${{ env.SUPPLY_CHAIN_TRIVY_BLOCK == 'false' && '0' || '1' }}
+        run: |
+          trivy image \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --exit-code "${TRIVY_EXIT_CODE}" \
+            --no-progress \
+            --format table \
+            "${{ steps.image.outputs.ref }}"
+
+          # Informational HIGH report (never blocks)
+          trivy image \
+            --severity HIGH \
+            --ignore-unfixed \
+            --no-progress \
+            --format table \
+            "${{ steps.image.outputs.ref }}" || true
+
+          # SARIF for code scanning upload
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format sarif \
+            --output trivy.sarif \
+            "${{ steps.image.outputs.ref }}" || true
+
+      - name: Upload Trivy SARIF to code scanning
+        if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' && always() }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ github.workflow }}
 
       - name: Set up kubectl
         run: |

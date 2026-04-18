@@ -28,9 +28,39 @@
  * execAsync) prevent a single hung call from permanently blocking the queue.
  */
 
+import type { PrismaClient } from '@prisma/client'
 import { TX_SETTLE_DELAY_MS } from '../../config/akash.js'
+import { createLogger } from '../../lib/logger.js'
+
+const advisoryLog = createLogger('wallet-advisory-lock')
+
+// pg_advisory_lock takes a 32-bit signed int OR two 32-bit ints. We use
+// a single fixed key so EVERY chain-tx replica blocks on the same lock.
+// Choose anything as long as it does not collide with another use of
+// pg_advisory_lock in the same database. 0x414b4148 = "AKAH".
+const ADVISORY_LOCK_KEY = 0x414b4148
+
+// Allow ops to disable the cross-replica lock (useful for tests, single-
+// replica dev deploys, or emergencies). The in-process FIFO chain still
+// works on its own — we only LOSE the cross-replica guarantee.
+const ADVISORY_LOCK_DISABLED = process.env.WALLET_ADVISORY_LOCK_DISABLED === 'true'
+const ADVISORY_LOCK_TIMEOUT_MS = parseInt(
+  process.env.WALLET_ADVISORY_LOCK_TIMEOUT_MS ?? '60000',
+  10,
+)
 
 let chain: Promise<unknown> = Promise.resolve()
+
+// Set once at boot from `index.ts` (see `setWalletMutexPrisma`). The
+// advisory-lock TX needs a Prisma handle but `walletMutex` is imported
+// from many places (resolvers, schedulers, queue workers) and we don't
+// want to thread `prisma` through every call site. Module-level state
+// is fine here: the process has exactly one Prisma client.
+let sharedPrisma: PrismaClient | null = null
+
+export function setWalletMutexPrisma(prisma: PrismaClient): void {
+  sharedPrisma = prisma
+}
 
 export interface WalletLockOptions {
   /**
@@ -60,7 +90,7 @@ export function withWalletLock<T>(
 
   return prev
     .catch(() => undefined) // never let a prior failure poison the queue
-    .then(() => fn())
+    .then(() => withChainAdvisoryLock(fn))
     .then(
       v => {
         result = v
@@ -76,6 +106,49 @@ export function withWalletLock<T>(
       if (rejected) throw caught
       return result
     })
+}
+
+/**
+ * Wrap `fn` in a Postgres advisory lock so chain TX serialization holds
+ * across replicas. Without this, two pods could both pass the in-process
+ * `chain` mutex simultaneously and submit concurrent TXs from the same
+ * Cosmos account — guaranteed sequence-mismatch rejection.
+ *
+ * We use `pg_advisory_xact_lock` inside a Prisma transaction so the
+ * lock is bound to the connection AND released automatically on commit
+ * or error. The TX itself does no DB work; it exists only to hold the
+ * connection that owns the advisory lock.
+ *
+ * Disabled via `WALLET_ADVISORY_LOCK_DISABLED=true` for environments
+ * with a single replica (the in-process FIFO is enough on its own).
+ */
+async function withChainAdvisoryLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (ADVISORY_LOCK_DISABLED) return fn()
+  if (!sharedPrisma) {
+    // Test environment or early bootstrap (before setWalletMutexPrisma
+    // ran). Skip the cross-replica lock — in-process FIFO still works.
+    return fn()
+  }
+
+  return sharedPrisma.$transaction(
+    async (tx) => {
+      await tx.$queryRawUnsafe(`SELECT pg_advisory_xact_lock(${ADVISORY_LOCK_KEY})`)
+      return fn()
+    },
+    {
+      // The TX must outlive the chain command. `runAkashTxAsync` waits
+      // for block inclusion (~6s typical, much longer if RPC is slow),
+      // so we give it generous headroom. Tune via env if needed.
+      timeout: ADVISORY_LOCK_TIMEOUT_MS,
+      maxWait: ADVISORY_LOCK_TIMEOUT_MS,
+    },
+  ).catch((err) => {
+    advisoryLog.error({ err }, 'pg advisory-lock TX failed — falling back to in-process lock only')
+    // If the lock TX itself failed (DB down, etc.) we still want the
+    // command to attempt — better to risk a sequence collision than
+    // freeze every chain operation.
+    return fn()
+  })
 }
 
 function sleep(ms: number): Promise<void> {

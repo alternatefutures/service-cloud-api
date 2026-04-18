@@ -2,8 +2,24 @@ import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
 import { createLogger } from '../../lib/logger.js'
+import { settleViaLedger } from './settlementLedger.js'
 
 const log = createLogger('deployment-settlement')
+
+/**
+ * Build a stable, deterministic idempotency key for final-settlement
+ * debits. Uses a 1-second-quantised timestamp so a retry called moments
+ * later still hashes to the same key. Including `kind` keeps Akash and
+ * Phala settlements in independent key namespaces.
+ */
+function settlementIdempotencyKey(
+  prefix: string,
+  deploymentRef: string,
+  settledTo: Date,
+): string {
+  const flooredSecond = Math.floor(settledTo.getTime() / 1000)
+  return `${prefix}:${deploymentRef}:${flooredSecond}`
+}
 
 const MINUTE_MS = 60_000
 const DAY_MINUTES = 24 * 60
@@ -117,27 +133,37 @@ export async function settleAkashEscrowToTime(
     })
   }
 
-  // Pay-as-you-go: debit wallet for the final prorated amount
+  // Pay-as-you-go: debit wallet for the final prorated amount via the
+  // write-ahead settlement ledger so a crash between local state advance
+  // and the auth-side debit is recoverable by the reconciler.
   if (escrow.depositCents === 0 && additionalCents > 0) {
     try {
-      await billingApi.computeDebit({
+      await settleViaLedger(prisma, {
+        provider: 'AKASH',
+        kind: 'FINAL_SETTLEMENT',
+        deploymentRef: akashDeploymentId,
+        idempotencyKey: settlementIdempotencyKey(
+          'akash_final',
+          akashDeploymentId,
+          settledAt,
+        ),
         orgBillingId: escrow.orgBillingId,
         amountCents: additionalCents,
+        settledTo: settledAt,
+        policyId: escrow.akashDeployment?.policyId ?? null,
         serviceType: 'akash_compute',
-        provider: 'akash',
         resource: escrow.akashDeployment?.service?.slug || akashDeploymentId,
         description: `Akash compute final settlement: $${(additionalCents / 100).toFixed(2)}`,
-        idempotencyKey: `akash_final:${akashDeploymentId}:${settledAt.toISOString()}`,
         metadata: {
           deploymentId: akashDeploymentId,
-          dseq: escrow.akashDeployment?.dseq?.toString(),
+          dseq: escrow.akashDeployment?.dseq?.toString() ?? null,
           source: 'akash_final_settlement',
         },
       })
     } catch (error) {
       log.warn(
         { akashDeploymentId, err: error },
-        'Failed to debit final Akash settlement'
+        'Failed to debit final Akash settlement — ledger row will be reconciled'
       )
     }
   }
@@ -207,17 +233,25 @@ async function settleAkashWithoutEscrow(
 
   try {
     const orgBilling = await billingApi.getOrgBilling(organizationId)
-    const result = await billingApi.computeDebit({
+    const result = await settleViaLedger(prisma, {
+      provider: 'AKASH',
+      kind: 'FINAL_SETTLEMENT',
+      deploymentRef: akashDeploymentId,
+      idempotencyKey: settlementIdempotencyKey(
+        'akash_final_no_escrow',
+        akashDeploymentId,
+        settledAt,
+      ),
       orgBillingId: orgBilling.orgBillingId,
       amountCents: additionalCents,
+      settledTo: settledAt,
+      policyId: deployment.policyId ?? null,
       serviceType: 'akash_compute',
-      provider: 'akash',
       resource: deployment.service.slug || akashDeploymentId,
       description: `Akash compute final settlement (escrow-missing): $${(additionalCents / 100).toFixed(2)}`,
-      idempotencyKey: `akash_final_no_escrow:${akashDeploymentId}:${settledAt.toISOString()}`,
       metadata: {
         deploymentId: akashDeploymentId,
-        dseq: deployment.dseq?.toString(),
+        dseq: deployment.dseq?.toString() ?? null,
         source: 'akash_final_settlement_no_escrow',
       },
     })
@@ -240,7 +274,7 @@ async function settleAkashWithoutEscrow(
   } catch (error) {
     log.warn(
       { akashDeploymentId, err: error },
-      'Failed to settle Akash billing without escrow fallback'
+      'Failed to settle Akash billing without escrow fallback — ledger row will be reconciled'
     )
     return 0
   }
@@ -314,16 +348,27 @@ export async function processFinalPhalaBilling(
   }
 
   try {
-    const billingApi = getBillingApiClient()
-    const idempotencyKey = `${idempotencyPrefix}:${deployment.id}:${billedAt.toISOString()}`
-    const result = await billingApi.computeDebit({
+    const idempotencyKey = settlementIdempotencyKey(
+      idempotencyPrefix,
+      deployment.id,
+      billedAt,
+    )
+    const result = await settleViaLedger(prisma, {
+      provider: 'PHALA',
+      kind: 'FINAL_SETTLEMENT',
+      deploymentRef: deployment.id,
+      idempotencyKey,
       orgBillingId: deployment.orgBillingId,
       amountCents,
+      settledTo: billedAt,
+      policyId: deployment.policyId ?? null,
       serviceType: 'phala_tee',
-      provider: 'phala',
       resource: deployment.id,
       description: `Phala TEE final billing: $${(amountCents / 100).toFixed(2)}`,
-      idempotencyKey,
+      metadata: {
+        cvmSize: deployment.cvmSize,
+        source: 'phala_final_settlement',
+      },
     })
 
     if (result.alreadyProcessed) {
@@ -358,7 +403,7 @@ export async function processFinalPhalaBilling(
 
     return amountCents
   } catch (error) {
-    log.warn({ phalaDeploymentId, err: error }, 'Final Phala billing failed')
+    log.warn({ phalaDeploymentId, err: error }, 'Final Phala billing failed — ledger row will be reconciled')
     return 0
   }
 }

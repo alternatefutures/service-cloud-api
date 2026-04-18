@@ -50,18 +50,33 @@ describe('EscrowService', () => {
     escrowDepositMock.mockResolvedValue({ success: true, balanceCents: 5000 })
     escrowRefundMock.mockResolvedValue({ success: true, balanceCents: 5000 })
 
+    // In-memory state shared between create/update so refundEscrow's
+    // write-ahead pattern (claim via updateMany → finalize via update)
+    // can read back what create wrote.
+    const rows: Record<string, any> = {}
     prisma = {
       deploymentEscrow: {
-        create: vi.fn().mockImplementation(({ data }) => Promise.resolve({
-          id: 'escrow-new',
-          ...data,
-          consumedCents: 0,
-          refundedCents: 0,
-          createdAt: new Date(),
-        })),
+        create: vi.fn().mockImplementation(({ data }) => {
+          const row = {
+            id: 'escrow-new',
+            ...data,
+            consumedCents: 0,
+            refundedCents: 0,
+            createdAt: new Date(),
+          }
+          rows[row.id] = row
+          return Promise.resolve(row)
+        }),
         findUnique: vi.fn(),
-        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(data)),
-        updateMany: vi.fn(),
+        update: vi.fn().mockImplementation(({ where, data }) => {
+          const existing = rows[where.id] ?? {}
+          const next = { ...existing, ...data, id: where.id }
+          rows[where.id] = next
+          return Promise.resolve(next)
+        }),
+        // Default: claim succeeds. Tests that need a contended claim
+        // can override with mockResolvedValueOnce({ count: 0 }).
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
     }
 

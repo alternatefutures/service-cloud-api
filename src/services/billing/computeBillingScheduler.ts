@@ -18,6 +18,8 @@ import {
   processFinalPhalaBilling,
   settleAkashEscrowToTime,
 } from './deploymentSettlement.js'
+import { reconcilePendingSettlements } from './settlementLedger.js'
+import { reconcileAll as reconcileAllConcurrency } from '../concurrency/concurrencyService.js'
 import { createLogger } from '../../lib/logger.js'
 import { audit } from '../../lib/audit.js'
 import { checkPolicyLimits } from '../policy/enforcer.js'
@@ -146,6 +148,37 @@ export class ComputeBillingScheduler {
     }
 
     try {
+      // Drive escrow rows out of write-ahead states
+      // BEFORE running the main billing loops. A row stuck in
+      // PENDING_DEPOSIT is invisible to processAkashEscrows (which only
+      // looks at ACTIVE), so without this the user could be charged on
+      // auth's side but never billed/refunded on ours.
+      try {
+        const escrowRecon = await getEscrowService(this.prisma).reconcilePendingDeposits()
+        if (escrowRecon.promoted > 0 || escrowRecon.failed > 0) {
+          log.info(escrowRecon, 'Escrow write-ahead reconciler swept stuck rows')
+        }
+        const refundRecon = await getEscrowService(this.prisma).reconcilePendingRefunds()
+        if (refundRecon.completed > 0 || refundRecon.failed > 0) {
+          log.info(refundRecon, 'Escrow refund reconciler swept stuck rows')
+        }
+        const settlementRecon = await reconcilePendingSettlements(this.prisma)
+        if (settlementRecon.committed > 0 || settlementRecon.failed > 0) {
+          log.info(settlementRecon, 'Settlement-ledger reconciler swept stuck rows')
+        }
+        // Concurrency counter drift: any close path that forgot to
+        // decrement leaves the org over-counted and unable to launch.
+        // Recomputing from the deployment tables is cheap enough to do
+        // every cycle and pins the worst-case lockout duration to the
+        // billing interval.
+        const concurrencyRecon = await reconcileAllConcurrency(this.prisma)
+        if (concurrencyRecon.drifted > 0) {
+          log.warn(concurrencyRecon, 'Concurrency counter reconciler corrected drift')
+        }
+      } catch (reconErr) {
+        log.error(reconErr, 'Reconciler failed — continuing with billing cycle')
+      }
+
       await this.processAkashEscrows(stats)
       await this.processPhalaDebits(stats)
 
@@ -491,6 +524,12 @@ export class ComputeBillingScheduler {
       'Processing active Phala deployments'
     )
 
+    // Surface ACTIVE Phala deployments that the main loop
+    // *cannot* bill because their orgBillingId is null. These are silent
+    // money leaks (compute is running, no one is being charged) so we
+    // page on every cycle until ops backfills the row.
+    await this.alertUnbillablePhalaDeployments()
+
     const now = new Date()
 
     for (const deployment of activePhala) {
@@ -514,16 +553,24 @@ export class ComputeBillingScheduler {
           continue
         }
 
-        const billableHours = this.forceMode
+        const hoursToBill = this.forceMode
           ? Math.max(1, Math.floor(hoursSinceLastBill))
-          : Math.floor(hoursSinceLastBill)
-        const amountCents = billableHours * deployment.hourlyRateCents
+          : Math.max(1, Math.floor(hoursSinceLastBill))
+        const amountCents = hoursToBill * deployment.hourlyRateCents
 
         if (amountCents <= 0) continue
 
-        const dateKey = now.toISOString().slice(0, 10)
-        const runId = this.forceMode ? `force_${now.toISOString().slice(0, 13)}` : dateKey
-        const idempotencyKey = `phala_daily:${deployment.id}:${runId}`
+        // Hourly idempotency key (was daily). With a daily key
+        // the first hour-of-day bill would silently swallow EVERY subsequent
+        // intra-day attempt as `alreadyProcessed`, dropping 23h of revenue
+        // per active CVM. Hour-floor key matches the Akash pay-as-you-go
+        // path above and lets us coalesce missed hours into one charge while
+        // keeping the key bound to the slot the user is actually being
+        // charged for.
+        const slotStart = new Date(Math.floor(now.getTime() / 3_600_000) * 3_600_000)
+        const hourKey = slotStart.toISOString().slice(0, 13)
+        const runId = this.forceMode ? `force_${hourKey}` : hourKey
+        const idempotencyKey = `phala_hourly:${deployment.id}:${runId}`
 
         const result = await billingApi.computeDebit({
           orgBillingId: deployment.orgBillingId,
@@ -531,28 +578,36 @@ export class ComputeBillingScheduler {
           serviceType: 'phala_tee',
           provider: 'phala',
           resource: deployment.id,
-          description: `Phala TEE ${deployment.cvmSize || 'tdx.large'}: ${billableHours}h @ $${(deployment.hourlyRateCents / 100).toFixed(2)}/hr`,
+          description: `Phala TEE ${deployment.cvmSize || 'tdx.large'}: ${hoursToBill}h @ $${(deployment.hourlyRateCents / 100).toFixed(2)}/hr`,
           idempotencyKey,
+        })
+
+        // Advance lastBilledAt by exactly hoursToBill*1h (NOT
+        // to `now`), capped at `now`. Same fractional-tail rationale as
+        // the Akash pay-as-you-go path above. ALSO mirror on idempotency
+        // hits: without the mirror the next cycle would compute a larger
+        // hoursToBill against a fresh hourly key and double-charge.
+        const advancedLastBilledAt = new Date(
+          Math.min(now.getTime(), lastBilled.getTime() + hoursToBill * 3_600_000)
+        )
+        await this.prisma.phalaDeployment.update({
+          where: { id: deployment.id },
+          data: {
+            lastBilledAt: advancedLastBilledAt,
+            totalBilledCents: deployment.totalBilledCents + amountCents,
+          },
         })
 
         if (result.alreadyProcessed) {
           log.info(
-            { deploymentId: deployment.id },
-            'Phala deployment already processed (idempotency hit)'
+            { deploymentId: deployment.id, amountCents, idempotencyKey },
+            'Phala deployment already processed (idempotency hit) — mirrored to local DB'
           )
         } else {
-          await this.prisma.phalaDeployment.update({
-            where: { id: deployment.id },
-            data: {
-              lastBilledAt: now,
-              totalBilledCents: deployment.totalBilledCents + amountCents,
-            },
-          })
-
           stats.phalaProcessed++
           stats.totalDebitedCents += amountCents
           log.info(
-            { deploymentId: deployment.id, debitedCents: amountCents },
+            { deploymentId: deployment.id, debitedCents: amountCents, hoursToBill },
             'Phala deployment debited'
           )
         }
@@ -574,9 +629,154 @@ export class ComputeBillingScheduler {
             },
             'Phala deployment error'
           )
+          await opsAlert({
+            key: `phala-billing-error:${deployment.id}`,
+            severity: 'warning',
+            title: 'Phala billing cycle error',
+            message:
+              `Failed to bill Phala deployment ${deployment.id} during the hourly cycle. ` +
+              `If this persists the user will stop being charged for a live CVM.`,
+            context: {
+              deploymentId: deployment.id,
+              orgBillingId: deployment.orgBillingId,
+              hourlyRateCents: deployment.hourlyRateCents,
+              error: errMsg.slice(0, 400),
+            },
+            suppressMs: 55 * 60 * 1000,
+          })
         }
       }
     }
+
+    // Reconciliation: any Phala deployment whose lastBilledAt
+    // has drifted >2h behind `now` indicates a missed cycle (loop crashed,
+    // pod crashed mid-run, etc). Surface so the next cycle's coalesce-bill
+    // path picks them up; alert if the drift is severe.
+    await this.detectPhalaBillingDrift()
+  }
+
+  /**
+   * Emit an ops alert (and detailed log line) for any ACTIVE
+   * Phala deployment that is missing `orgBillingId` or `hourlyRateCents`.
+   * The main loop's `where` clause silently filters these out, so without
+   * this they are invisible money leaks: compute is running on Phala but
+   * nobody is being charged.
+   */
+  private async alertUnbillablePhalaDeployments(): Promise<void> {
+    const broken = await this.prisma.phalaDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { orgBillingId: null },
+          { hourlyRateCents: null },
+        ],
+      },
+      select: {
+        id: true,
+        appId: true,
+        organizationId: true,
+        orgBillingId: true,
+        hourlyRateCents: true,
+        createdAt: true,
+      },
+    })
+    if (broken.length === 0) return
+
+    log.error(
+      { count: broken.length, ids: broken.map(b => b.id) },
+      'ACTIVE Phala deployments missing billing fields — NOT being charged',
+    )
+    await opsAlert({
+      key: 'phala-unbillable-deployments',
+      severity: 'critical',
+      title: 'ACTIVE Phala deployments are not being billed',
+      message:
+        `${broken.length} ACTIVE Phala deployment(s) have a NULL orgBillingId or hourlyRateCents. ` +
+        `They are running on Phala but no one is paying for the compute. ` +
+        `Backfill the missing fields ASAP — see admin/cloud/docs/AF_INCIDENT_RUNBOOKS.md.`,
+      context: {
+        count: broken.length,
+        sample: broken.slice(0, 10).map(b => ({
+          deploymentId: b.id,
+          appId: b.appId,
+          organizationId: b.organizationId,
+          missing: [
+            b.orgBillingId ? null : 'orgBillingId',
+            b.hourlyRateCents ? null : 'hourlyRateCents',
+          ].filter(Boolean),
+        })),
+      },
+      suppressMs: 55 * 60 * 1000,
+    })
+  }
+
+  /**
+   * Find ACTIVE Phala deployments where `lastBilledAt` has
+   * fallen behind `now` by more than the configured threshold. The next
+   * billing cycle will coalesce-charge the missed hours via the regular
+   * loop above (hoursToBill=floor(drift)), so reconciliation here is
+   * primarily about visibility: surface drift early so we can investigate
+   * before it becomes a multi-day backlog.
+   */
+  private async detectPhalaBillingDrift(): Promise<void> {
+    const DRIFT_THRESHOLD_HOURS = 2
+    const driftCutoff = new Date(Date.now() - DRIFT_THRESHOLD_HOURS * 3_600_000)
+    const drifted = await this.prisma.phalaDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        orgBillingId: { not: null },
+        hourlyRateCents: { not: null },
+        OR: [
+          { lastBilledAt: { lt: driftCutoff } },
+          // No lastBilledAt yet but activeStartedAt > threshold: still
+          // unbilled past the grace window.
+          {
+            lastBilledAt: null,
+            activeStartedAt: { lt: driftCutoff },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        appId: true,
+        orgBillingId: true,
+        lastBilledAt: true,
+        activeStartedAt: true,
+        hourlyRateCents: true,
+      },
+    })
+    if (drifted.length === 0) return
+
+    log.warn(
+      {
+        count: drifted.length,
+        thresholdHours: DRIFT_THRESHOLD_HOURS,
+        ids: drifted.map(d => d.id),
+      },
+      'Phala billing drift detected — next cycle will coalesce-charge missed hours',
+    )
+    await opsAlert({
+      key: 'phala-billing-drift',
+      severity: 'warning',
+      title: 'Phala billing has drifted behind real time',
+      message:
+        `${drifted.length} ACTIVE Phala deployment(s) have lastBilledAt > ${DRIFT_THRESHOLD_HOURS}h behind now. ` +
+        `The next cycle should coalesce the missed hours, but persistent drift means the cron isn't running ` +
+        `cleanly — investigate scheduler health and pod logs.`,
+      context: {
+        count: drifted.length,
+        thresholdHours: DRIFT_THRESHOLD_HOURS,
+        sample: drifted.slice(0, 10).map(d => ({
+          deploymentId: d.id,
+          appId: d.appId,
+          orgBillingId: d.orgBillingId,
+          lastBilledAt: d.lastBilledAt?.toISOString() ?? null,
+          activeStartedAt: d.activeStartedAt?.toISOString() ?? null,
+          hourlyRateCents: d.hourlyRateCents,
+        })),
+      },
+      suppressMs: 55 * 60 * 1000,
+    })
   }
 
   // ========================================
@@ -745,29 +945,28 @@ export class ComputeBillingScheduler {
           data: { savedSdl: deployment.sdlContent },
         })
 
-        let onChainClosed = false
-        try {
-          const { getAkashOrchestrator } =
-            await import('../akash/orchestrator.js')
-          const orchestrator = getAkashOrchestrator(this.prisma)
-          log.info({ dseq: deployment.dseq }, 'Closing on-chain deployment for suspension')
-          await orchestrator.closeDeployment(Number(deployment.dseq))
-          onChainClosed = true
-          log.info({ dseq: deployment.dseq }, 'On-chain close TX submitted')
-          // Sequence-settle delay is held inside withWalletLock
-          // (see services/akash/walletMutex.ts). No manual sleep needed.
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          const alreadyGone = /deployment not found|deployment closed|not active|does not exist|order not found|lease not found|unknown deployment|invalid deployment/i.test(errMsg)
-          if (alreadyGone) {
-            log.warn({ dseq: deployment.dseq, err }, 'On-chain deployment already gone — treating as closed')
-            onChainClosed = true
-          } else {
-            log.error(
-              { dseq: deployment.dseq, err },
-              'On-chain close FAILED — deployment stays ACTIVE and billed until resolved'
-            )
-          }
+        // Suspension flow uses the structured close
+        // result. CLOSED + ALREADY_CLOSED both transition the local
+        // row to SUSPENDED (resumable). FAILED keeps the row ACTIVE
+        // so the user keeps being billed and the next billing tick
+        // retries — never silently move to SUSPENDED while the lease
+        // is still live and draining escrow.
+        const { getAkashOrchestrator } = await import('../akash/orchestrator.js')
+        const orchestrator = getAkashOrchestrator(this.prisma)
+        log.info({ dseq: deployment.dseq }, 'Closing on-chain deployment for suspension')
+        const close = await orchestrator.closeDeployment(Number(deployment.dseq))
+        const onChainClosed =
+          close.chainStatus === 'CLOSED' || close.chainStatus === 'ALREADY_CLOSED'
+        if (onChainClosed) {
+          log.info(
+            { dseq: deployment.dseq, chainStatus: close.chainStatus },
+            'On-chain close completed for suspension',
+          )
+        } else {
+          log.error(
+            { dseq: deployment.dseq, error: close.error },
+            'On-chain close FAILED — deployment stays ACTIVE and billed until next billing tick retries',
+          )
         }
 
         if (onChainClosed) {
@@ -779,6 +978,18 @@ export class ComputeBillingScheduler {
           if (result.count > 0 && deployment.escrow) {
             await settleAkashEscrowToTime(this.prisma, deployment.id, stoppedAt)
             await escrowService.pauseEscrow(deployment.id)
+          }
+
+          // SUSPENDED no longer counts toward the org's concurrency cap
+          // (the lease is closed on chain). Reconciler would catch this
+          // within the hour, but the user expects to be able to launch
+          // a replacement immediately.
+          if (result.count > 0 && deployment.escrow?.organizationId) {
+            const { decrementOrgConcurrency } = await import(
+              '../concurrency/concurrencyService.js'
+            )
+            await decrementOrgConcurrency(this.prisma, deployment.escrow.organizationId)
+              .catch((err) => log.warn({ err, deploymentId: deployment.id }, 'Concurrency decrement failed (suspend Akash)'))
           }
 
           // Clear any reservation on the policy
@@ -882,7 +1093,13 @@ export class ComputeBillingScheduler {
             data: { status: 'STOPPED' },
           })
           if (result.count > 0) {
-            // Clear any reservation
+            if (deployment.organizationId) {
+              const { decrementOrgConcurrency } = await import(
+                '../concurrency/concurrencyService.js'
+              )
+              await decrementOrgConcurrency(this.prisma, deployment.organizationId)
+                .catch((err) => log.warn({ err, deploymentId: deployment.id }, 'Concurrency decrement failed (suspend Phala)'))
+            }
             if (deployment.policyId) {
               await this.prisma.deploymentPolicy.updateMany({
                 where: { id: deployment.policyId, reservedCents: { gt: 0 } },

@@ -41,6 +41,33 @@ const ESCROW_CHECK_CRON = '30 * * * *'
 /** Warn when deployer wallet ACT balance falls below this (5 ACT). */
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
 
+/**
+ * Hot-wallet cap (defense-in-depth against key compromise).
+ *
+ * The deployer wallet is an *online* hot wallet — its key sits on the
+ * cloud-api pod's filesystem and any successful RCE on the API
+ * empties it. We therefore want it to hold only what's needed to
+ * cover ~24-48 h of escrow refills; the rest of the AKT/ACT runway
+ * belongs in cold storage.
+ *
+ * If the wallet balance creeps above this cap (e.g. operator funded
+ * too much, or treasury swept the wrong way), we fire an ops alert
+ * and ask the operator to sweep the excess back to cold storage per
+ * the runbook (Section L of AF_INCIDENT_RUNBOOKS.md).
+ *
+ * Override in production via `AKASH_HOT_WALLET_CAP_UACT` if the
+ * default is too tight for current usage.
+ */
+const DEFAULT_HOT_WALLET_CAP_UACT = 50_000_000 // 50 ACT
+const HOT_WALLET_CAP_UACT = (() => {
+  const raw = process.env.AKASH_HOT_WALLET_CAP_UACT
+  if (!raw) return DEFAULT_HOT_WALLET_CAP_UACT
+  const parsed = parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > LOW_WALLET_THRESHOLD_UACT
+    ? parsed
+    : DEFAULT_HOT_WALLET_CAP_UACT
+})()
+
 async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
   const env = getAkashEnv()
   const invoke = () =>
@@ -220,8 +247,9 @@ export class EscrowHealthMonitor {
       const data = JSON.parse(output)
       const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uact')
       const balance = parseInt(uactBal?.amount || '0', 10)
+      const balanceAct = (balance / 1_000_000).toFixed(4)
+
       if (balance < LOW_WALLET_THRESHOLD_UACT) {
-        const balanceAct = (balance / 1_000_000).toFixed(4)
         log.warn(
           { balanceUact: balance, balanceAct },
           'CRITICAL: Deployer wallet ACT balance is low — escrow refills will fail soon'
@@ -241,6 +269,34 @@ export class EscrowHealthMonitor {
           },
           // Alert hourly (matches the health-monitor cadence), not every 10 min.
           suppressMs: 55 * 60 * 1000,
+        })
+      }
+
+      // Hot-wallet cap (Section L of the incident runbook). The deployer
+      // wallet is online — keeping it lean limits blast radius if the
+      // pod / key is ever compromised.
+      if (balance > HOT_WALLET_CAP_UACT) {
+        log.warn(
+          { balanceUact: balance, balanceAct, capUact: HOT_WALLET_CAP_UACT },
+          'Deployer hot wallet exceeds configured cap — sweep excess to cold storage',
+        )
+        await opsAlert({
+          key: 'deployer-wallet-over-cap',
+          severity: 'warning',
+          title: 'Deployer hot wallet over cap',
+          message:
+            `Deployer wallet holds ${balanceAct} ACT, above the ${(HOT_WALLET_CAP_UACT / 1_000_000).toFixed(0)} ACT hot-wallet cap. ` +
+            `Sweep the excess back to cold storage per AF_INCIDENT_RUNBOOKS.md §L. ` +
+            `Override the cap by setting AKASH_HOT_WALLET_CAP_UACT if usage justifies a larger float.`,
+          context: {
+            address,
+            balanceAct,
+            balanceUact: String(balance),
+            capUact: String(HOT_WALLET_CAP_UACT),
+            excessUact: String(balance - HOT_WALLET_CAP_UACT),
+          },
+          // Daily nudge — over-cap is a slow-burn risk, not a page-now event.
+          suppressMs: 24 * 60 * 60 * 1000,
         })
       }
     } catch {
@@ -332,21 +388,39 @@ export class EscrowHealthMonitor {
   private async closeAndSettleDeployment(deploymentId: string, dseq: string): Promise<void> {
     const current = await this.prisma.akashDeployment.findUnique({
       where: { id: deploymentId },
-      select: { status: true },
+      select: {
+        status: true,
+        service: { select: { project: { select: { organizationId: true } } } },
+      },
     })
     if (!current || current.status !== 'ACTIVE') return
 
     const closedAt = new Date()
 
-    try {
-      const orchestrator = getAkashOrchestrator(this.prisma)
-      await orchestrator.closeDeployment(Number(dseq))
-    } catch (closeErr) {
-      const msg = (closeErr as Error).message ?? ''
-      const alreadyGone = /deployment not found|deployment closed|not active|does not exist/i.test(msg)
-      if (!alreadyGone) {
-        log.error({ deploymentId, dseq, err: msg }, 'On-chain close failed during escrow-monitor auto-close')
-      }
+    // Switch on the structured close result. The escrow
+    // monitor only invokes auto-close when the lease is *already*
+    // chain-dead (provider closed it / escrow drained), so the most
+    // common outcome here is ALREADY_CLOSED. A FAILED outcome is
+    // pathological (RPC down, wallet empty) and we MUST surface it
+    // as CLOSE_FAILED instead of silently marking the row CLOSED —
+    // otherwise the user gets refunded for an escrow we never
+    // actually settled.
+    const orchestrator = getAkashOrchestrator(this.prisma)
+    const close = await orchestrator.closeDeployment(Number(dseq))
+
+    if (close.chainStatus === 'FAILED') {
+      log.error(
+        { deploymentId, dseq, error: close.error },
+        'Escrow-monitor auto-close FAILED on-chain — marking CLOSE_FAILED, leaving escrow intact for retry',
+      )
+      await this.prisma.akashDeployment.updateMany({
+        where: { id: deploymentId, status: 'ACTIVE' },
+        data: {
+          status: 'CLOSE_FAILED',
+          errorMessage: `Escrow-monitor auto-close failed: ${close.error}`,
+        },
+      })
+      return
     }
 
     const result = await this.prisma.akashDeployment.updateMany({
@@ -357,7 +431,19 @@ export class EscrowHealthMonitor {
     if (result.count > 0) {
       await settleAkashEscrowToTime(this.prisma, deploymentId, closedAt)
       await getEscrowService(this.prisma).refundEscrow(deploymentId)
-      log.info({ deploymentId, dseq }, 'Chain-dead deployment closed and billing settled')
+      const { decrementOrgConcurrency } = await import(
+        '../concurrency/concurrencyService.js'
+      )
+      await decrementOrgConcurrency(
+        this.prisma,
+        current.service?.project?.organizationId,
+      ).catch((err) =>
+        log.warn({ err, deploymentId }, 'Concurrency decrement failed (escrow auto-close)'),
+      )
+      log.info(
+        { deploymentId, dseq, chainStatus: close.chainStatus },
+        'Chain-dead deployment closed and billing settled',
+      )
     }
   }
 

@@ -48,6 +48,8 @@ import {
   handlePolicyWebhook,
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
+import { runWithLeadership, stopAllLeaderSchedulers } from './services/leader/leaderElection.js'
+import { setWalletMutexPrisma } from './services/akash/walletMutex.js'
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
 import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
 import { AuditExportScheduler } from './services/audit/auditExportScheduler.js'
@@ -379,19 +381,52 @@ server.on('upgrade', async (request, socket, head) => {
 
 const port = process.env.PORT || 1602
 
-server.listen(port, () => {
+server.listen(port, async () => {
   log.info({ port, graphql: `/graphql`, ws: `/ws` }, 'server started')
 
-  storageSnapshotScheduler.start()
-  invoiceScheduler.start()
+  // Hand the shared Prisma client to walletMutex so the cross-replica
+  // pg_advisory_xact_lock has a connection to use. Must run before any
+  // chain TX is fired.
+  setWalletMutexPrisma(prisma)
+
+  // Singleton schedulers run under a leader lease so REPLICAS > 1 is
+  // safe. The Akash provider verifier and audit exporter are still
+  // best-effort even if leadership flips between pods because both are
+  // idempotent / cron-style.
+  await runWithLeadership(prisma, 'storage-snapshot', {
+    onAcquire: () => storageSnapshotScheduler.start(),
+    onRelease: () => storageSnapshotScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'invoice-scheduler', {
+    onAcquire: () => invoiceScheduler.start(),
+    onRelease: () => invoiceScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'compute-billing-scheduler', {
+    onAcquire: () => computeBillingScheduler.start(),
+    onRelease: () => computeBillingScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'escrow-health-monitor', {
+    onAcquire: () => escrowHealthMonitor.start(),
+    onRelease: () => escrowHealthMonitor.stop(),
+  })
+  await runWithLeadership(prisma, 'provider-registry-scheduler', {
+    onAcquire: () => providerRegistryScheduler.start(),
+    onRelease: () => providerRegistryScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'audit-export-scheduler', {
+    onAcquire: () => auditExportScheduler.start(),
+    onRelease: () => auditExportScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'provider-verification-scheduler', {
+    onAcquire: () => providerVerificationScheduler.start(),
+    onRelease: () => providerVerificationScheduler.stop(),
+  })
+
+  // Per-pod work (no chain TXs / no row-mutating singletons): runs
+  // unconditionally on every replica.
   usageAggregator.start()
-  computeBillingScheduler.start()
-  escrowHealthMonitor.start()
-  providerRegistryScheduler.start()
-  auditExportScheduler.start()
-  providerVerificationScheduler.start()
   telemetryIngestionService.start()
-  log.info('billing + provider registry + verification schedulers started')
+  log.info('billing + provider registry + verification schedulers started (leader-gated)')
 
   startSslRenewalJob()
   log.info('SSL renewal job started')
@@ -410,20 +445,22 @@ server.listen(port, () => {
   orchestrator.resumeDeployingDeployments()
   orchestrator.resumePendingBackfills()
 
-  startStaleDeploymentSweeper(prisma)
+  // Stale sweeper writes terminal-state rows + drives close TXs, so
+  // it MUST be a singleton across replicas.
+  await runWithLeadership(prisma, 'stale-deployment-sweeper', {
+    onAcquire: () => startStaleDeploymentSweeper(prisma),
+    onRelease: () => stopStaleDeploymentSweeper(),
+  })
+
   healthPrewarmerInterval = startHealthPrewarmer(prisma)
   startApplicationHealthRunner(prisma)
 })
 
 async function gracefulShutdown(signal: string) {
   log.info({ signal }, 'shutting down')
-  storageSnapshotScheduler.stop()
-  invoiceScheduler.stop()
-  computeBillingScheduler.stop()
-  escrowHealthMonitor.stop()
-  providerRegistryScheduler.stop()
-  providerVerificationScheduler.stop()
-  auditExportScheduler.stop()
+  // Releases every leader lease (so a standby pod takes over within
+  // its next poll) AND calls each scheduler's stop hook.
+  await stopAllLeaderSchedulers(prisma)
   if (healthPrewarmerInterval) clearInterval(healthPrewarmerInterval)
   stopApplicationHealthRunner()
 
@@ -433,7 +470,8 @@ async function gracefulShutdown(signal: string) {
   }, 15_000)
   forceExitTimeout.unref()
 
-  // Wait for in-flight sweep before closing connections
+  // Wait for in-flight sweep before closing connections (the sweeper's
+  // own onRelease was already called by stopAllLeaderSchedulers).
   await stopStaleDeploymentSweeper()
 
   server.close(async () => {
