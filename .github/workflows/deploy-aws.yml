@@ -134,10 +134,16 @@ jobs:
         if: ${{ env.SUPPLY_CHAIN_DISABLED != 'true' }}
         env:
           TRIVY_EXIT_CODE: ${{ env.SUPPLY_CHAIN_TRIVY_BLOCK == 'false' && '0' || '1' }}
+          # Scoped, expiring waivers for CVEs in third-party Go binaries
+          # (akash + provider-services) we ship in the image. Each entry
+          # has an `expired_at` so the deploy re-blocks automatically
+          # when the waiver lapses. See file header for policy.
+          TRIVY_IGNOREFILE: service-cloud-api/.trivyignore.yaml
         run: |
           trivy image \
             --severity CRITICAL \
             --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
             --exit-code "${TRIVY_EXIT_CODE}" \
             --no-progress \
             --format table \
@@ -147,6 +153,7 @@ jobs:
           trivy image \
             --severity HIGH \
             --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
             --no-progress \
             --format table \
             "${{ steps.image.outputs.ref }}" || true
@@ -155,6 +162,7 @@ jobs:
           trivy image \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
+            --ignorefile "${TRIVY_IGNOREFILE}" \
             --format sarif \
             --output trivy.sarif \
             "${{ steps.image.outputs.ref }}" || true

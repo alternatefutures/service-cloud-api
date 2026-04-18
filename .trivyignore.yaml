@@ -1,0 +1,58 @@
+# Trivy vulnerability waivers — service-cloud-api image scan.
+#
+# All entries below MUST:
+#   1. Be scoped to a specific CVE ID
+#   2. Be scoped to specific binary paths inside the image
+#   3. Have an expired_at date (re-evaluation forced when it lapses)
+#   4. Carry a `statement` explaining real-world exploitability + tracking
+#
+# When a waiver expires, the deploy will start blocking again. That is the
+# point: do NOT remove the expiry date to "make the build green forever."
+# Renew the waiver only after re-confirming exploitability is still bounded.
+#
+# All waivers below are reviewed in the supply-chain section of the
+# AF_INCIDENT_RUNBOOKS.md (admin/cloud/docs).
+
+vulnerabilities:
+  - id: CVE-2026-33186
+    paths:
+      - "usr/local/bin/akash"
+      - "usr/local/bin/provider-services"
+    expired_at: 2026-05-18
+    statement: |
+      gRPC-Go authz bypass via improper HTTP/2 path validation. Bundled
+      via the upstream Akash CLI (akash v2.0.0-rc18 → grpc 1.76.0) and
+      provider-services v0.10.6 → grpc 1.75.0). Fix is upstream-only:
+      Akash needs to rebuild with grpc 1.79.3+. We don't control that
+      release cadence.
+
+      Practical exploitability: the Akash CLI only opens gRPC channels
+      to AKASH_RPC_ENDPOINT (pinned, TLS-validated). An attacker would
+      have to MITM an already-authenticated TLS channel inside our pod
+      to leverage the bypass. Combined with the rest of the attack
+      surface needed (pod RCE → AKASH_FROM private key → drain the
+      hot-wallet cap from §3.14), this is a marginal additional vector.
+
+      Tracking: open an issue against akash-network/node + provider
+      requesting a release with grpc 1.79.3, link here.
+      Re-evaluate by: 2026-05-18.
+
+  - id: CVE-2025-68121
+    paths:
+      - "usr/local/bin/akash"
+      - "usr/local/bin/provider-services"
+    expired_at: 2026-05-18
+    statement: |
+      Go stdlib (crypto/tls): incorrect certificate validation during
+      TLS session resumption. Bundled via the upstream Akash CLI binary
+      (built with Go 1.25.5; fixed in 1.25.7). Fix requires upstream
+      Akash to rebuild with patched Go.
+
+      Practical exploitability: Akash CLI only resumes TLS to
+      AKASH_RPC_ENDPOINT, which we pin and rotate. To weaponize this
+      an attacker needs (a) network position to MITM the resumed
+      handshake, AND (b) a forged cert that the resumption path
+      accepts. Same overall constraints as CVE-2026-33186 above.
+
+      Tracking: same upstream Akash release tracker as CVE-2026-33186.
+      Re-evaluate by: 2026-05-18.
