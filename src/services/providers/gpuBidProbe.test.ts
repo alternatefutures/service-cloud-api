@@ -299,6 +299,54 @@ describe('probeOneGpuModel', () => {
     expect(result.dseq).toBe(777)
   })
 
+  it('parses cosmos SDK Dec-formatted bid prices (real chain wire format)', async () => {
+    // Regression: production cycles produced 0 bids because the chain
+    // returns `price.amount` as a fixed-point Dec string (e.g.
+    // "1957.925980000000000000"). BigInt(decimalString) throws
+    // SyntaxError, so the previous parser silently dropped every bid.
+    // We must truncate the fractional part before BigInt-ing.
+    const BIDS_DEC_FORMAT = JSON.stringify({
+      bids: [
+        {
+          bid: {
+            id: { provider: 'akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr' },
+            price: { denom: 'uact', amount: '1957.925980000000000000' },
+            state: 'open',
+          },
+        },
+        {
+          bid: {
+            id: { provider: 'akash17erkmem6xcugfnew2c0ujfqtet32j29ztk03jt' },
+            price: { denom: 'uact', amount: '3376.830911000000000000' },
+            state: 'open',
+          },
+        },
+      ],
+    })
+
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') return ok(TX_OK_WITH_DSEQ)
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') {
+        return ok(BIDS_DEC_FORMAT)
+      }
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') return ok(TX_CLOSE_OK)
+      return ok('{}')
+    })
+
+    const prisma = buildPrisma()
+    const result = await probeOneGpuModel(prisma as any, 'h100', 'nvidia', 'run-1', { execCli, sleep: fastSleep })
+
+    expect(result.bidsReceived).toBe(2)
+    expect(result.providersBidding).toBe(2)
+    expect(prisma.gpuBidObservation.createMany).toHaveBeenCalledTimes(1)
+    const inserted = (prisma.gpuBidObservation.createMany as any).mock.calls[0][0].data
+    expect(inserted).toHaveLength(2)
+    // Truncated to whole uact — sub-uact precision discarded by design.
+    const prices = inserted.map((r: any) => r.pricePerBlock).sort((a: bigint, b: bigint) => (a < b ? -1 : 1))
+    expect(prices).toEqual([1957n, 3376n])
+  })
+
   it('does not crash when close TX itself fails', async () => {
     const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
       if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
