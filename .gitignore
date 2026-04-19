@@ -9,6 +9,7 @@ dist
 .DS_Store
 certs/
 invoices/
+audit-exports/
 .age-key.txt
 bootstrap.env
 !bootstrap.enc.env

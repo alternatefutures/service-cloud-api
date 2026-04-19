@@ -1,8 +1,21 @@
 /**
  * Provider Verification Scheduler
  *
- * Runs the full provider verification suite once daily at 4 AM UTC.
- * After verification, syncs results to the staging database.
+ * Runs the full provider verification suite three times a week
+ * (Mon/Wed/Fri at 04:00 UTC). After verification, syncs results to the
+ * staging database.
+ *
+ * Cadence rationale:
+ *   - The verified set is stable in practice (providers don't flip in/out
+ *     daily), so a 2-3 day staleness window is acceptable.
+ *   - Each run costs ~1.0-1.5 AKT + ~0.5-1.0 ACT and locks the wallet for
+ *     25-40 min. Mon/Wed/Fri cuts that burn by ~57% vs. daily.
+ *   - Provider presence and GPU inventory are still refreshed hourly by
+ *     ProviderRegistryScheduler — the verifier only solves functional
+ *     regression detection and newcomer promotion, neither of which
+ *     requires daily granularity.
+ *   - Lower frequency also reduces exposure to orphaned-lease bugs in the
+ *     close path until those P0 fixes ship.
  *
  * Guards:
  *   - Overlap: skips if a previous run is still in progress
@@ -43,14 +56,14 @@ export class ProviderVerificationScheduler {
       return
     }
 
-    // Daily at 4:00 AM UTC
-    this.cronJob = cron.schedule('0 4 * * *', () => {
+    // Mon/Wed/Fri at 04:00 UTC (was daily — see header comment for rationale)
+    this.cronJob = cron.schedule('0 4 * * 1,3,5', () => {
       this.runVerification().catch(err => {
-        log.error({ err: err instanceof Error ? err.message : err }, 'Daily verification failed')
+        log.error({ err: err instanceof Error ? err.message : err }, 'Scheduled verification failed')
       })
     })
 
-    log.info('Started — runs daily at 04:00 UTC')
+    log.info('Started — runs Mon/Wed/Fri at 04:00 UTC')
   }
 
   stop() {
