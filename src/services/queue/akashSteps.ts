@@ -792,9 +792,17 @@ export async function resolveProviderGpuModels(
   if (result.size > 0) return Array.from(result)
 
   try {
-    const output = await runAkashAsync(
+    // `query provider get` is read-only — no signing, no wallet needed.
+    // Bypass `runAkashAsync` (which calls `getAkashEnv()` without
+    // `skipMnemonicCheck`, throwing in any environment lacking
+    // `AKASH_MNEMONIC` — including CI). Bypassing also keeps this off
+    // the wallet mutex since there's no tx to serialize.
+    const env = getAkashEnv({ skipMnemonicCheck: true })
+    log.info(`Running: akash query provider get ${providerAddr} -o json`)
+    const output = await execAsync(
+      'akash',
       ['query', 'provider', 'get', providerAddr, '-o', 'json'],
-      15_000,
+      { env, timeout: 15_000 },
     )
     const parsed = extractJson(output) as {
       provider?: { attributes?: Array<{ key: string; value: string }> }
