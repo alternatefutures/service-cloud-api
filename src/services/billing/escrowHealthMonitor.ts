@@ -71,7 +71,8 @@ const ORPHAN_MIN_AGE_BLOCKS = (() => {
  * If the wallet balance creeps above this cap (e.g. operator funded
  * too much, or treasury swept the wrong way), we fire an ops alert
  * and ask the operator to sweep the excess back to cold storage per
- * the runbook (Section L of AF_INCIDENT_RUNBOOKS.md).
+ * the runbook (Section M of AF_INCIDENT_RUNBOOKS.md — "Akash Hot-Wallet
+ * Cap Exceeded / Key Rotation"; §L is the unrelated failover-loop runbook).
  *
  * Override in production via `AKASH_HOT_WALLET_CAP_UACT` if the
  * default is too tight for current usage.
@@ -152,20 +153,81 @@ export class EscrowHealthMonitor {
         },
       })
 
-      log.info({ count: activeDeployments.length }, 'Escrow health check — active deployments found')
+      // Broader set used ONLY for orphan-sweep exclusion. We must NEVER close
+      // a chain deployment we've ever recorded — it could be a row in any
+      // non-terminal state (CREATING, WAITING_BIDS, DEPLOYING, SUSPENDED,
+      // CLOSE_FAILED, etc.) where the chain side is intentionally still open.
+      // Even CLOSED / PERMANENTLY_FAILED rows are safer to skip — close is
+      // idempotent so re-closing wastes a TX, and "leak escrow on a row we
+      // already know about" is strictly better than "wrongly close a user
+      // lease we forgot to filter out".
+      const allKnownDseqs = await this.prisma.akashDeployment.findMany({
+        select: { dseq: true },
+      })
+
+      log.info(
+        {
+          activeCount: activeDeployments.length,
+          knownDseqCount: allKnownDseqs.length,
+        },
+        'Escrow health check — DB snapshot loaded',
+      )
 
       await this.checkWalletBalance()
 
       // Single RPC call to fetch all deployment escrow accounts for our owner,
       // instead of one query per dseq. O(1) RPC calls regardless of deployment count.
-      // Owner: prefer a DB row's `owner` (skips an RPC) but fall back to
-      // `keys show` so we can still run the orphan sweep when DB has zero ACTIVE rows.
-      const owner =
-        activeDeployments[0]?.owner ?? (await this.resolveDeployerAddress())
-      if (!owner) {
-        log.warn('Could not resolve deployer wallet address — skipping cycle')
+      // Owner resolution. The `query deployment list --owner <addr>` chain
+      // call only returns dseqs *for that address*, and the orphan sweep
+      // closes everything in that returned set that has no DB row. So if
+      // we ever resolve the *wrong* owner, the sweep would either (a) close
+      // the wrong wallet's deployments (chain rejects — only the signing
+      // key can close, so this is structurally impossible) or (b) miss
+      // real orphans on our actual deployer wallet.
+      //
+      // Defense in depth: always resolve the deployer address authoritatively
+      // via `keys show -a` and assert it matches the `owner` field on any
+      // ACTIVE row we read. A mismatch implies DB corruption — bail out and
+      // alert rather than silently operating on the wrong account.
+      const resolvedDeployerAddress = await this.resolveDeployerAddress()
+      if (!resolvedDeployerAddress) {
+        log.warn('Could not resolve deployer wallet address via `keys show` — skipping cycle')
         return
       }
+      const dbOwner = activeDeployments[0]?.owner
+      if (dbOwner && dbOwner !== resolvedDeployerAddress) {
+        log.error(
+          { dbOwner, resolvedDeployerAddress },
+          'AkashDeployment.owner does not match the resolved deployer address — DB likely corrupted, refusing to sweep this cycle',
+        )
+        await opsAlert({
+          key: 'escrow-monitor-owner-mismatch',
+          severity: 'critical',
+          title: 'Escrow monitor refused to run — owner mismatch',
+          message:
+            `An ACTIVE AkashDeployment row has owner=${dbOwner} but the deployer wallet resolves to ${resolvedDeployerAddress}. ` +
+            `The cycle (refill + orphan sweep) has been skipped to avoid operating on the wrong wallet. ` +
+            `Inspect AkashDeployment rows for the corrupted owner value.`,
+          context: { dbOwner, resolvedDeployerAddress },
+          suppressMs: 60 * 60 * 1000,
+        })
+        return
+      }
+      const owner = resolvedDeployerAddress
+
+      // ─── Concurrency caveat ───
+      // PRP §3.29 (`PRODUCTION_READINESS_PLAN.md`): every replica runs this
+      // monitor with no leader election. Once horizontal scale ships, both
+      // replicas will independently call the sweep against the same chain
+      // dseqs. Mitigations already in place that make this *safe* (not
+      // *efficient*):
+      //   • orchestrator.closeDeployment is idempotent — second close lands
+      //     as ALREADY_CLOSED and is treated as success.
+      //   • `chain-orphan-closed:<dseq>` opsAlert key dedupes per-process
+      //     for 24h, so duplicate alerts collapse within each pod.
+      // The remaining cost is wasted close TXs (gas) — bounded by orphan
+      // count × replica count × cycles. Acceptable as a launch posture;
+      // proper fix is the leader election work tracked in PRP §3.11/§3.29.
 
       const [chainEscrows, currentBlockHeight] = await Promise.all([
         this.fetchAllEscrowBalances(owner),
@@ -248,7 +310,7 @@ export class EscrowHealthMonitor {
       // deployments whose try/finally close failed, any other path that
       // writes to the chain but bypasses the queue.
       const sweptOrphans = await this.sweepChainOrphans(
-        activeDeployments,
+        allKnownDseqs,
         chainEscrows,
         currentBlockHeight,
       )
@@ -301,14 +363,20 @@ export class EscrowHealthMonitor {
    * `try/finally` close failed, queue workers that crashed between the
    * deployment-create TX and the DB write — leaked $1+ of escrow forever.
    *
+   * SAFETY: `allKnownDseqs` MUST contain every dseq we have ever recorded,
+   * regardless of status. A row in WAITING_BIDS / DEPLOYING / SUSPENDED /
+   * CLOSE_FAILED is intentionally still open on-chain and closing it would
+   * destroy a real user workload. Filtering by `status: 'ACTIVE'` here would
+   * be a critical bug.
+   *
    * Returns the number of orphans we successfully closed.
    */
   private async sweepChainOrphans(
-    dbActive: Array<{ dseq: bigint }>,
+    allKnownDseqs: Array<{ dseq: bigint }>,
     chainEscrows: Map<string, ChainEscrowEntry>,
     currentBlockHeight: number,
   ): Promise<number> {
-    const dbDseqs = new Set(dbActive.map((d) => d.dseq.toString()))
+    const dbDseqs = new Set(allKnownDseqs.map((d) => d.dseq.toString()))
     let swept = 0
 
     for (const [dseq, entry] of chainEscrows) {
@@ -421,9 +489,10 @@ export class EscrowHealthMonitor {
         })
       }
 
-      // Hot-wallet cap (Section L of the incident runbook). The deployer
-      // wallet is online — keeping it lean limits blast radius if the
-      // pod / key is ever compromised.
+      // Hot-wallet cap (Section M of the incident runbook — "Akash
+      // Hot-Wallet Cap Exceeded / Key Rotation"). The deployer wallet is
+      // online — keeping it lean limits blast radius if the pod / key is
+      // ever compromised.
       if (balance > HOT_WALLET_CAP_UACT) {
         log.warn(
           { balanceUact: balance, balanceAct, capUact: HOT_WALLET_CAP_UACT },
@@ -435,7 +504,7 @@ export class EscrowHealthMonitor {
           title: 'Deployer hot wallet over cap',
           message:
             `Deployer wallet holds ${balanceAct} ACT, above the ${(HOT_WALLET_CAP_UACT / 1_000_000).toFixed(0)} ACT hot-wallet cap. ` +
-            `Sweep the excess back to cold storage per AF_INCIDENT_RUNBOOKS.md §L. ` +
+            `Sweep the excess back to cold storage per AF_INCIDENT_RUNBOOKS.md §M. ` +
             `Override the cap by setting AKASH_HOT_WALLET_CAP_UACT if usage justifies a larger float.`,
           context: {
             address,
