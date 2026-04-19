@@ -1489,6 +1489,73 @@ model ProviderTemplateResult {
 }
 
 // ============================================
+// GPU BID PROBE PRICING (PR2: Per-GPU pricing system)
+// ============================================
+//
+// Real per-GPU pricing requires probing the chain — there is no public
+// "current bid for an H100" endpoint. The GpuBidProbeScheduler posts a
+// tiny SDL targeting one GPU model every 6h, records every open bid,
+// then closes the deployment without leasing. ~$0.0015 per probe.
+//
+// `gpu_bid_observation` is the time-series of raw bids; `gpu_price_summary`
+// is the rolled-up percentiles consumed by the web UI; `chain_stats` is
+// a single-row cache of measured Akash block geometry for cost reporting.
+
+model GpuBidObservation {
+  id            String   @id @default(cuid())
+
+  /// Groups all bids collected during a single runGpuBidProbeCycle invocation.
+  probeRunId    String   @map("probe_run_id")
+
+  /// Lowercase canonical model id ("h100", "rtx4090", "a100"). Matches
+  /// `compute_provider.gpu_models` element values.
+  gpuModel      String   @map("gpu_model")
+  vendor        String   // "nvidia" | "amd"
+
+  providerAddr  String   @map("provider_addr")
+  pricePerBlock BigInt   @map("price_per_block_uact")
+
+  /// dseq of the probe deployment. Useful for audit / debugging the close
+  /// path on the "did this probe leak escrow?" question.
+  dseq          BigInt
+  observedAt    DateTime @default(now()) @map("observed_at")
+
+  @@index([gpuModel, observedAt])
+  @@index([probeRunId])
+  @@map("gpu_bid_observation")
+}
+
+model GpuPriceSummary {
+  /// Lowercase model id; primary key (one row per GPU model).
+  gpuModel             String   @id @map("gpu_model")
+  vendor               String
+
+  minPricePerBlock     BigInt   @map("min_price_per_block_uact")
+  p50PricePerBlock     BigInt   @map("p50_price_per_block_uact")
+  p90PricePerBlock     BigInt   @map("p90_price_per_block_uact")
+  maxPricePerBlock     BigInt   @map("max_price_per_block_uact")
+
+  sampleCount          Int      @map("sample_count")
+  uniqueProviderCount  Int      @map("unique_provider_count")
+  windowDays           Int      @default(7) @map("window_days")
+  refreshedAt          DateTime @map("refreshed_at")
+
+  @@map("gpu_price_summary")
+}
+
+model ChainStats {
+  /// Single-row table; default id pins the row so upserts always hit it.
+  id              String   @id @default("akash-mainnet")
+  secondsPerBlock Float    @map("seconds_per_block")
+  blocksPerDay    Int      @map("blocks_per_day")
+  blocksPerHour   Int      @map("blocks_per_hour")
+  sourceUrl       String   @map("source_url")
+  sampledAt       DateTime @map("sampled_at")
+
+  @@map("chain_stats")
+}
+
+// ============================================
 // FEEDBACK & BUG REPORTS
 // ============================================
 
@@ -1517,6 +1584,48 @@ model FeedbackReport {
   @@index([category])
   @@index([createdAt])
   @@map("feedback_report")
+}
+
+/// Per-cycle telemetry for GpuBidProbeScheduler.
+///
+/// One row per `runGpuBidProbeCycle` invocation — mirrors the
+/// VerificationRun pattern so the admin dashboard can show "how many
+/// times did this cron run, what did it cost, and what came out of it"
+/// without having to derive run counts from `gpu_bid_observation`.
+///
+/// Cost is captured as the wallet balance delta around the cycle so the
+/// number reflects actual on-chain spend (gas + deposits not refunded).
+/// `bidsCollected` and `uniqueProviders` come from the bids inserted
+/// into `gpu_bid_observation` for this run.
+model GpuProbeRun {
+  id              String    @id @default(cuid())
+
+  /// Mirrors `gpu_bid_observation.probe_run_id` so admin tools can join
+  /// bids back to their cycle without an extra index.
+  probeRunId      String    @unique @map("probe_run_id")
+
+  startedAt       DateTime  @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+
+  modelsProbed    Int       @default(0) @map("models_probed")
+  bidsCollected   Int       @default(0) @map("bids_collected")
+  uniqueProviders Int       @default(0) @map("unique_providers")
+
+  /// Wallet uact spend for the cycle (`balanceBefore.uact - balanceAfter.uact`,
+  /// floored at 0 — wallet refills mid-cycle would otherwise produce a
+  /// misleading negative).
+  costUact        BigInt    @default(0) @map("cost_uact")
+  /// Same idea for uakt, included for symmetry with VerificationRun and
+  /// for any pre-BME residue. Expected to stay 0 in production.
+  costUakt        BigInt    @default(0) @map("cost_uakt")
+
+  status          String    @default("running") // running | completed | failed | skipped
+  /// Slim error message — full traces go to logs via opsAlert.
+  error           String?
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("gpu_probe_run")
 }
 
 model VerificationRun {

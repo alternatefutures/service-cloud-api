@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import {
   PRICING,
   STORAGE_PRICING,
@@ -8,6 +8,8 @@ import {
   calculateComputeCost,
   calculateRegistryCost,
   getPricingInfo,
+  getAkashChainGeometry,
+  _resetAkashChainGeometryCacheForTests,
 } from './pricing'
 
 describe('Pricing Configuration', () => {
@@ -156,6 +158,107 @@ describe('Pricing Configuration', () => {
       const info = getPricingInfo()
       const ipfsStorage = info.storage.find(s => s.network === 'IPFS')
       expect(ipfsStorage?.price).toBe(STORAGE_PRICING.ipfs.ratePerGb)
+    })
+  })
+
+  describe('getAkashChainGeometry persistence/hydration', () => {
+    const originalFetch = global.fetch
+
+    beforeEach(() => {
+      _resetAkashChainGeometryCacheForTests()
+    })
+
+    afterEach(() => {
+      global.fetch = originalFetch
+      vi.restoreAllMocks()
+      _resetAkashChainGeometryCacheForTests()
+    })
+
+    function makeBlocksResponse() {
+      // Synthesise 12 samples (function requires ≥10) at 6.0s/block, most-
+      // recent-first, so head − tail spans 11 × 100 blocks at 600s each.
+      const headHeight = 21_500_000
+      const headEpochMs = Date.parse('2026-04-19T12:00:00Z')
+      const samples = Array.from({ length: 12 }, (_, i) => ({
+        height: headHeight - i * 100,
+        datetime: new Date(headEpochMs - i * 600_000).toISOString(),
+      }))
+      return new Response(JSON.stringify(samples), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    it('upserts chain_stats when prisma is provided and a fresh sample lands', async () => {
+      global.fetch = vi.fn().mockResolvedValue(makeBlocksResponse())
+      const upsert = vi.fn().mockResolvedValue({})
+      const findUnique = vi.fn()
+      const prisma = { chainStats: { upsert, findUnique } } as any
+
+      const geom = await getAkashChainGeometry(prisma)
+
+      expect(geom.source).toBe('akash-console-api')
+      expect(upsert).toHaveBeenCalledTimes(1)
+      const call = upsert.mock.calls[0][0]
+      expect(call.where).toEqual({ id: 'akash-mainnet' })
+      expect(call.create.id).toBe('akash-mainnet')
+      expect(call.create.blocksPerDay).toBe(geom.blocksPerDay)
+      // Hydration query should not have been needed when live API succeeded.
+      expect(findUnique).not.toHaveBeenCalled()
+    })
+
+    it('hydrates from chain_stats on cold-start when both cache and live API are unavailable', async () => {
+      global.fetch = vi.fn().mockRejectedValue(new Error('network down'))
+      const upsert = vi.fn()
+      const findUnique = vi.fn().mockResolvedValue({
+        id: 'akash-mainnet',
+        secondsPerBlock: 6.117,
+        blocksPerHour: 588,
+        blocksPerDay: 14_124,
+        sourceUrl: 'https://console-api.akash.network/v1/blocks',
+        sampledAt: new Date('2026-04-19T10:00:00Z'),
+      })
+      const prisma = { chainStats: { upsert, findUnique } } as any
+
+      const geom = await getAkashChainGeometry(prisma)
+
+      expect(findUnique).toHaveBeenCalledWith({ where: { id: 'akash-mainnet' } })
+      expect(geom.source).toBe('cache')
+      expect(geom.blocksPerDay).toBe(14_124)
+      expect(geom.secondsPerBlock).toBeCloseTo(6.117, 3)
+    })
+
+    it('falls back to the static constant when live API fails AND no chain_stats row exists', async () => {
+      global.fetch = vi.fn().mockRejectedValue(new Error('network down'))
+      const prisma = {
+        chainStats: {
+          upsert: vi.fn(),
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
+      } as any
+
+      const geom = await getAkashChainGeometry(prisma)
+      expect(geom.source).toBe('static-fallback')
+      expect(geom.blocksPerDay).toBeGreaterThan(0)
+    })
+
+    it('does not throw when persistence to chain_stats fails', async () => {
+      global.fetch = vi.fn().mockResolvedValue(makeBlocksResponse())
+      const upsert = vi.fn().mockRejectedValue(new Error('db down'))
+      const prisma = {
+        chainStats: { upsert, findUnique: vi.fn() },
+      } as any
+
+      const geom = await getAkashChainGeometry(prisma)
+      expect(geom.source).toBe('akash-console-api')
+      expect(upsert).toHaveBeenCalled()
+    })
+
+    it('works without a prisma argument (in-memory cache only)', async () => {
+      global.fetch = vi.fn().mockResolvedValue(makeBlocksResponse())
+      const geom = await getAkashChainGeometry()
+      expect(geom.source).toBe('akash-console-api')
+      expect(geom.blocksPerDay).toBeGreaterThan(0)
     })
   })
 })

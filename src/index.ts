@@ -52,10 +52,14 @@ import { runWithLeadership, stopAllLeaderSchedulers } from './services/leader/le
 import { setWalletMutexPrisma } from './services/akash/walletMutex.js'
 import { ProviderRegistryScheduler } from './services/providers/providerRegistryScheduler.js'
 import { ProviderVerificationScheduler } from './services/providers/providerVerificationScheduler.js'
+import { GpuBidProbeScheduler } from './services/providers/gpuBidProbeScheduler.js'
 import { AuditExportScheduler } from './services/audit/auditExportScheduler.js'
 import { handleProviderRegistryRequest } from './services/providers/providerRegistryEndpoint.js'
+import { handleGpuPricingRequest } from './services/providers/gpuPricingEndpoint.js'
+import { handleGpuProbeManualTrigger } from './services/providers/gpuProbeManualTriggerEndpoint.js'
 import { handleAdminDeploymentStats } from './services/admin/deploymentStatsEndpoint.js'
 import { handleAdminBillingStats } from './services/admin/billingStatsEndpoint.js'
+import { handleSchedulerStats } from './services/admin/schedulerStatsEndpoint.js'
 import { handleAdminAuditEvents } from './services/admin/auditEventsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
@@ -81,6 +85,7 @@ const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const escrowHealthMonitor = new EscrowHealthMonitor(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
+const gpuBidProbeScheduler = new GpuBidProbeScheduler(prisma)
 const auditExportScheduler = new AuditExportScheduler(prisma)
 let healthPrewarmerInterval: ReturnType<typeof setInterval> | null = null
 const telemetryIngestionService = getTelemetryIngestionService(prisma)
@@ -300,6 +305,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
       return
     }
 
+    if (url.pathname === '/internal/admin/scheduler-stats' && req.method === 'GET') {
+      await handleSchedulerStats(req, res, prisma)
+      return
+    }
+
     if (url.pathname === '/internal/admin/audit-events' && req.method === 'GET') {
       await handleAdminAuditEvents(req, res, prisma)
       return
@@ -327,6 +337,16 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/internal/provider-registry' && req.method === 'GET') {
       await handleProviderRegistryRequest(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/gpu-pricing' && req.method === 'GET') {
+      await handleGpuPricingRequest(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/admin/gpu-probe-now' && req.method === 'POST') {
+      await handleGpuProbeManualTrigger(req, res, gpuBidProbeScheduler)
       return
     }
 
@@ -446,6 +466,10 @@ server.listen(port, async () => {
   await runWithLeadership(prisma, 'provider-verification-scheduler', {
     onAcquire: () => providerVerificationScheduler.start(),
     onRelease: () => providerVerificationScheduler.stop(),
+  })
+  await runWithLeadership(prisma, 'gpu-bid-probe-scheduler', {
+    onAcquire: () => gpuBidProbeScheduler.start(),
+    onRelease: () => gpuBidProbeScheduler.stop(),
   })
 
   // Per-pod work (no chain TXs / no row-mutating singletons): runs
