@@ -215,19 +215,18 @@ export class EscrowHealthMonitor {
       }
       const owner = resolvedDeployerAddress
 
-      // ─── Concurrency caveat ───
-      // PRP §3.29 (`PRODUCTION_READINESS_PLAN.md`): every replica runs this
-      // monitor with no leader election. Once horizontal scale ships, both
-      // replicas will independently call the sweep against the same chain
-      // dseqs. Mitigations already in place that make this *safe* (not
-      // *efficient*):
-      //   • orchestrator.closeDeployment is idempotent — second close lands
-      //     as ALREADY_CLOSED and is treated as success.
+      // ─── Concurrency contract ───
+      // This monitor is leader-elected via `runWithLeadership('escrow-health-monitor', …)`
+      // in `service-cloud-api/src/index.ts` — exactly one replica runs the
+      // sweep at a time. Defence-in-depth still applies in case leadership
+      // flips mid-cycle (lease lost between fetch and close):
+      //   • orchestrator.closeDeployment is idempotent — a second close
+      //     lands as ALREADY_CLOSED and is treated as success.
       //   • `chain-orphan-closed:<dseq>` opsAlert key dedupes per-process
       //     for 24h, so duplicate alerts collapse within each pod.
-      // The remaining cost is wasted close TXs (gas) — bounded by orphan
-      // count × replica count × cycles. Acceptable as a launch posture;
-      // proper fix is the leader election work tracked in PRP §3.11/§3.29.
+      // PRP §3.29 (covered by §3.11) is the historical entry that flagged
+      // this before leader election shipped — keep it referenced here so
+      // anyone auditing the runbook lands on the right code.
 
       const [chainEscrows, currentBlockHeight] = await Promise.all([
         this.fetchAllEscrowBalances(owner),
