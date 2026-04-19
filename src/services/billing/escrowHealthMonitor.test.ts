@@ -52,7 +52,10 @@ vi.mock('../../lib/opsAlert.js', () => ({
 }))
 
 vi.mock('../../config/akash.js', () => ({
-  BLOCKS_PER_HOUR: 600,
+  BLOCKS_PER_HOUR: 588,
+  BLOCKS_PER_DAY: 14_124,
+  BLOCKS_PER_MONTH: 429_909,
+  AKASH_SECONDS_PER_BLOCK: 6.117,
   TX_SETTLE_DELAY_MS: 0,
   POST_LEASE_HOURS: 2,
 }))
@@ -164,9 +167,9 @@ describe('EscrowHealthMonitor', () => {
   })
 
   it('refills when estimated runway < MIN_ESCROW_HOURS (1h)', async () => {
-    // ppb = 1000 uact/block → hourly burn = 600_000 uact
+    // ppb = 1000 uact/block → hourly burn = 588_000 uact (BLOCKS_PER_HOUR=588)
     // funds = 1_000_000, transferred = 0, blocks elapsed = 700 → unsettled = 700_000
-    // real balance = 300_000 → 0.5h remaining → should refill.
+    // real balance = 300_000 → ~0.51h remaining → should refill.
     const prisma = buildPrisma([
       { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
     ])
@@ -185,8 +188,8 @@ describe('EscrowHealthMonitor', () => {
       c => c[1][0] === 'tx' && c[1][1] === 'escrow' && c[1][2] === 'deposit',
     )
     expect(depositCall).toBeDefined()
-    // Refill amount: ppb * BLOCKS_PER_HOUR * REFILL_HOURS = 1000 * 600 * 1 = 600_000
-    expect(depositCall![1]).toContain('600000uact')
+    // Refill amount: ppb * BLOCKS_PER_HOUR * REFILL_HOURS = 1000 * 588 * 1 = 588_000
+    expect(depositCall![1]).toContain('588000uact')
     expect(depositCall![1]).toContain('--dseq')
     expect(depositCall![1]).toContain('100')
   })

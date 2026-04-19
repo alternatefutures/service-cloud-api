@@ -212,7 +212,7 @@ describe('ComputeBillingScheduler.processAkashEscrows — idempotency drift', ()
 
     // Normal path DOES do the on-chain top-up
     expect(topUpDeploymentDepositMock).toHaveBeenCalledTimes(1)
-    expect(topUpDeploymentDepositMock).toHaveBeenCalledWith(123, 60_000) // ppb=100 * 600 blocks
+    expect(topUpDeploymentDepositMock).toHaveBeenCalledWith(123, 58_800) // ppb=100 * BLOCKS_PER_HOUR (588)
   })
 
   it('advances lastBilledAt by exactly hoursToBill * 1h so fractional time rolls forward', async () => {

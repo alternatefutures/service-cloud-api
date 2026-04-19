@@ -7,11 +7,31 @@
  */
 
 /**
- * Akash averages ~6s per block. 600 blocks ≈ 1 hour — close enough that
- * we use it as the hourly unit when converting pricePerBlock (uact/block)
- * into hourly burn. If Akash changes block time, update this constant.
+ * Akash chain block geometry.
+ *
+ * Empirically measured block time on mainnet is ~6.117s (matches the
+ * upstream provider bid-pricing reference script,
+ * https://gist.github.com/chainzero/33978bf221eb35f10a7392ed9bae8caa
+ * which uses `429,909 blocks/month` at 30.437 days/month).
+ *
+ * Previous value (6.0s → 600 blocks/hour, 14400 blocks/day) over-charged
+ * deployments by ~1.95% in our USD/hour and refill calculations. Aligning
+ * with the upstream constant makes our cost reporting and on-chain escrow
+ * top-ups match the actual chain burn rate.
+ *
+ * If Akash changes block time materially, update SECONDS_PER_BLOCK and the
+ * derived constants below.
  */
-export const BLOCKS_PER_HOUR = 600
+export const AKASH_SECONDS_PER_BLOCK = 6.117
+
+/** 3600 / 6.117 ≈ 588.5 — rounded down so refills slightly under-fund rather than over-fund. */
+export const BLOCKS_PER_HOUR = 588
+
+/** 86400 / 6.117 ≈ 14124.6 — rounded down for the same reason. */
+export const BLOCKS_PER_DAY = 14_124
+
+/** Matches `429,909 blocks/month` from upstream price_script_generic.sh. */
+export const BLOCKS_PER_MONTH = 429_909
 
 /**
  * How long to hold the wallet mutex AFTER a `akash tx ...` CLI invocation
