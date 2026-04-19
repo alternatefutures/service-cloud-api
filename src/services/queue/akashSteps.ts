@@ -596,14 +596,16 @@ export async function handleCheckBids(
         const gpuFilteredBids: typeof safeBids = []
         const bidderModels: Array<{ provider: string; model: string | null }> = []
         for (const bid of safeBids) {
-          const model = await resolveProviderGpuModel(
+          // Use the verified-set-aware resolver: a provider with multiple
+          // GPUs (e.g. h100+a100) should pass an a100-only filter.
+          const matched = await providerHasAcceptableGpu(
             bid.bidId.provider,
-            deployment.dseq,
+            acceptable,
             prisma,
-            deploymentId
+            deploymentId,
           )
-          bidderModels.push({ provider: bid.bidId.provider, model })
-          if (model && acceptable.has(model.toLowerCase())) {
+          bidderModels.push({ provider: bid.bidId.provider, model: matched })
+          if (matched) {
             gpuFilteredBids.push(bid)
           }
         }
@@ -717,52 +719,117 @@ export async function handleCheckBids(
   }
 }
 
-// ── Helper: resolve provider GPU model from on-chain attributes ───────
+// ── Helper: resolve provider GPU model(s) ─────────────────────────────
 
-async function resolveProviderGpuModel(
+/**
+ * Return ALL GPU models a provider exposes — verified-set first
+ * (compute_provider.gpuModels), chain-attributes second.
+ *
+ * Why "all" and not "first": providers commonly host more than one GPU
+ * (e.g. an `h100 + a100` rig). The previous `resolveProviderGpuModel`
+ * walked the chain attributes and returned only the first match, which
+ * caused the policy filter to reject perfectly valid bids — e.g. a
+ * provider with both H100 and A100 would resolve to `h100`, fail an
+ * `acceptableGpuModels=['a100']` filter, and the deployment would die
+ * even though the provider could honour the request. See
+ * 2026-04-19 incident for milady-gateway/A100.
+ *
+ * Lookup order:
+ *   1. `compute_provider.gpuModels` (populated by the verifier; the
+ *      authoritative set we've actually deployed against and confirmed).
+ *   2. SDL-pinned model (if our own SDL specified one, the chain
+ *      already enforced the filter — trust it).
+ *   3. ALL `capabilities/gpu/vendor/<v>/model/<m>` chain attributes
+ *      (provider-claimed; lowest trust but better than nothing).
+ *
+ * Returns lowercase model ids. Empty array means "unknown" — caller
+ * decides how to treat that (we currently reject as a safety default).
+ */
+export async function resolveProviderGpuModels(
   providerAddr: string,
-  dseq: bigint,
   prisma: PrismaClient,
-  deploymentId: string
-): Promise<string | null> {
+  deploymentId: string,
+): Promise<string[]> {
+  const result = new Set<string>()
+
   try {
-    // First try: if our SDL requests a specific (non-wildcard) model, use that.
-    // When a specific model is in the SDL, only providers with that GPU can bid,
-    // so we can trust the SDL value without querying the provider.
+    const verified = await prisma.computeProvider.findFirst({
+      where: { address: providerAddr },
+      select: { gpuModels: true },
+    })
+    if (verified?.gpuModels) {
+      for (const m of verified.gpuModels) {
+        if (m) result.add(m.toLowerCase())
+      }
+    }
+  } catch (err) {
+    log.warn(
+      { detail: err instanceof Error ? err.message : err, providerAddr },
+      'Failed to look up verified GPU models for provider',
+    )
+  }
+
+  if (result.size > 0) return Array.from(result)
+
+  try {
     const deployment = await prisma.akashDeployment.findUnique({
       where: { id: deploymentId },
       select: { sdlContent: true },
     })
     if (deployment?.sdlContent) {
       const modelMatch = deployment.sdlContent.match(
-        /gpu:[\s\S]*?model:\s*"?([^"\s]+)"?/m
+        /gpu:[\s\S]*?model:\s*"?([^"\s]+)"?/m,
       )
       const model = modelMatch?.[1]
       if (model && model !== 'nvidia' && model !== '*') {
-        return model
+        result.add(model.toLowerCase())
       }
     }
+  } catch {
+    // best-effort SDL inspection
+  }
 
-    // Fallback: query the provider's on-chain attributes for their actual GPU model.
-    // This path is used when the SDL has model: "*" (any GPU) or no model specified.
+  if (result.size > 0) return Array.from(result)
+
+  try {
     const output = await runAkashAsync(
       ['query', 'provider', 'get', providerAddr, '-o', 'json'],
-      15_000
+      15_000,
     )
-    const result = extractJson(output) as {
+    const parsed = extractJson(output) as {
       provider?: { attributes?: Array<{ key: string; value: string }> }
       attributes?: Array<{ key: string; value: string }>
     }
-    const attrs = result.attributes || result.provider?.attributes || []
-
+    const attrs = parsed.attributes || parsed.provider?.attributes || []
     for (const attr of attrs) {
       const gpuMatch = attr.key.match(
-        /capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/
+        /capabilities\/gpu\/vendor\/(\w+)\/model\/(\w+)/,
       )
-      if (gpuMatch?.[2]) return gpuMatch[2]
+      if (gpuMatch?.[2]) result.add(gpuMatch[2].toLowerCase())
     }
   } catch (err) {
-    log.warn({ detail: err instanceof Error ? err.message : err }, `Could not resolve GPU model for provider ${providerAddr}`)
+    log.warn(
+      { detail: err instanceof Error ? err.message : err },
+      `Could not resolve GPU models for provider ${providerAddr} from chain`,
+    )
+  }
+
+  return Array.from(result)
+}
+
+/**
+ * Returns the matched acceptable model (lowercase) if the provider
+ * exposes any GPU in `acceptable`, else `null`.
+ */
+export async function providerHasAcceptableGpu(
+  providerAddr: string,
+  acceptable: Set<string>,
+  prisma: PrismaClient,
+  deploymentId: string,
+): Promise<string | null> {
+  const models = await resolveProviderGpuModels(providerAddr, prisma, deploymentId)
+  for (const m of models) {
+    if (acceptable.has(m)) return m
   }
   return null
 }
@@ -844,12 +911,19 @@ export async function handleCreateLease(
       }
     }
 
-    const gpuModel = await resolveProviderGpuModel(
+    // Persist the provider's GPU model on the deployment row for later
+    // billing/UX surfaces. The new helper returns the FULL set the
+    // provider exposes (verified DB → SDL pin → chain attrs); we pin
+    // the first match so the deployment row stays single-valued. If
+    // none of the lookup sources had data, leave the column null and
+    // the SEND_MANIFEST step proceeds — the policy filter already
+    // rejected mismatched providers upstream.
+    const providerGpuModels = await resolveProviderGpuModels(
       provider,
-      deployment.dseq,
       prisma,
-      deploymentId
+      deploymentId,
     )
+    const gpuModel = providerGpuModels[0] ?? null
 
     await prisma.akashDeployment.update({
       where: { id: deploymentId },
@@ -1215,12 +1289,16 @@ export async function finalizeDeployment(
   if (!deployment.gpuModel && deployment.provider && deployment.sdlContent) {
     const hasGpu = /gpu:/m.test(deployment.sdlContent)
     if (hasGpu) {
-      const resolved = await resolveProviderGpuModel(
+      // Backfill `gpuModel` for deployments that reached ACTIVE without
+      // one persisted (pre-SEND_MANIFEST resolver miss, legacy rows,
+      // sidebar redeploys mid-rollout). Same helper as CREATE_LEASE;
+      // pick the first model from the provider's full set.
+      const resolvedModels = await resolveProviderGpuModels(
         deployment.provider,
-        deployment.dseq,
         prisma,
-        deployment.id
+        deployment.id,
       )
+      const resolved = resolvedModels[0] ?? null
       if (resolved) gpuModelUpdate = resolved
     }
   }

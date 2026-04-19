@@ -24,6 +24,7 @@ import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
 import { withWalletLock, isWalletTx } from './walletMutex.js'
 import type { TemplateGpu } from '../../templates/index.js'
+import { resolveSdlPricingUact } from '../../templates/sdl.js'
 
 const log = createLogger('akash-orchestrator')
 
@@ -1380,6 +1381,10 @@ export class AkashOrchestrator {
           { templateId: service.templateId, hasResourceOverrides: !!resourceOverrides },
           `Generating SDL from template '${service.templateId}' for service '${service.slug}'`
         )
+        // SDL ceiling for GPU deploys is unconditional (see
+        // `templates/sdl.ts:GPU_SDL_PRICING_CEILING_UACT`). No
+        // dynamic-pricing lookup needed — providers bid, the bid-
+        // selection layer picks the cheapest preferred bid.
         return generateSDLFromTemplate(template, {
           serviceName: service.slug,
           resourceOverrides: resourceOverrides
@@ -1415,7 +1420,7 @@ export class AkashOrchestrator {
         effectiveImage,
         port,
         resourceOverrides,
-        parsedVolumes
+        parsedVolumes,
       )
     }
 
@@ -1556,7 +1561,7 @@ export class AkashOrchestrator {
       storage?: string
       gpu?: { units: number; vendor: string; model?: string } | null
     },
-    volumes: ServiceVolume[] = []
+    volumes: ServiceVolume[] = [],
   ): string {
     const needsKeepAlive = /^(ubuntu|debian|alpine|centos|fedora|busybox|amazonlinux|rockylinux|almalinux)(:|$)/i.test(image)
 
@@ -1645,7 +1650,7 @@ ${storageProfile}${gpuBlock}
       pricing:
         ${name}:
           denom: uact
-          amount: ${gpu && gpu.units > 0 ? 10000 : 1000}
+          amount: ${resolveSdlPricingUact(!!(gpu && gpu.units > 0))}
 
 deployment:
   ${name}:
