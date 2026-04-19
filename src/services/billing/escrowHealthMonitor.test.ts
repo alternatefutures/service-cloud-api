@@ -432,4 +432,156 @@ describe('EscrowHealthMonitor', () => {
     // elsewhere; here we just care that the method completes cleanly.
     await expect(monitor.checkAndRefill()).resolves.not.toThrow()
   })
+
+  describe('chain-orphan sweep', () => {
+    it('closes a chain deployment that has no DB row and is older than the age threshold', async () => {
+      // DB has dseq 100 ACTIVE; chain has 100 + 999. 999 is the orphan.
+      // settledAt = 1_000_000, blockHeight = 1_000_700 → ageBlocks = 700 > 600 threshold.
+      const prisma = buildPrisma([
+        { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
+      ])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '100', fundsUact: 10_000_000, transferredUact: 0, settledAt: 1_000_600 },
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      // Tracked dseq 100 must NOT be closed (it's healthy and in DB).
+      expect(closeDeploymentMock).not.toHaveBeenCalledWith(100)
+      // Orphan dseq 999 must be closed.
+      expect(closeDeploymentMock).toHaveBeenCalledWith(999)
+
+      // We must NOT settle billing for an orphan — there's no DB row /
+      // user to settle against. settleAkashEscrowToTime takes a deploymentId
+      // and would fail or charge the wrong account.
+      expect(settleAkashEscrowToTimeMock).not.toHaveBeenCalled()
+      expect(refundEscrowMock).not.toHaveBeenCalled()
+
+      const orphanAlert = opsAlertMock.mock.calls.find(
+        c => c[0]?.key === 'chain-orphan-closed:999',
+      )
+      expect(orphanAlert).toBeDefined()
+      expect(orphanAlert![0].severity).toBe('warning')
+    })
+
+    it('skips chain deployments younger than the age threshold (race protection)', async () => {
+      // settledAt = 1_000_500, blockHeight = 1_000_700 → ageBlocks = 200 < 600.
+      // This is the case where a deployment was just created and the queue
+      // worker hasn't written the DB row yet (or a probe-bid is mid-flight).
+      const prisma = buildPrisma([
+        { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
+      ])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '100', fundsUact: 10_000_000, transferredUact: 0, settledAt: 1_000_600 },
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_500 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).not.toHaveBeenCalledWith(999)
+      const orphanAlert = opsAlertMock.mock.calls.find(
+        c => (c[0]?.key ?? '').startsWith('chain-orphan-closed:'),
+      )
+      expect(orphanAlert).toBeUndefined()
+    })
+
+    it('skips chain entries that are already closed on-chain', async () => {
+      // Orphan that's already `closed: true` on chain — nothing to do, the
+      // escrow is already being settled by the chain itself.
+      const prisma = buildPrisma([
+        { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
+      ])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '100', fundsUact: 10_000_000, transferredUact: 0, settledAt: 1_000_600 },
+          {
+            dseq: '999',
+            fundsUact: 1_000_000,
+            transferredUact: 0,
+            settledAt: 1_000_000,
+            closed: true,
+          },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).not.toHaveBeenCalledWith(999)
+    })
+
+    it('runs the sweep even when DB has zero ACTIVE rows (orphan-only case)', async () => {
+      // This is the bug from the screenshot: production cloud-api had no
+      // ACTIVE deployments in the DB but a chain orphan still existed.
+      // The previous early-return-on-empty meant we never even queried chain.
+      const prisma = buildPrisma([])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).toHaveBeenCalledWith(999)
+    })
+
+    it('does not close anything when chain matches DB exactly', async () => {
+      const prisma = buildPrisma([
+        { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
+        { id: 'a2', dseq: 200n, pricePerBlock: '1000', owner: 'akash1owner' },
+      ])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '100', fundsUact: 10_000_000, transferredUact: 0, settledAt: 1_000_600 },
+          { dseq: '200', fundsUact: 10_000_000, transferredUact: 0, settledAt: 1_000_600 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).not.toHaveBeenCalled()
+      const orphanAlert = opsAlertMock.mock.calls.find(
+        c => (c[0]?.key ?? '').startsWith('chain-orphan-closed:'),
+      )
+      expect(orphanAlert).toBeUndefined()
+    })
+
+    it('does not alert when on-chain close fails (will retry next cycle)', async () => {
+      const prisma = buildPrisma([])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+      closeDeploymentMock.mockResolvedValueOnce({
+        chainStatus: 'FAILED',
+        error: 'rpc timeout',
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).toHaveBeenCalledWith(999)
+      const orphanAlert = opsAlertMock.mock.calls.find(
+        c => (c[0]?.key ?? '').startsWith('chain-orphan-closed:'),
+      )
+      expect(orphanAlert).toBeUndefined()
+    })
+  })
 })
