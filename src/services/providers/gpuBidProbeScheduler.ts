@@ -33,6 +33,7 @@ import { createLogger } from '../../lib/logger.js'
 import { opsAlert } from '../../lib/opsAlert.js'
 import { runGpuBidProbeCycle, type ProbeCycleSummary } from './gpuBidProbe.js'
 import { checkBalance } from './providerVerification.js'
+import { markStaleProbeRuns } from './staleRunRecovery.js'
 
 const log = createLogger('gpu-bid-probe-scheduler')
 
@@ -56,6 +57,16 @@ export class GpuBidProbeScheduler {
       log.warn('AKASH_MNEMONIC not set — gpu bid probe scheduler disabled')
       return
     }
+
+    // Sweep any probe-run rows left in `running` by a previous, dead
+    // process so the admin dashboard's third card doesn't lie. Best-
+    // effort: a DB hiccup here mustn't block scheduler startup.
+    markStaleProbeRuns(this.prisma).catch(err => {
+      log.warn(
+        { err: err instanceof Error ? err.message : err },
+        'Stale probe run recovery threw — continuing startup',
+      )
+    })
 
     // 01:00, 07:00, 13:00, 19:00 UTC — staggered off the verifier's 04:00 slot.
     this.cronJob = cron.schedule('0 1,7,13,19 * * *', () => {

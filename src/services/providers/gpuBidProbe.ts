@@ -469,92 +469,108 @@ export async function runGpuBidProbeCycle(
   const results: ProbeOneResult[] = []
   const seenProviders = new Set<string>()
   let cycleError: string | undefined
-
-  try {
-    // Materialise the entries once — re-iterating a Map mid-loop and computing
-    // .keys().at(-1) on every step is O(n²) for no benefit.
-    const entries = Array.from(models.entries())
-    for (let i = 0; i < entries.length; i++) {
-      const [model, vendor] = entries[i]
-      const r = await probeOneGpuModel(prisma, model, vendor, runId, deps)
-      results.push(r)
-      // Inter-probe wait so back-to-back tx don't race the wallet sequence.
-      if (i < entries.length - 1) {
-        await sleep(INTER_PROBE_DELAY_MS)
-      }
-    }
-
-    // After all probes, refresh the rollup.
-    try {
-      await rollupGpuPrices(prisma)
-    } catch (err) {
-      log.error(
-        { runId, err: err instanceof Error ? err.message : err },
-        'rollupGpuPrices failed — gpu_price_summary may be stale'
-      )
-    }
-  } catch (err) {
-    cycleError = err instanceof Error ? err.message : String(err)
-    log.error({ runId, err: cycleError }, 'Probe cycle threw mid-loop')
-  }
-
-  // Compute summary stats from the rows we just inserted (read-back
-  // avoids double-counting if probeOne short-circuited).
-  const fresh = await prisma.gpuBidObservation.findMany({
-    where: { probeRunId: runId },
-    select: { providerAddr: true },
-  })
-  for (const row of fresh) seenProviders.add(row.providerAddr)
-
-  // Snapshot wallet after the cycle and compute spend. Floor at 0 — a
-  // wallet refill mid-cycle would otherwise produce a negative cost.
+  // Cost is captured outside try/finally so the finaliser can write
+  // the partial-cycle spend even if rollup or the bid read-back throws.
   let costUact = BigInt(0)
   let costUakt = BigInt(0)
-  if (balanceBefore) {
+  let totalBids = 0
+
+  try {
     try {
-      const balanceAfter = await checkBalance()
-      costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
-      costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
+      // Materialise the entries once — re-iterating a Map mid-loop and computing
+      // .keys().at(-1) on every step is O(n²) for no benefit.
+      const entries = Array.from(models.entries())
+      for (let i = 0; i < entries.length; i++) {
+        const [model, vendor] = entries[i]
+        const r = await probeOneGpuModel(prisma, model, vendor, runId, deps)
+        results.push(r)
+        // Inter-probe wait so back-to-back tx don't race the wallet sequence.
+        if (i < entries.length - 1) {
+          await sleep(INTER_PROBE_DELAY_MS)
+        }
+      }
+
+      // After all probes, refresh the rollup.
+      try {
+        await rollupGpuPrices(prisma)
+      } catch (err) {
+        log.error(
+          { runId, err: err instanceof Error ? err.message : err },
+          'rollupGpuPrices failed — gpu_price_summary may be stale'
+        )
+      }
+    } catch (err) {
+      cycleError = err instanceof Error ? err.message : String(err)
+      log.error({ runId, err: cycleError }, 'Probe cycle threw mid-loop')
+    }
+
+    // Compute summary stats from the rows we just inserted (read-back
+    // avoids double-counting if probeOne short-circuited).
+    try {
+      const fresh = await prisma.gpuBidObservation.findMany({
+        where: { probeRunId: runId },
+        select: { providerAddr: true },
+      })
+      for (const row of fresh) seenProviders.add(row.providerAddr)
+      totalBids = fresh.length
     } catch (err) {
       log.warn(
         { runId, err: err instanceof Error ? err.message : err },
-        'Post-cycle balance snapshot failed — recording cost = 0'
+        'bid read-back failed — bidsCollected/uniqueProviders will be 0',
       )
+    }
+
+    // Snapshot wallet after the cycle and compute spend. Floor at 0 — a
+    // wallet refill mid-cycle would otherwise produce a negative cost.
+    if (balanceBefore) {
+      try {
+        const balanceAfter = await checkBalance()
+        costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
+        costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
+      } catch (err) {
+        log.warn(
+          { runId, err: err instanceof Error ? err.message : err },
+          'Post-cycle balance snapshot failed — recording cost = 0'
+        )
+      }
+    }
+  } finally {
+    // Finalise the run record. ALWAYS runs — even if read-back or
+    // balance snapshot threw — so the dashboard never sees a stranded
+    // `running` row from an in-process failure. Out-of-process kills
+    // are still cleaned up by markStaleProbeRuns at the next scheduler
+    // startup.
+    if (runRecordId) {
+      try {
+        await prisma.gpuProbeRun.update({
+          where: { id: runRecordId },
+          data: {
+            completedAt: new Date(),
+            modelsProbed: results.length,
+            bidsCollected: totalBids,
+            uniqueProviders: seenProviders.size,
+            costUact,
+            costUakt,
+            status: cycleError ? 'failed' : 'completed',
+            error: cycleError ? cycleError.slice(0, 1000) : null,
+          },
+        })
+      } catch (err) {
+        log.warn(
+          { runId, err: err instanceof Error ? err.message : err },
+          'Could not finalise GpuProbeRun record — startup recovery will sweep it'
+        )
+      }
     }
   }
 
   const summary: ProbeCycleSummary = {
     runId,
     modelsProbed: results.length,
-    totalBids: fresh.length,
+    totalBids,
     uniqueProviders: seenProviders.size,
     durationMs: Date.now() - start,
     results,
-  }
-
-  // Finalise the run record. Best-effort — a DB failure here must not
-  // mask a successful (or failed) cycle in the logs/return value.
-  if (runRecordId) {
-    try {
-      await prisma.gpuProbeRun.update({
-        where: { id: runRecordId },
-        data: {
-          completedAt: new Date(),
-          modelsProbed: summary.modelsProbed,
-          bidsCollected: summary.totalBids,
-          uniqueProviders: summary.uniqueProviders,
-          costUact,
-          costUakt,
-          status: cycleError ? 'failed' : 'completed',
-          error: cycleError ? cycleError.slice(0, 1000) : null,
-        },
-      })
-    } catch (err) {
-      log.warn(
-        { runId, err: err instanceof Error ? err.message : err },
-        'Could not finalise GpuProbeRun record'
-      )
-    }
   }
 
   log.info({ ...summary, costUact: costUact.toString() }, 'GPU bid probe cycle complete')

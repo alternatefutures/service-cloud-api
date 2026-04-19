@@ -476,85 +476,107 @@ export async function runVerificationSuite(
   }
 
   let runError: string | undefined
-
-  try {
-    for (let i = 0; i < toTest.length; i++) {
-      const t = toTest[i]
-      log.info({ index: i + 1, total: toTest.length, templateId: t.id }, 'Testing template')
-
-      const result = await testSingleTemplate(t.id)
-      recordResult(result)
-      log.info({ templateId: t.id, passed: result.passed, provider: result.provider }, 'Template result')
-
-      if (!cheapestOnly && result.allBidders && result.allBidders.length > 1) {
-        const testedProviders = new Set<string>()
-        if (result.provider) testedProviders.add(result.provider)
-
-        for (const bidder of result.allBidders.filter(b => !testedProviders.has(b.provider))) {
-          await sleep(INTER_BIDDER_DELAY_MS)
-          log.info({ templateId: t.id, provider: bidder.provider }, 'Re-testing with additional bidder')
-
-          const bidderResult = await testSingleTemplate(t.id, bidder.provider)
-          recordResult(bidderResult)
-          if (bidderResult.provider) testedProviders.add(bidderResult.provider)
-
-          log.info({ templateId: t.id, passed: bidderResult.passed, provider: bidderResult.provider }, 'Bidder result')
-        }
-      }
-
-      if (i < toTest.length - 1) await sleep(INTER_TEMPLATE_DELAY_MS)
-    }
-  } catch (err: any) {
-    runError = err.message || String(err)
-  }
-
-  // Persist provider/template results
-  await persistResults(prisma, results, providerTally)
-
-  const templateResultMap = new Map<string, { passedProviders: string[] }>()
-  for (const r of results) {
-    if (!templateResultMap.has(r.templateId)) templateResultMap.set(r.templateId, { passedProviders: [] })
-    if (r.passed && r.provider) templateResultMap.get(r.templateId)!.passedProviders.push(r.provider)
-  }
-  const templatesPassed = Array.from(templateResultMap.values()).filter(v => v.passedProviders.length > 0).length
-
-  // Snapshot wallet balance after the run and compute cost delta
+  // Tracked outside the loop so the `finally` finaliser can write
+  // partial-progress numbers even if persistResults / checkBalance /
+  // anything else throws after the loop completes.
   let costUakt = BigInt(0)
   let costUact = BigInt(0)
-  try {
-    const balanceAfter = await checkBalance()
-    if (balanceBefore) {
-      costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
-      costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
-      log.info({ costUakt: costUakt.toString(), costUact: costUact.toString() }, 'Run cost computed from balance delta')
-    }
-  } catch { /* non-fatal */ }
+  let templatesPassed = 0
 
-  // Finalize the VerificationRun record
-  const passedCount = results.filter(r => r.passed).length
-  const failedCount = results.filter(r => !r.passed).length
-  await prisma.verificationRun.update({
-    where: { id: run.id },
-    data: {
-      completedAt: new Date(),
-      templatesPassed,
-      deployments: results.length,
-      passed: passedCount,
-      failed: failedCount,
-      uniqueProviders: Object.keys(providerTally).length,
-      costUakt,
-      costUact,
-      status: runError ? 'failed' : 'completed',
-      error: runError?.slice(0, 1000) || null,
-    },
-  })
+  try {
+    try {
+      for (let i = 0; i < toTest.length; i++) {
+        const t = toTest[i]
+        log.info({ index: i + 1, total: toTest.length, templateId: t.id }, 'Testing template')
+
+        const result = await testSingleTemplate(t.id)
+        recordResult(result)
+        log.info({ templateId: t.id, passed: result.passed, provider: result.provider }, 'Template result')
+
+        if (!cheapestOnly && result.allBidders && result.allBidders.length > 1) {
+          const testedProviders = new Set<string>()
+          if (result.provider) testedProviders.add(result.provider)
+
+          for (const bidder of result.allBidders.filter(b => !testedProviders.has(b.provider))) {
+            await sleep(INTER_BIDDER_DELAY_MS)
+            log.info({ templateId: t.id, provider: bidder.provider }, 'Re-testing with additional bidder')
+
+            const bidderResult = await testSingleTemplate(t.id, bidder.provider)
+            recordResult(bidderResult)
+            if (bidderResult.provider) testedProviders.add(bidderResult.provider)
+
+            log.info({ templateId: t.id, passed: bidderResult.passed, provider: bidderResult.provider }, 'Bidder result')
+          }
+        }
+
+        if (i < toTest.length - 1) await sleep(INTER_TEMPLATE_DELAY_MS)
+      }
+    } catch (err: any) {
+      runError = err.message || String(err)
+    }
+
+    // Persist provider/template results — wrapped because a DB hiccup
+    // here used to leave the run row stranded in 'running' forever.
+    try {
+      await persistResults(prisma, results, providerTally)
+    } catch (err: any) {
+      runError = runError ?? `persistResults failed: ${err.message || String(err)}`
+    }
+
+    const templateResultMap = new Map<string, { passedProviders: string[] }>()
+    for (const r of results) {
+      if (!templateResultMap.has(r.templateId)) templateResultMap.set(r.templateId, { passedProviders: [] })
+      if (r.passed && r.provider) templateResultMap.get(r.templateId)!.passedProviders.push(r.provider)
+    }
+    templatesPassed = Array.from(templateResultMap.values()).filter(v => v.passedProviders.length > 0).length
+
+    // Snapshot wallet balance after the run and compute cost delta
+    try {
+      const balanceAfter = await checkBalance()
+      if (balanceBefore) {
+        costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
+        costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
+        log.info({ costUakt: costUakt.toString(), costUact: costUact.toString() }, 'Run cost computed from balance delta')
+      }
+    } catch { /* non-fatal */ }
+  } finally {
+    // Finalize the VerificationRun record. ALWAYS runs — even if the
+    // loop or persistResults threw — so the dashboard never sees a
+    // stranded `running` row from an in-process failure. (Out-of-
+    // process kills are still cleaned up by markStaleVerifierRuns at
+    // the next scheduler startup.)
+    const passedCount = results.filter(r => r.passed).length
+    const failedCount = results.filter(r => !r.passed).length
+    try {
+      await prisma.verificationRun.update({
+        where: { id: run.id },
+        data: {
+          completedAt: new Date(),
+          templatesPassed,
+          deployments: results.length,
+          passed: passedCount,
+          failed: failedCount,
+          uniqueProviders: Object.keys(providerTally).length,
+          costUakt,
+          costUact,
+          status: runError ? 'failed' : 'completed',
+          error: runError?.slice(0, 1000) || null,
+        },
+      })
+    } catch (err) {
+      log.error(
+        { runId: run.id, err: err instanceof Error ? err.message : err },
+        'Could not finalise VerificationRun row — startup recovery will sweep it',
+      )
+    }
+  }
 
   const summary: VerificationSummary = {
     templatesTotal: toTest.length,
     templatesPassed,
     deployments: results.length,
-    passed: passedCount,
-    failed: failedCount,
+    passed: results.filter(r => r.passed).length,
+    failed: results.filter(r => !r.passed).length,
     uniqueProviders: Object.keys(providerTally).length,
     results,
     providerTally,
