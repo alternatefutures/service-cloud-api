@@ -6,6 +6,10 @@ export const hyperscapeServer: Template = {
   description:
     'AI-native MMORPG duel arena with real-time combat, physics (PhysX WASM), ElizaOS AI agents, and WebSocket architecture. Deploys game server (with embedded web client) and PostgreSQL.',
   featured: true,
+  // Hidden from production builds — surfaces only in dev/staging via
+  // `filterVisibleTemplates` so we can keep iterating on the composite
+  // deploy flow without exposing it to end users yet.
+  releaseStage: 'internal',
   category: 'GAME_SERVER',
   tags: [
     'game',
