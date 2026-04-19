@@ -31,6 +31,7 @@ import {
   syncToStaging,
   checkBalance,
 } from './providerVerification.js'
+import { markStaleVerifierRuns } from './staleRunRecovery.js'
 
 const log = createLogger('provider-verification-scheduler')
 
@@ -55,6 +56,17 @@ export class ProviderVerificationScheduler {
       log.warn('AKASH_MNEMONIC not set — provider verification scheduler disabled')
       return
     }
+
+    // Sweep any rows left in `running` by a previous, dead process
+    // (OOM, deploy SIGKILL, laptop sleep, etc.) so the admin dashboard
+    // doesn't keep showing a misleading "Running" badge for hours.
+    // Best-effort: a DB hiccup here mustn't block scheduler startup.
+    markStaleVerifierRuns(this.prisma).catch(err => {
+      log.warn(
+        { err: err instanceof Error ? err.message : err },
+        'Stale verifier run recovery threw — continuing startup',
+      )
+    })
 
     // Mon/Wed/Fri at 04:00 UTC (was daily — see header comment for rationale)
     this.cronJob = cron.schedule('0 4 * * 1,3,5', () => {

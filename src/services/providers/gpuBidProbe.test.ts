@@ -510,6 +510,25 @@ describe('runGpuBidProbeCycle GpuProbeRun telemetry', () => {
     expect(prisma.gpuProbeRun.update).not.toHaveBeenCalled()
   })
 
+  it('finalises the run record even when the bid read-back throws (no stranded `running` row)', async () => {
+    const prisma = buildPrisma()
+    prisma.computeProvider.findMany.mockResolvedValue([])
+    // The cycle has no models to probe, but the finaliser path still
+    // does a read-back. Force that read to throw — the finally block
+    // MUST still update the run record to `completed`.
+    prisma.gpuBidObservation.findMany.mockRejectedValueOnce(new Error('db hiccup'))
+
+    await runGpuBidProbeCycle(prisma as any)
+
+    expect(prisma.gpuProbeRun.update).toHaveBeenCalledOnce()
+    const updateArg = prisma.gpuProbeRun.update.mock.calls[0][0]
+    expect(updateArg.data.status).toBe('completed')
+    // Read-back failed → counts default to 0 rather than NULL/stranded.
+    expect(updateArg.data.bidsCollected).toBe(0)
+    expect(updateArg.data.uniqueProviders).toBe(0)
+    expect(updateArg.data.completedAt).toBeInstanceOf(Date)
+  })
+
   it('aggregates bids back into the run record when probes succeed', async () => {
     const prisma = buildPrisma()
     prisma.computeProvider.findMany.mockResolvedValue([
