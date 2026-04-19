@@ -42,6 +42,24 @@ const ESCROW_CHECK_CRON = '30 * * * *'
 const LOW_WALLET_THRESHOLD_UACT = 5_000_000
 
 /**
+ * Minimum on-chain age before we consider a deployment a sweep-able orphan.
+ *
+ * 600 blocks ≈ 1 hour at 6s/block. Anything younger is probably a deployment
+ * mid-flight whose DB row hasn't been written yet (queue worker still running
+ * `handleCreateDeployment`), or a probe-bid (PR 2) inside its
+ * `try/finally` close window. Sweeping those would race the application code.
+ *
+ * Override via `AKASH_ORPHAN_SWEEP_MIN_AGE_BLOCKS` for staging tests.
+ */
+const DEFAULT_ORPHAN_MIN_AGE_BLOCKS = 600
+const ORPHAN_MIN_AGE_BLOCKS = (() => {
+  const raw = process.env.AKASH_ORPHAN_SWEEP_MIN_AGE_BLOCKS
+  if (!raw) return DEFAULT_ORPHAN_MIN_AGE_BLOCKS
+  const parsed = parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_ORPHAN_MIN_AGE_BLOCKS
+})()
+
+/**
  * Hot-wallet cap (defense-in-depth against key compromise).
  *
  * The deployer wallet is an *online* hot wallet — its key sits on the
@@ -134,15 +152,21 @@ export class EscrowHealthMonitor {
         },
       })
 
-      if (activeDeployments.length === 0) return
-
       log.info({ count: activeDeployments.length }, 'Escrow health check — active deployments found')
 
       await this.checkWalletBalance()
 
       // Single RPC call to fetch all deployment escrow accounts for our owner,
       // instead of one query per dseq. O(1) RPC calls regardless of deployment count.
-      const owner = activeDeployments[0].owner
+      // Owner: prefer a DB row's `owner` (skips an RPC) but fall back to
+      // `keys show` so we can still run the orphan sweep when DB has zero ACTIVE rows.
+      const owner =
+        activeDeployments[0]?.owner ?? (await this.resolveDeployerAddress())
+      if (!owner) {
+        log.warn('Could not resolve deployer wallet address — skipping cycle')
+        return
+      }
+
       const [chainEscrows, currentBlockHeight] = await Promise.all([
         this.fetchAllEscrowBalances(owner),
         this.fetchCurrentBlockHeight(),
@@ -219,8 +243,24 @@ export class EscrowHealthMonitor {
         }
       }
 
+      // Sweep deployments that exist on-chain but have no DB row.
+      // Catches: half-completed manual `akash` CLI runs, probe-bid (PR 2)
+      // deployments whose try/finally close failed, any other path that
+      // writes to the chain but bypasses the queue.
+      const sweptOrphans = await this.sweepChainOrphans(
+        activeDeployments,
+        chainEscrows,
+        currentBlockHeight,
+      )
+
       log.info(
-        { checked: activeDeployments.length, refilled: refillCount, closed: closedCount, errors: errorCount },
+        {
+          checked: activeDeployments.length,
+          refilled: refillCount,
+          closed: closedCount,
+          errors: errorCount,
+          orphansSwept: sweptOrphans,
+        },
         'Escrow health check complete'
       )
     } catch (err) {
@@ -228,6 +268,115 @@ export class EscrowHealthMonitor {
     } finally {
       this.running = false
     }
+  }
+
+  /**
+   * Resolve the deployer wallet address via `akash keys show` (used as the
+   * owner for the chain escrow query when the DB has no ACTIVE rows to read
+   * `owner` from — e.g. the orphan-only case).
+   */
+  private async resolveDeployerAddress(): Promise<string | null> {
+    try {
+      const keyName = process.env.AKASH_KEY_NAME || 'default'
+      const out = await runAkashCmd(['keys', 'show', keyName, '-a'])
+      const addr = out.trim()
+      return addr || null
+    } catch (err) {
+      log.warn(
+        { err: (err as Error).message },
+        'resolveDeployerAddress failed',
+      )
+      return null
+    }
+  }
+
+  /**
+   * Close every chain deployment that has no matching DB row, is not already
+   * closed on-chain, and is older than `ORPHAN_MIN_AGE_BLOCKS`.
+   *
+   * Why this exists: the rest of `checkAndRefill` walks DB → chain to detect
+   * leases that died on-chain. The reverse direction (chain has it, DB
+   * doesn't) had no sweeper, so any path that bypasses the queue — manual
+   * `akash tx deployment create`, future probe-bid runs whose
+   * `try/finally` close failed, queue workers that crashed between the
+   * deployment-create TX and the DB write — leaked $1+ of escrow forever.
+   *
+   * Returns the number of orphans we successfully closed.
+   */
+  private async sweepChainOrphans(
+    dbActive: Array<{ dseq: bigint }>,
+    chainEscrows: Map<string, ChainEscrowEntry>,
+    currentBlockHeight: number,
+  ): Promise<number> {
+    const dbDseqs = new Set(dbActive.map((d) => d.dseq.toString()))
+    let swept = 0
+
+    for (const [dseq, entry] of chainEscrows) {
+      if (dbDseqs.has(dseq)) continue
+      if (entry.closed) continue
+
+      // `settled_at` defaults to the deployment's create-block height for
+      // never-touched escrows, so it doubles as an age proxy. Skip anything
+      // younger than the threshold to avoid racing brand-new deployments
+      // mid-flow.
+      const ageBlocks = currentBlockHeight - entry.settledAtBlock
+      if (ageBlocks < ORPHAN_MIN_AGE_BLOCKS) {
+        log.info(
+          { dseq, ageBlocks, threshold: ORPHAN_MIN_AGE_BLOCKS },
+          'Chain-orphan candidate younger than threshold — skipping (likely deployment mid-flow)',
+        )
+        continue
+      }
+
+      log.warn(
+        {
+          dseq,
+          ageBlocks,
+          fundsUact: entry.fundsUact,
+          settledAtBlock: entry.settledAtBlock,
+        },
+        'Chain-orphan deployment found (no DB row) — closing to reclaim escrow',
+      )
+
+      try {
+        const orchestrator = getAkashOrchestrator(this.prisma)
+        const result = await orchestrator.closeDeployment(Number(dseq))
+        if (result.chainStatus === 'FAILED') {
+          log.error(
+            { dseq, error: result.error },
+            'Failed to close chain-orphan deployment (will retry next cycle)',
+          )
+          continue
+        }
+        swept++
+        // One alert per orphan closed — operator should know that something
+        // outside the application created a chain deployment we had to clean up.
+        await opsAlert({
+          key: `chain-orphan-closed:${dseq}`,
+          severity: 'warning',
+          title: 'Auto-closed chain-orphan deployment',
+          message:
+            `Closed dseq ${dseq} on-chain — it had no matching row in akash_deployment. ` +
+            `Likely cause: a manual akash CLI invocation, a queue worker that crashed before persisting, ` +
+            `or a probe-bid run whose try/finally close failed. Reclaimed ~${(entry.fundsUact / 1_000_000).toFixed(2)} ACT to deployer wallet.`,
+          context: {
+            dseq,
+            ageBlocks: String(ageBlocks),
+            fundsUact: String(entry.fundsUact),
+          },
+          // Per-dseq key dedupes naturally; suppress repeats anyway in case
+          // close keeps failing and the same dseq retries.
+          suppressMs: 24 * 60 * 60 * 1000,
+        })
+      } catch (err) {
+        log.error(
+          { dseq, error: (err as Error).message },
+          'Error closing chain-orphan deployment (will retry next cycle)',
+        )
+      }
+    }
+
+    return swept
   }
 
   private async checkWalletBalance(): Promise<void> {
