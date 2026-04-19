@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../lib/logger.js'
+import { BLOCKS_PER_DAY } from './akash.js'
 
 const log = createLogger('pricing')
 
@@ -93,8 +94,13 @@ export const AKT_USD_PRICE_FALLBACK = parseFloat(process.env.AKT_USD_PRICE || '0
 /** @deprecated Use getAktUsdPrice() for live price. Kept for non-async call sites. */
 export const AKT_USD_PRICE = AKT_USD_PRICE_FALLBACK
 
-/** Akash blocks per day (~6s/block) */
-export const AKASH_BLOCKS_PER_DAY = 14400
+/**
+ * Akash blocks per day, derived from measured ~6.117s block time.
+ * Re-exported from `./akash.ts` so existing imports of this name keep working.
+ *
+ * @see ./akash.ts for the canonical block-geometry constants.
+ */
+export const AKASH_BLOCKS_PER_DAY = BLOCKS_PER_DAY
 
 // ---- Live AKT price (Akash API → CoinGecko → env fallback) ----
 
@@ -268,10 +274,14 @@ export function calculateStorageCostWithMargin(
 /**
  * Convert Akash pricePerBlock to USD per day.
  *
- * Since the BME upgrade (March 2026), all Akash leases are denominated in
- * uact (micro-ACT), where ACT is a USD-pegged compute credit (1 ACT = $1).
- * For uact: daily USD = (pricePerBlock × blocksPerDay) / 1,000,000.
- * For legacy uakt: daily USD = (pricePerBlock × blocksPerDay) / 1,000,000 × aktUsdPrice.
+ * Since the BME upgrade (March 2026, Mainnet 17), all new Akash leases are
+ * denominated in uact (micro-ACT), where ACT is a USD-pegged compute credit
+ * (1 ACT = $1). The uact path is the only one used in production today:
+ *   daily USD = (pricePerBlock × BLOCKS_PER_DAY) / 1,000,000
+ *
+ * The legacy uakt branch is retained only to handle any pre-BME escrow rows
+ * that may still be queried during reconciliation. See `@deprecated` note
+ * below.
  *
  * @param pricePerBlock - Price per block from the bid/lease
  * @param denom         - Token denomination ('uact' or 'uakt'). Defaults to 'uact' (post-BME).
@@ -288,6 +298,17 @@ export function akashPricePerBlockToUsdPerDay(
   const dailyUnits = dailyMicro / 1_000_000
 
   if (denom === 'uakt') {
+    /**
+     * @deprecated Legacy pre-BME path. New leases (post-March 2026) all use
+     * `uact`. If this branch fires in production it means a pre-BME escrow
+     * row is still being processed — investigate which row and how it
+     * survived the BME upgrade. Safe to remove this branch once the warn
+     * log shows zero hits over a multi-week window.
+     */
+    log.warn(
+      { pricePerBlock: price, aktUsdPrice },
+      'Legacy uakt price conversion called — should not happen post-BME',
+    )
     return dailyUnits * aktUsdPrice
   }
 

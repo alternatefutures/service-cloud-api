@@ -18,7 +18,7 @@ vi.mock('../../config/pricing.js', () => ({
   getAktUsdPrice: () => getAktUsdPriceMock(),
   akashPricePerBlockToUsdPerDay: (ppb: string, _denom: string = 'uact') => {
     const price = parseFloat(ppb)
-    return (price * 14400) / 1_000_000
+    return (price * 14_124) / 1_000_000
   },
   applyMargin: (raw: number, rate: number) => raw * (1 + rate),
 }))
@@ -108,9 +108,10 @@ describe('EscrowService', () => {
         userId: 'user-1',
       })
 
-      // 1000 uakt * 14400 blocks/day = 14_400_000 uakt/day = 14.4 AKT/day
-      // At $1.00/AKT = $14.40/day raw; with 25% margin = $18.00/day = 1800 cents
-      expect(result.dailyRateCents).toBe(1800)
+      // 1000 uact * 14_124 blocks/day = 14_124_000 uact/day = 14.124 ACT/day
+      // (post-BME: 1 ACT ≈ $1, so $14.124/day raw)
+      // With 25% margin → $17.655/day → Math.ceil(1765.5) = 1766 cents
+      expect(result.dailyRateCents).toBe(1766)
     })
   })
 
@@ -125,10 +126,10 @@ describe('EscrowService', () => {
         escrowDays: 7,
       })
 
-      expect(result.depositCents).toBe(1800 * 7)
+      expect(result.depositCents).toBe(1766 * 7)
       expect(escrowDepositMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          amountCents: 1800 * 7,
+          amountCents: 1766 * 7,
           orgBillingId: 'org-billing-1',
         })
       )
