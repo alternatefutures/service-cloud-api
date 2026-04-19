@@ -332,8 +332,19 @@ export async function probeOneGpuModel(
             // new leases; any uakt bid here is a misconfigured provider
             // and would corrupt the percentile if mixed with uact.
             if (denom !== 'uact') continue
+            // Bid prices come back from `query market bid list` as cosmos
+            // SDK Dec strings (fixed-point, 18 decimals — e.g.
+            // "1957.925980000000000000"). BigInt rejects the decimal
+            // point outright (SyntaxError), so we have to truncate the
+            // fractional part before parsing. Sub-uact precision is below
+            // any meaningful price granularity (uact is already 1e-6 ACT),
+            // so flooring to whole uact loses no signal.
             let amount: bigint
-            try { amount = BigInt(price.amount ?? '0') } catch { continue }
+            try {
+              const rawAmount = String(price.amount ?? '0')
+              const intPart = rawAmount.split('.')[0]
+              amount = BigInt(intPart)
+            } catch { continue }
             if (amount <= 0n) continue
             // Keep the lowest bid per provider — providers occasionally
             // re-bid; we want the most generous offer they made.
