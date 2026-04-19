@@ -30,6 +30,51 @@ function generateBase64Secret(len = 32): string {
 }
 
 /**
+ * Hard-coded SDL pricing ceiling (uact/block) used unconditionally for
+ * any deployment that requests a GPU. We deliberately do NOT cap the
+ * GPU SDL ceiling against historical bid data — premium GPUs (A100,
+ * H200, PRO6000SE, B200, etc.) routinely bid above static template
+ * defaults, and capping the SDL is the difference between "providers
+ * bid and we pick the cheapest" vs "deployment dies in WAITING_BIDS
+ * with no money owed and a confused user".
+ *
+ * Why 1_000_000 (≈ 1 ACT/block):
+ *   - The bid-probe rollup discards any observation ≥ 50_000 uact
+ *     (`MAX_PROBE_BID_UACT` in `gpuBidProbe.ts`), so percentile data
+ *     is never poisoned by ceiling-bidders against this offer.
+ *   - 1 ACT/block is ~$14k/day raw — well above any sane GPU price,
+ *     small enough that even a worst-case provider colluding to bid
+ *     the ceiling can't drain more than the per-deploy deposit before
+ *     the post-lease top-up loop notices.
+ *   - The bid-selection logic in `akashSteps.handleCheckBids` only
+ *     accepts bids from preferred (verified) providers, and the per-
+ *     org `assertOrgHourlyCost` guard caps daily spend regardless of
+ *     bid price. So this ceiling is safety-belt, not the seat belt.
+ *
+ * Non-GPU deploys keep their template-level `pricingUakt` (or 1000)
+ * because non-GPU bid prices are tightly clustered and a high ceiling
+ * adds no value while making cost predictability worse.
+ */
+export const GPU_SDL_PRICING_CEILING_UACT = 1_000_000
+
+/** Default SDL ceiling for non-GPU deploys (uact/block). */
+export const NON_GPU_SDL_PRICING_CEILING_UACT = 1_000
+
+/**
+ * Resolve the SDL `pricing.amount` for a deployment. GPU deploys get
+ * the unconditional `GPU_SDL_PRICING_CEILING_UACT`; non-GPU deploys
+ * fall through to the template's intent (or 1000).
+ */
+export function resolveSdlPricingUact(
+  hasGpu: boolean,
+  templatePricingUakt?: number,
+): number {
+  if (hasGpu) return GPU_SDL_PRICING_CEILING_UACT
+  if (templatePricingUakt && templatePricingUakt > 0) return templatePricingUakt
+  return NON_GPU_SDL_PRICING_CEILING_UACT
+}
+
+/**
  * Generate an Akash SDL from a template + user configuration overrides.
  * If the template has a `customSdl`, uses it directly (with placeholder
  * replacement and env overrides) instead of auto-generating.
@@ -43,8 +88,6 @@ export function generateSDLFromTemplate(
   if (template.customSdl) {
     return resolveCustomSdl(template, config, serviceName)
   }
-
-  const pricingUakt = template.pricingUakt || 1000
 
   // ── Merge env vars: template defaults + user overrides ──────
   const envLines = buildEnvLines(template, config?.envOverrides)
@@ -60,6 +103,13 @@ export function generateSDLFromTemplate(
     config?.resourceOverrides?.gpu === null
       ? undefined
       : (config?.resourceOverrides?.gpu ?? template.resources.gpu)
+
+  // SDL pricing ceiling: GPU deploys get the unconditional high cap so
+  // every honest provider can bid (the bid-selection layer picks the
+  // cheapest preferred bid). Non-GPU deploys keep `template.pricingUakt`.
+  // The historical `Uakt` field name is a misnomer post-BME (denom is
+  // `uact`), kept for backward compatibility with template definitions.
+  const pricingUakt = resolveSdlPricingUact(!!gpu, template.pricingUakt)
 
   // ── Ports / expose ──────────────────────────────────────────
   const exposeBlock = template.ports
@@ -488,11 +538,16 @@ ${storageLines.join('\n')}`
     .join('\n\n')
 
   // ── Placement / pricing ───────────────────────────────────────
+  // Each component picks its own ceiling: GPU components get the
+  // unconditional high cap (same rationale as `generateSDLFromTemplate`)
+  // so multi-service deployments with one GPU service don't get
+  // bid-killed by a stale per-component `pricingUakt`. Non-GPU
+  // components keep their template default.
   const pricingLines = components
-    .map(
-      c =>
-        `        ${c.sdlServiceName}:\n          denom: uact\n          amount: ${c.pricingUakt}`
-    )
+    .map(c => {
+      const amount = resolveSdlPricingUact(!!c.resources.gpu, c.pricingUakt)
+      return `        ${c.sdlServiceName}:\n          denom: uact\n          amount: ${amount}`
+    })
     .join('\n')
 
   // Multi-service deployments (especially with persistent storage) already
