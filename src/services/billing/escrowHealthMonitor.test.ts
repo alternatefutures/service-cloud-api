@@ -69,10 +69,32 @@ interface FakeAkashDeployment {
   owner: string
 }
 
-function buildPrisma(deployments: FakeAkashDeployment[]) {
+/**
+ * `deployments` represents the ACTIVE rows used by the refill loop.
+ * `inFlightDseqs` represents additional dseqs we've recorded in any
+ * non-ACTIVE state (CREATING, WAITING_BIDS, DEPLOYING, SUSPENDED,
+ * CLOSE_FAILED, etc.) that the orphan sweep MUST also exclude.
+ */
+function buildPrisma(
+  deployments: FakeAkashDeployment[],
+  inFlightDseqs: bigint[] = [],
+) {
   return {
     akashDeployment: {
-      findMany: vi.fn().mockResolvedValue(deployments),
+      findMany: vi.fn().mockImplementation(({ where, select }: any = {}) => {
+        // First call: ACTIVE-only with full select for refill loop.
+        if (where?.status === 'ACTIVE') return Promise.resolve(deployments)
+        // Second call: all known dseqs for orphan-sweep exclusion set.
+        // Returns ACTIVE rows + in-flight rows.
+        if (select?.dseq && !where) {
+          const all = [
+            ...deployments.map(d => ({ dseq: d.dseq })),
+            ...inFlightDseqs.map(dseq => ({ dseq })),
+          ]
+          return Promise.resolve(all)
+        }
+        return Promise.resolve([])
+      }),
       findUnique: vi.fn().mockImplementation(({ where }) => {
         const d = deployments.find(x => x.id === where.id)
         return Promise.resolve(d ? { status: 'ACTIVE' } : null)
@@ -110,9 +132,12 @@ function installAkashCli(overrides: {
       )
     }
 
-    // keys show <name> -a → wallet address
+    // keys show <name> -a → wallet address.
+    // Default to `akash1owner` so it matches the standard test fixture's
+    // AkashDeployment.owner field (the new owner-validation guard requires
+    // these to match — see "SAFETY: bails out on owner mismatch" test).
     if (args[0] === 'keys' && args[1] === 'show') {
-      return Promise.resolve(`${overrides.walletAddress ?? 'akash1mock'}\n`)
+      return Promise.resolve(`${overrides.walletAddress ?? 'akash1owner'}\n`)
     }
 
     // query bank balances → wallet ACT balance
@@ -314,7 +339,7 @@ describe('EscrowHealthMonitor', () => {
           JSON.stringify({ sync_info: { latest_block_height: '1000000' } }),
         )
       }
-      if (args[0] === 'keys') return Promise.resolve('akash1mock\n')
+      if (args[0] === 'keys') return Promise.resolve('akash1owner\n')
       if (args[0] === 'query' && args[1] === 'bank') {
         return Promise.resolve(
           JSON.stringify({ balances: [{ denom: 'uact', amount: '100000000' }] }),
@@ -327,9 +352,10 @@ describe('EscrowHealthMonitor', () => {
     const run1 = monitor.checkAndRefill()
 
     // Second call while the first is in flight → should bail out immediately.
-    // findMany should only be called once.
+    // findMany is called twice per cycle (once for ACTIVE, once for all-known
+    // dseqs in the orphan exclusion set), so a single completed cycle = 2.
     await monitor.checkAndRefill()
-    expect(prisma.akashDeployment.findMany).toHaveBeenCalledTimes(1)
+    expect(prisma.akashDeployment.findMany).toHaveBeenCalledTimes(2)
 
     // Now release the first run.
     resolveFirstList(JSON.stringify({ deployments: [] }))
@@ -413,7 +439,7 @@ describe('EscrowHealthMonitor', () => {
           JSON.stringify({ sync_info: { latest_block_height: '1000000' } }),
         )
       }
-      if (args[0] === 'keys') return Promise.resolve('akash1mock\n')
+      if (args[0] === 'keys') return Promise.resolve('akash1owner\n')
       if (args[0] === 'query' && args[1] === 'bank') {
         return Promise.resolve(
           JSON.stringify({ balances: [{ denom: 'uact', amount: '100000000' }] }),
@@ -559,6 +585,80 @@ describe('EscrowHealthMonitor', () => {
         c => (c[0]?.key ?? '').startsWith('chain-orphan-closed:'),
       )
       expect(orphanAlert).toBeUndefined()
+    })
+
+    it('SAFETY: bails out on owner mismatch (DB corruption defense)', async () => {
+      // If an ACTIVE row's `owner` differs from the deployer wallet that
+      // `keys show -a` resolves to, the entire cycle (refill + sweep) must
+      // skip — running the chain query against the wrong wallet would mean
+      // either (a) closing nothing real (chain rejects unknown signer), or
+      // (b) missing real orphans on our actual deployer wallet.
+      const prisma = buildPrisma([
+        { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1corrupted' },
+      ])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        walletAddress: 'akash1real',
+        listDeployments: [
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).not.toHaveBeenCalled()
+
+      const mismatchAlert = opsAlertMock.mock.calls.find(
+        c => c[0]?.key === 'escrow-monitor-owner-mismatch',
+      )
+      expect(mismatchAlert).toBeDefined()
+      expect(mismatchAlert![0].severity).toBe('critical')
+      expect(mismatchAlert![0].context?.dbOwner).toBe('akash1corrupted')
+      expect(mismatchAlert![0].context?.resolvedDeployerAddress).toBe('akash1real')
+    })
+
+    it('SAFETY: never closes a chain dseq we have a non-ACTIVE row for', async () => {
+      // Regression test for a subtle bug class: the sweep exclusion set MUST
+      // include every dseq we have ever recorded, NOT just ACTIVE rows.
+      // Statuses to protect:
+      //   - WAITING_BIDS / CREATING / DEPLOYING — TX submitted, lease not yet
+      //     established; row not ACTIVE but chain has it.
+      //   - SUSPENDED — lease intentionally kept open while user tops up;
+      //     closing it would destroy a paying customer's workload.
+      //   - CLOSE_FAILED — by definition still open on-chain.
+      const prisma = buildPrisma(
+        [], // no ACTIVE rows
+        [
+          150n, // CREATING
+          151n, // WAITING_BIDS
+          152n, // DEPLOYING
+          153n, // SUSPENDED  ← user paused for low balance, must NOT touch
+          154n, // CLOSE_FAILED
+        ],
+      )
+
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '150', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          { dseq: '151', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          { dseq: '152', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          { dseq: '153', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          { dseq: '154', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          // The actual orphan — proves the sweep DOES still fire when it should.
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      for (const protectedDseq of [150, 151, 152, 153, 154]) {
+        expect(closeDeploymentMock).not.toHaveBeenCalledWith(protectedDseq)
+      }
+      expect(closeDeploymentMock).toHaveBeenCalledWith(999)
+      expect(closeDeploymentMock).toHaveBeenCalledTimes(1)
     })
 
     it('does not alert when on-chain close fails (will retry next cycle)', async () => {
