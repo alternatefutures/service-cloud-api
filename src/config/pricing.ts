@@ -13,10 +13,18 @@
  * using the org's active plan usageMarkup rate.
  */
 
+import type { PrismaClient } from '@prisma/client'
 import { createLogger } from '../lib/logger.js'
-import { BLOCKS_PER_DAY } from './akash.js'
+import { BLOCKS_PER_DAY, BLOCKS_PER_HOUR } from './akash.js'
 
 const log = createLogger('pricing')
+
+// Static fallback range for the live block-geometry feed. Akash's
+// real block time has historically lived between 5.4s (16_000/day) and
+// 7.2s (12_000/day); anything outside this band is almost certainly a
+// bad data sample, not a real chain change. We clamp before caching.
+const BLOCKS_PER_DAY_MIN = 12_000
+const BLOCKS_PER_DAY_MAX = 16_000
 
 // ============================================
 // DEFAULT PLAN MARGINS (fallbacks — actual per-org
@@ -161,6 +169,217 @@ export async function getAktUsdPrice(): Promise<number> {
 
   log.error({ fallback: AKT_USD_PRICE_FALLBACK }, 'All AKT price sources failed and no cache — using env fallback')
   return AKT_USD_PRICE_FALLBACK
+}
+
+// ---- Live Akash blocks-per-day feed ----
+//
+// Sources Akash console-api, derives `blocksPerDay` from the slope of
+// the recent block-height vs. timestamp samples, clamps to a sane range,
+// and caches for 1 hour.
+//
+// **CRITICAL**: this function is for *cost reporting and UI display
+// only*. Do NOT use it in billing hot paths (`escrowHealthMonitor` refill
+// math, `computeBillingScheduler` top-up amount, `escrowService`
+// initial deposit). Billing math must produce identical numbers across
+// consecutive cycles for the same lease — a UI value that drifts ±1%
+// with chain conditions is fine, but a refill amount that does is how
+// "deployment closed mid-hour, then re-funded for the wrong amount"
+// bugs ship. Billing paths must keep using the static `BLOCKS_PER_HOUR`
+// / `BLOCKS_PER_DAY` constants from `./akash.ts`.
+
+export interface ChainGeometry {
+  secondsPerBlock: number
+  blocksPerHour: number
+  blocksPerDay: number
+  source: 'akash-console-api' | 'static-fallback' | 'cache'
+  sampledAt: number
+}
+
+let _blocksCache: { value: ChainGeometry; ts: number } | null = null
+const BLOCKS_CACHE_TTL_MS = 60 * 60_000
+
+interface ConsoleApiBlock {
+  height: number
+  datetime: string
+}
+
+async function fetchAkashBlocksGeometry(signal: AbortSignal): Promise<ChainGeometry | null> {
+  const res = await fetch('https://console-api.akash.network/v1/blocks', { signal })
+  if (!res.ok) throw new Error(`Akash console-api HTTP ${res.status}`)
+  const blocks = (await res.json()) as ConsoleApiBlock[]
+  if (!Array.isArray(blocks) || blocks.length < 10) {
+    throw new Error(`Akash console-api returned only ${blocks?.length ?? 0} blocks (need 10+)`)
+  }
+  // The endpoint returns most-recent-first; head/tail give us the
+  // largest possible measurement window in one call.
+  const head = blocks[0]
+  const tail = blocks[blocks.length - 1]
+  const headHeight = Number(head.height)
+  const tailHeight = Number(tail.height)
+  if (!Number.isFinite(headHeight) || !Number.isFinite(tailHeight) || headHeight <= tailHeight) {
+    throw new Error('Akash console-api samples have unusable heights')
+  }
+  const headMs = Date.parse(head.datetime)
+  const tailMs = Date.parse(tail.datetime)
+  if (!Number.isFinite(headMs) || !Number.isFinite(tailMs) || headMs <= tailMs) {
+    throw new Error('Akash console-api samples have unusable timestamps')
+  }
+  const secondsPerBlock = (headMs - tailMs) / (headHeight - tailHeight) / 1000
+  if (!Number.isFinite(secondsPerBlock) || secondsPerBlock <= 0) {
+    throw new Error(`Computed secondsPerBlock=${secondsPerBlock} is invalid`)
+  }
+  const blocksPerDayRaw = Math.round(86_400 / secondsPerBlock)
+  if (blocksPerDayRaw < BLOCKS_PER_DAY_MIN || blocksPerDayRaw > BLOCKS_PER_DAY_MAX) {
+    throw new Error(`blocksPerDay=${blocksPerDayRaw} outside sane range — refusing sample`)
+  }
+  return {
+    secondsPerBlock,
+    blocksPerHour: Math.round(3_600 / secondsPerBlock),
+    blocksPerDay: blocksPerDayRaw,
+    source: 'akash-console-api',
+    sampledAt: Date.now(),
+  }
+}
+
+/**
+ * Persist a successful geometry sample into `chain_stats`. Best-effort —
+ * a DB outage must NEVER break the in-memory cache hot path. We log and
+ * swallow.
+ *
+ * The row is keyed `id = "akash-mainnet"` (the schema default) so this
+ * is a single-row upsert. Survives pod restarts so a fresh replica can
+ * hydrate the in-memory cache from DB on first call instead of always
+ * paying the console-api round-trip.
+ */
+async function persistChainStats(
+  prisma: PrismaClient,
+  geometry: ChainGeometry,
+): Promise<void> {
+  try {
+    await prisma.chainStats.upsert({
+      where: { id: 'akash-mainnet' },
+      create: {
+        id: 'akash-mainnet',
+        secondsPerBlock: geometry.secondsPerBlock,
+        blocksPerDay: geometry.blocksPerDay,
+        blocksPerHour: geometry.blocksPerHour,
+        sourceUrl: 'https://console-api.akash.network/v1/blocks',
+        sampledAt: new Date(geometry.sampledAt),
+      },
+      update: {
+        secondsPerBlock: geometry.secondsPerBlock,
+        blocksPerDay: geometry.blocksPerDay,
+        blocksPerHour: geometry.blocksPerHour,
+        sourceUrl: 'https://console-api.akash.network/v1/blocks',
+        sampledAt: new Date(geometry.sampledAt),
+      },
+    })
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : err },
+      'persistChainStats failed — chain_stats row not updated'
+    )
+  }
+}
+
+/**
+ * Returns Akash chain block geometry (seconds/block, blocks/hour,
+ * blocks/day). Cached for 1h in memory. Optional `prisma` arg enables
+ * (a) persisting fresh samples to `chain_stats` for cold-start
+ * hydration on a new pod, and (b) reading the last persisted sample as
+ * a fallback when both the live API and the in-memory cache miss.
+ *
+ * Falls back to the static constants from `config/akash.ts` if every
+ * live source AND the persisted row are unavailable.
+ */
+export async function getAkashChainGeometry(
+  prisma?: PrismaClient,
+): Promise<ChainGeometry> {
+  if (_blocksCache && Date.now() - _blocksCache.ts < BLOCKS_CACHE_TTL_MS) {
+    return { ..._blocksCache.value, source: 'cache' }
+  }
+
+  try {
+    const signal = AbortSignal.timeout(5_000)
+    const geometry = await fetchAkashBlocksGeometry(signal)
+    if (geometry) {
+      _blocksCache = { value: geometry, ts: Date.now() }
+      log.info(
+        { secondsPerBlock: geometry.secondsPerBlock, blocksPerDay: geometry.blocksPerDay },
+        'Akash chain geometry refreshed'
+      )
+      if (prisma) await persistChainStats(prisma, geometry)
+      return geometry
+    }
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : err },
+      'Akash console-api block sample failed — falling back to static constant'
+    )
+  }
+
+  if (_blocksCache) {
+    log.warn(
+      { stale: _blocksCache.value, ageMs: Date.now() - _blocksCache.ts },
+      'Live block-geometry sample failed — using stale cache'
+    )
+    return { ..._blocksCache.value, source: 'cache' }
+  }
+
+  // Cold-start path: pod just booted, no in-memory cache, live API
+  // failed. Try the persisted row before giving up to the static
+  // constant — that row was last written by a healthy pod and is
+  // always closer to reality than the compile-time constant.
+  if (prisma) {
+    try {
+      const row = await prisma.chainStats.findUnique({
+        where: { id: 'akash-mainnet' },
+      })
+      if (row) {
+        const hydrated: ChainGeometry = {
+          secondsPerBlock: row.secondsPerBlock,
+          blocksPerHour: row.blocksPerHour,
+          blocksPerDay: row.blocksPerDay,
+          source: 'cache',
+          sampledAt: row.sampledAt.getTime(),
+        }
+        _blocksCache = { value: hydrated, ts: Date.now() }
+        log.info(
+          { sampledAt: row.sampledAt.toISOString(), blocksPerDay: row.blocksPerDay },
+          'Hydrated geometry cache from chain_stats persisted row'
+        )
+        return hydrated
+      }
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : err },
+        'chain_stats hydration query failed — falling back to static constant'
+      )
+    }
+  }
+
+  return {
+    secondsPerBlock: 86_400 / BLOCKS_PER_DAY,
+    blocksPerHour: BLOCKS_PER_HOUR,
+    blocksPerDay: BLOCKS_PER_DAY,
+    source: 'static-fallback',
+    sampledAt: Date.now(),
+  }
+}
+
+/**
+ * Convenience wrapper for callers that only need `blocksPerDay`.
+ * Same caveats as `getAkashChainGeometry`: cost-reporting only — never
+ * use in billing hot paths.
+ */
+export async function getAkashBlocksPerDay(prisma?: PrismaClient): Promise<number> {
+  const geometry = await getAkashChainGeometry(prisma)
+  return geometry.blocksPerDay
+}
+
+/** Test-only: drop the in-memory geometry cache. */
+export function _resetAkashChainGeometryCacheForTests(): void {
+  _blocksCache = null
 }
 
 // ============================================
