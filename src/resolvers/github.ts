@@ -92,6 +92,43 @@ function normalizeRootDirectory(input: string | null | undefined): string | null
   return trimmed
 }
 
+/**
+ * Validate user-supplied build/start commands.
+ *
+ * Intentionally permissive on shell syntax — these strings are run verbatim
+ * by the af-builder Job (`bash -lc "$BUILD_COMMAND"` after b64 round-trip),
+ * which is the feature: users type "pnpm run build:prod && rm -rf dist/foo"
+ * and it has to work. Banning shell metacharacters would break the product.
+ *
+ * What we DO guard against:
+ *   - Length: 4 KiB cap so a runaway frontend (or attacker) can't pin a
+ *     row with a multi-MiB blob and balloon DB / log payloads.
+ *   - Null bytes: Postgres TEXT chokes on \0 in some drivers and they
+ *     have no legitimate place in a shell command.
+ *
+ * Returns the trimmed string (or null for empty) so callers don't have to
+ * remember whether they validated; if it returned, it's safe to persist.
+ */
+function normalizeShellCommand(
+  input: string | null | undefined,
+  fieldName: 'buildCommand' | 'startCommand',
+): string | null {
+  if (input == null) return null
+  const trimmed = input.trim()
+  if (trimmed === '') return null
+  if (trimmed.length > 4096) {
+    throw new GraphQLError(`${fieldName} too long (max 4096 chars)`, {
+      extensions: { code: 'INVALID_COMMAND' },
+    })
+  }
+  if (trimmed.includes('\0')) {
+    throw new GraphQLError(`${fieldName} cannot contain null bytes`, {
+      extensions: { code: 'INVALID_COMMAND' },
+    })
+  }
+  return trimmed
+}
+
 function imageTagFor(userId: string, owner: string, repo: string, sha: string): string {
   const cfg = getGithubAppConfig()
   // Docker registry refs MUST be all lowercase. Prisma cuid userIds like
@@ -450,6 +487,8 @@ export const githubMutations = {
     assertGithubConfigured()
     const { input } = args
     const safeRootDirectory = normalizeRootDirectory(input.rootDirectory)
+    const safeBuildCommand = normalizeShellCommand(input.buildCommand, 'buildCommand')
+    const safeStartCommand = normalizeShellCommand(input.startCommand, 'startCommand')
 
     const project = await context.prisma.project.findUnique({
       where: { id: input.projectId },
@@ -494,8 +533,8 @@ export const githubMutations = {
         gitBranch: branchName,
         gitInstallationId: install.id,
         rootDirectory: safeRootDirectory,
-        buildCommand: input.buildCommand ?? null,
-        startCommand: input.startCommand ?? null,
+        buildCommand: safeBuildCommand,
+        startCommand: safeStartCommand,
         internalHostname: generateInternalHostname(slug, project.slug),
       },
     })
@@ -519,8 +558,8 @@ export const githubMutations = {
       repo: input.repo,
       branch: branchName,
       rootDirectory: safeRootDirectory,
-      buildCommand: input.buildCommand ?? null,
-      startCommand: input.startCommand ?? null,
+      buildCommand: safeBuildCommand,
+      startCommand: safeStartCommand,
       triggeredBy: 'first-deploy',
     })
 
@@ -554,6 +593,8 @@ export const githubMutations = {
     assertGithubConfigured()
     const { input } = args
     const safeRootDirectory = normalizeRootDirectory(input.rootDirectory)
+    const safeBuildCommand = normalizeShellCommand(input.buildCommand, 'buildCommand')
+    const safeStartCommand = normalizeShellCommand(input.startCommand, 'startCommand')
 
     const service = await context.prisma.service.findUnique({
       where: { id: input.serviceId },
@@ -592,8 +633,8 @@ export const githubMutations = {
         gitBranch: branchName,
         gitInstallationId: install.id,
         rootDirectory: safeRootDirectory,
-        buildCommand: input.buildCommand ?? null,
-        startCommand: input.startCommand ?? null,
+        buildCommand: safeBuildCommand,
+        startCommand: safeStartCommand,
       },
     })
 
@@ -605,8 +646,8 @@ export const githubMutations = {
       repo: input.repo,
       branch: branchName,
       rootDirectory: safeRootDirectory,
-      buildCommand: input.buildCommand ?? null,
-      startCommand: input.startCommand ?? null,
+      buildCommand: safeBuildCommand,
+      startCommand: safeStartCommand,
       triggeredBy: 'first-deploy',
     })
 
