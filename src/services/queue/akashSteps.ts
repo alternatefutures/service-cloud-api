@@ -1355,6 +1355,38 @@ export async function finalizeDeployment(
 
 // ── FAILURE handler ───────────────────────────────────────────────────
 
+/**
+ * Deterministic failure patterns — retrying on a different provider WILL fail
+ * the same way, so we burn straight to PERMANENTLY_FAILED instead of paying
+ * for N more lease/escrow round-trips. Drives down both gas spend and the
+ * "why is the UI showing 4 stuck deployments" support load.
+ *
+ * Rules of thumb for adding to this list:
+ *   - Failure root-causes the image / SDL / user input — provider choice is
+ *     irrelevant (e.g. ImagePullBackOff because GHCR package is private).
+ *   - Failure is observed by US (the poller) AFTER the provider has
+ *     already accepted and tried — so we know the provider isn't broken.
+ *   - We have an exact substring match emitted by our own code (don't grep
+ *     provider-side strings — they're not in our control).
+ *
+ * NOTE: "Deployment never exposed any endpoints" deliberately excluded — that
+ * one CAN be a flaky provider (lease-status endpoint never wired up); cheap
+ * to retry once on a different host.
+ */
+const DETERMINISTIC_FAILURE_PATTERNS: ReadonlyArray<string> = [
+  // Image won't pull → 0 ready replicas. Source: handlePollUrls.
+  'container never started',
+  // SDL composer / nixpacks / template emitted invalid YAML. Won't get fixed by retry.
+  'failed to parse manifest',
+  'invalid sdl',
+]
+
+function isDeterministicFailure(errorMessage: string | undefined | null): boolean {
+  if (!errorMessage) return false
+  const lower = errorMessage.toLowerCase()
+  return DETERMINISTIC_FAILURE_PATTERNS.some((p) => lower.includes(p))
+}
+
 export async function handleFailure(
   prisma: PrismaClient,
   payload: AkashHandleFailurePayload
@@ -1373,6 +1405,7 @@ export async function handleFailure(
   }
 
   const retryCount = deployment.retryCount
+  const deterministic = isDeterministicFailure(errorMessage)
 
   await prisma.akashDeployment.update({
     where: { id: deploymentId },
@@ -1387,6 +1420,38 @@ export async function handleFailure(
     `Deployment failed: ${errorMessage}`,
     errorMessage
   )
+
+  // ── Fast-fail: deterministic failures don't get fixed by switching providers.
+  // Mark PERMANENTLY_FAILED now so we (a) stop burning escrow on copy-paste
+  // retries, (b) stop spawning duplicate AkashDeployment rows in the UI, and
+  // (c) close the on-chain deployment to free the deposit.
+  if (deterministic) {
+    log.warn(
+      { deploymentId, errorMessage },
+      'deterministic failure — skipping retry chain',
+    )
+    if (deployment.dseq && Number(deployment.dseq) > 0) {
+      try {
+        await runAkashAsync([
+          'tx', 'deployment', 'close',
+          '--dseq', String(Number(deployment.dseq)),
+          '-o', 'json', '-y',
+        ])
+      } catch (closeErr) {
+        log.warn({ detail: closeErr instanceof Error ? closeErr.message : closeErr }, 'Failed to close on-chain deployment on deterministic failure')
+      }
+    }
+    await prisma.akashDeployment.update({
+      where: { id: deploymentId },
+      data: { status: 'PERMANENTLY_FAILED' },
+    })
+    deploymentEvents.emitStatus({
+      deploymentId,
+      status: 'PERMANENTLY_FAILED',
+      timestamp: new Date(),
+    })
+    return
+  }
 
   if (retryCount < MAX_RETRY_COUNT) {
     // If the user manually closed any deployment for this service, stop retrying
@@ -1457,6 +1522,17 @@ export async function handleFailure(
       }
     }
 
+    // Carry forward the chain's excludedProviders + the current failure's
+    // provider. Without this, `handleCheckBids`'s safety filter keeps picking
+    // the same broken bidder on every retry — observed when 3 sibling
+    // AkashDeployments all landed on `akash1sevd2ymtty…` for the same image.
+    const inheritedExcluded = await prisma.akashDeployment.findUnique({
+      where: { id: deploymentId },
+      select: { excludedProviders: true, provider: true },
+    })
+    const excluded = new Set<string>(inheritedExcluded?.excludedProviders ?? [])
+    if (inheritedExcluded?.provider) excluded.add(inheritedExcluded.provider)
+
     const newDeployment = await prisma.akashDeployment.create({
       data: {
         owner: deployment.owner,
@@ -1471,6 +1547,7 @@ export async function handleFailure(
         retryCount: retryCount + 1,
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,
         policyId: retryPolicyId,
+        excludedProviders: [...excluded],
       },
     })
 
