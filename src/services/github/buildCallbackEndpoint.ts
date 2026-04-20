@@ -114,71 +114,98 @@ export async function handleBuildCallback(
   const now = new Date()
   const newStatus = body.status as BuildStatus
 
-  // Atomic idempotency + write. The previous version did a read (line 100),
-  // a JS-level terminal check, then a write — leaving a window where two
-  // near-simultaneous callbacks (e.g. builder posts SUCCEEDED, K8s pod-
-  // deletion handler posts FAILED) could both pass the gate and double-apply.
+  // Atomic idempotency + write. Two failure modes we explicitly handle:
   //
-  // We collapse the gate INTO the WHERE clause: `updateMany` succeeds only
-  // if the current status is non-terminal OR the incoming status equals the
-  // current one (idempotent retry of a terminal callback). If count === 0,
-  // somebody else already drove this row terminal-with-a-different-status —
-  // treat as a benign no-op and DON'T write the Service mirror (the winning
-  // callback's own service write is the truth).
+  //   (a) Two near-simultaneous callbacks with DIFFERENT terminal statuses
+  //       (builder posts SUCCEEDED while a pod-deletion handler posts FAILED).
+  //       We must never let the loser overwrite the winner.
   //
-  // Interactive transaction (vs the array form) so the Service write is
-  // conditional on the BuildJob CAS succeeding — and both still commit
-  // atomically when the CAS wins.
+  //   (b) The SAME callback posted twice (curl retry, K8s Job restart, GitHub
+  //       redelivery — surprisingly common). The DB write is harmlessly
+  //       idempotent (same data), but ANY side-effect downstream — most
+  //       importantly autoDeployAfterBuild — must run AT MOST ONCE. Otherwise
+  //       you get N AkashDeployments per push.
+  //
+  // We split the CAS into two arms so we can distinguish:
+  //   - `firstTransition` arm: status moved from non-terminal → newStatus.
+  //     This is the WINNING callback — fire side-effects.
+  //   - `idempotentRetry` arm: status was already newStatus. DB write is a
+  //     no-op-equivalent (we still re-run it to refresh logs, but it's the
+  //     same row); side-effects MUST NOT fire.
+  //
+  // Interactive transaction so the Service mirror only commits when the
+  // BuildJob CAS wins.
   const txResult = await prisma.$transaction(async (tx) => {
-    const updated = await tx.buildJob.updateMany({
+    const buildJobData = {
+      status: newStatus,
+      logs: body.logs?.slice(0, 60_000) ?? job.logs ?? undefined,
+      imageTag: body.imageTag ?? job.imageTag,
+      detectedFramework: body.detectedFramework ?? job.detectedFramework,
+      detectedPort: body.detectedPort ?? job.detectedPort,
+      errorMessage: body.errorMessage?.slice(0, 4_000) ?? null,
+      startedAt: newStatus === 'RUNNING' && !job.startedAt ? now : job.startedAt,
+      finishedAt: TERMINAL.has(newStatus) ? now : null,
+    }
+
+    // Arm 1: first transition into newStatus.
+    const firstTransition = await tx.buildJob.updateMany({
       where: {
         id: job.id,
-        OR: [
-          { status: { notIn: ['SUCCEEDED', 'FAILED', 'CANCELED'] } },
-          { status: newStatus },
-        ],
+        status: { notIn: ['SUCCEEDED', 'FAILED', 'CANCELED'] },
       },
-      data: {
-        status: newStatus,
-        logs: body.logs?.slice(0, 60_000) ?? job.logs ?? undefined,
-        imageTag: body.imageTag ?? job.imageTag,
-        detectedFramework: body.detectedFramework ?? job.detectedFramework,
-        detectedPort: body.detectedPort ?? job.detectedPort,
-        errorMessage: body.errorMessage?.slice(0, 4_000) ?? null,
-        startedAt: newStatus === 'RUNNING' && !job.startedAt ? now : job.startedAt,
-        finishedAt: TERMINAL.has(newStatus) ? now : null,
-      },
+      data: buildJobData,
     })
-    if (updated.count === 0) return { applied: false as const }
-    await tx.service.update({
-      where: { id: job.serviceId },
-      data: {
-        lastBuildStatus: newStatus,
-        lastBuildAt: now,
-        lastBuildSha: body.commitSha ?? job.commitSha,
-        ...(newStatus === 'SUCCEEDED' && body.imageTag
-          ? {
-              dockerImage: body.imageTag,
-              detectedFramework: body.detectedFramework ?? job.detectedFramework,
-              detectedPort: body.detectedPort ?? job.detectedPort,
-              // Use the detected port as the runtime container port if the
-              // user hasn't pinned one explicitly. SDL generators read
-              // containerPort.
-              containerPort:
-                job.service.containerPort ?? body.detectedPort ?? job.detectedPort ?? null,
-            }
-          : {}),
-      },
+    if (firstTransition.count === 1) {
+      await tx.service.update({
+        where: { id: job.serviceId },
+        data: {
+          lastBuildStatus: newStatus,
+          lastBuildAt: now,
+          lastBuildSha: body.commitSha ?? job.commitSha,
+          ...(newStatus === 'SUCCEEDED' && body.imageTag
+            ? {
+                dockerImage: body.imageTag,
+                detectedFramework: body.detectedFramework ?? job.detectedFramework,
+                detectedPort: body.detectedPort ?? job.detectedPort,
+                // Use the detected port as the runtime container port if the
+                // user hasn't pinned one explicitly. SDL generators read
+                // containerPort.
+                containerPort:
+                  job.service.containerPort ?? body.detectedPort ?? job.detectedPort ?? null,
+              }
+            : {}),
+        },
+      })
+      return { outcome: 'first-transition' as const }
+    }
+
+    // Arm 2: idempotent retry of the SAME terminal status. Refresh logs but
+    // do NOT touch Service (the original winning callback already did) and
+    // do NOT signal side-effects.
+    const idempotentRetry = await tx.buildJob.updateMany({
+      where: { id: job.id, status: newStatus },
+      data: { logs: buildJobData.logs },
     })
-    return { applied: true as const }
+    if (idempotentRetry.count === 1) {
+      return { outcome: 'idempotent-retry' as const }
+    }
+
+    return { outcome: 'terminal-mismatch' as const }
   })
 
-  if (!txResult.applied) {
+  if (txResult.outcome === 'terminal-mismatch') {
     log.info(
       { buildJobId: job.id, current: job.status, incoming: body.status },
       'ignoring callback that would downgrade terminal status',
     )
     return reply(res, 200, { ok: true, ignored: 'terminal' })
+  }
+  if (txResult.outcome === 'idempotent-retry') {
+    log.info(
+      { buildJobId: job.id, status: body.status },
+      'ignoring duplicate callback (same status as current) — side-effects already fired',
+    )
+    return reply(res, 200, { ok: true, ignored: 'duplicate' })
   }
 
   // ── 3. Best-effort: write commit status back to GitHub ─
@@ -246,6 +273,40 @@ async function autoDeployAfterBuild(prisma: PrismaClient, serviceId: string): Pr
   if (!service) throw new Error('service not found')
   if (!service.createdByUserId) {
     throw new Error('cannot deploy: service has no createdByUserId')
+  }
+
+  // Defense in depth against duplicate auto-deploys.
+  //
+  // The build-callback CAS gate above already filters duplicate SUCCEEDED
+  // callbacks for a single BuildJob. But we can still be invoked twice for
+  // the same service+image by orthogonal paths:
+  //
+  //   - Two BuildJobs for the same SHA (webhook redelivery slipping past the
+  //     dedup window in webhookEndpoint, simultaneous push + manual rebuild,
+  //     dual-instance race, etc.) each producing their own SUCCEEDED.
+  //   - User clicking "Deploy" in the UI in the same second as the build's
+  //     auto-deploy fires.
+  //
+  // Skip if there's already a non-terminal AkashDeployment for THIS service
+  // created in the last 30s. The window is intentionally short — legitimate
+  // redeploys (config change → redeploy) take longer than 30s of human input
+  // anyway, and we'd rather the user occasionally hit "Redeploy" again than
+  // double-charge them on every push.
+  const DEDUP_WINDOW_MS = 30_000
+  const inFlight = await prisma.akashDeployment.findFirst({
+    where: {
+      serviceId,
+      status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'] },
+      createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) },
+    },
+    select: { id: true, status: true, createdAt: true },
+  })
+  if (inFlight) {
+    log.info(
+      { serviceId, existingDeploymentId: inFlight.id, existingStatus: inFlight.status },
+      'skipping auto-deploy: in-flight deployment exists for service (deduped)',
+    )
+    return
   }
 
   const ctx = {
