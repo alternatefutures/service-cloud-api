@@ -39,6 +39,7 @@
     "@cosmjs/proto-signing": "^0.38.1",
     "@graphql-tools/schema": "^10.0.29",
     "@infisical/sdk": "^4.0.6",
+    "@kubernetes/client-node": "^1.4.0",
     "@lighthouse-web3/sdk": "^0.4.3",
     "@opentelemetry/auto-instrumentations-node": "^0.71.0",
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.213.0",

@@ -33,6 +33,7 @@ import {
   templateFieldResolvers,
 } from './templates.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
+import { githubQueries, githubMutations, githubFieldResolvers } from './github.js'
 import {
   serviceConnectivityQueries,
   serviceConnectivityMutations,
@@ -1081,6 +1082,9 @@ export const resolvers = {
     ...akashQueries,
     ...phalaQueries,
 
+    // GitHub-source deploy queries
+    ...githubQueries,
+
     // Service container logs
     ...logsQueries,
 
@@ -1526,14 +1530,14 @@ export const resolvers = {
       // can't mis-tag a template-backed service). Anything else must be one
       // of the known flavors or null (legacy/unspecified — readers default
       // to 'docker' for VM, 'function' for FUNCTION).
-      const ALLOWED_FLAVORS = new Set(['docker', 'server', 'function', 'template'])
+      const ALLOWED_FLAVORS = new Set(['docker', 'server', 'function', 'template', 'github'])
       let flavor: string | null = null
       if (input.templateId) {
         flavor = 'template'
       } else if (input.flavor != null) {
         if (!ALLOWED_FLAVORS.has(input.flavor)) {
           throw new GraphQLError(
-            `Invalid flavor "${input.flavor}". Must be one of: docker, server, function, template.`
+            `Invalid flavor "${input.flavor}". Must be one of: docker, server, function, template, github.`
           )
         }
         flavor = input.flavor
@@ -2165,6 +2169,9 @@ export const resolvers = {
     // Phala deployment mutations
     ...phalaMutations,
 
+    // GitHub-source deploy mutations
+    ...githubMutations,
+
     // Service connectivity mutations (env vars, ports, links)
     ...serviceConnectivityMutations,
 
@@ -2318,10 +2325,16 @@ export const resolvers = {
     ...(phalaFieldResolvers.Service ?? {}),
     // Merge inter-service communication field resolvers (envVars, ports, linksFrom, linksTo)
     ...(serviceConnectivityFieldResolvers.Service ?? {}),
+    // Merge GitHub-source field resolvers (latestBuild, buildJobs)
+    ...(githubFieldResolvers.Service ?? {}),
   },
 
   ServiceLink: {
     ...(serviceConnectivityFieldResolvers.ServiceLink ?? {}),
+  },
+
+  GithubInstallation: {
+    ...(githubFieldResolvers.GithubInstallation ?? {}),
   },
 
   Site: {
