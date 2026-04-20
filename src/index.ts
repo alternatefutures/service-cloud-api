@@ -62,6 +62,8 @@ import { handleAdminBillingStats } from './services/admin/billingStatsEndpoint.j
 import { handleSchedulerStats } from './services/admin/schedulerStatsEndpoint.js'
 import { handleAdminAuditEvents } from './services/admin/auditEventsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
+import { handleBuildCallback } from './services/github/buildCallbackEndpoint.js'
+import { handleGithubWebhook } from './services/github/webhookEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
 import { ShellEndpoint } from './services/shell/shellEndpoint.js'
 import { LogStreamEndpoint } from './services/logs/logStreamEndpoint.js'
@@ -262,6 +264,16 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
 
     if (url.pathname === '/webhooks/stripe') {
       await handleStripeWebhook(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/webhooks/github') {
+      await handleGithubWebhook(req, res, prisma)
+      return
+    }
+
+    if (url.pathname === '/internal/build-callback' && req.method === 'POST') {
+      await handleBuildCallback(req, res, prisma)
       return
     }
 

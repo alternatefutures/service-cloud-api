@@ -34,21 +34,22 @@ enum ServiceType {
 // ============================================
 
 model User {
-  id            String   @id @default(cuid())
-  email         String?  @unique
-  username      String?  @unique
-  walletAddress String?  @unique
+  id            String  @id @default(cuid())
+  email         String? @unique
+  username      String? @unique
+  walletAddress String? @unique
 
-  projects              Project[]
-  organizationMemberships OrganizationMember[]
-  createdServices       Service[]
-  agents                Agent[]
-  chats                 Chat[]
-  messages              Message[]
-  pinnedContent         PinnedContent[]
-  storageSnapshots      StorageSnapshot[]
-  feedbackReports       FeedbackReport[]
-  customer              Customer?
+  projects                     Project[]
+  organizationMemberships      OrganizationMember[]
+  createdServices              Service[]
+  agents                       Agent[]
+  chats                        Chat[]
+  messages                     Message[]
+  pinnedContent                PinnedContent[]
+  storageSnapshots             StorageSnapshot[]
+  feedbackReports              FeedbackReport[]
+  customer                     Customer?
+  installedGithubInstallations GithubInstallation[] @relation("GithubInstallationInstaller")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -63,14 +64,14 @@ model User {
 // ============================================
 
 model Project {
-  id             String   @id @default(cuid())
+  id             String  @id @default(cuid())
   name           String
-  slug           String   @unique
+  slug           String  @unique
   description    String?
-  organizationId String?  @map("organization_id")
+  organizationId String? @map("organization_id")
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
@@ -95,28 +96,28 @@ model Project {
 // ============================================
 
 model Site {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
 
-  projectId   String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  serviceId   String?  @unique
-  service     Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String?  @unique
+  service   Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
-  deployments Deployment[]
-  domains     Domain[]
-  ipnsRecords IPNSRecord[]
-  zones       Zone[]
+  deployments      Deployment[]
+  domains          Domain[]
+  ipnsRecords      IPNSRecord[]
+  zones            Zone[]
   akashDeployments AkashDeployment[]
   phalaDeployments PhalaDeployment[]
 
   primaryDomainId String?
   primaryDomain   Domain? @relation("PrimaryDomain", fields: [primaryDomainId], references: [id])
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([projectId])
   @@index([slug])
@@ -128,13 +129,13 @@ model Deployment {
   status      DeploymentStatus @default(PENDING)
   storageType StorageType      @default(IPFS)
 
-  siteId      String
-  site        Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  pin         Pin?
+  pin Pin?
 
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([siteId])
   @@index([cid])
@@ -160,32 +161,32 @@ enum StorageType {
 // ============================================
 
 model AFFunction {
-  id                  String               @id @default(cuid())
-  name                String
-  slug                String               @unique
-  sourceCode          String?              @db.Text
-  invokeUrl           String?
-  routes              Json?
-  status              FunctionStatus       @default(ACTIVE)
+  id         String         @id @default(cuid())
+  name       String
+  slug       String         @unique
+  sourceCode String?        @db.Text
+  invokeUrl  String?
+  routes     Json?
+  status     FunctionStatus @default(ACTIVE)
 
-  projectId           String
-  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  serviceId           String?              @unique
-  service             Service?             @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String?  @unique
+  service   Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
-  siteId              String?
+  siteId String?
 
-  currentDeploymentId String?              @unique
+  currentDeploymentId String?               @unique
   currentDeployment   AFFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
 
-  deployments         AFFunctionDeployment[] @relation("FunctionDeployments")
-  akashDeployments    AkashDeployment[]
-  phalaDeployments    PhalaDeployment[]
-  agents              Agent[]
+  deployments      AFFunctionDeployment[] @relation("FunctionDeployments")
+  akashDeployments AkashDeployment[]
+  phalaDeployments PhalaDeployment[]
+  agents           Agent[]
 
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([projectId])
   @@index([slug])
@@ -193,19 +194,19 @@ model AFFunction {
 }
 
 model AFFunctionDeployment {
-  id              String         @id @default(cuid())
-  cid             String
-  blake3Hash      String?
-  assetsCid       String?
-  sgx             Boolean        @default(false)
+  id         String  @id @default(cuid())
+  cid        String
+  blake3Hash String?
+  assetsCid  String?
+  sgx        Boolean @default(false)
 
   afFunctionId String
-  afFunction   AFFunction  @relation("FunctionDeployments", fields: [afFunctionId], references: [id], onDelete: Cascade)
+  afFunction   AFFunction @relation("FunctionDeployments", fields: [afFunctionId], references: [id], onDelete: Cascade)
 
   currentFunction AFFunction? @relation("CurrentDeployment")
 
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([afFunctionId])
   @@index([cid])
@@ -225,9 +226,10 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members   OrganizationMember[]
-  projects  Project[]
-  domains   Domain[]
+  members             OrganizationMember[]
+  projects            Project[]
+  domains             Domain[]
+  githubInstallations GithubInstallation[]
 
   @@index([slug])
 }
@@ -240,57 +242,87 @@ model OrganizationMember {
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, userId])
   @@index([userId])
 }
 
 model Service {
-  id              String      @id @default(cuid())
-  type            ServiceType
-  name            String
-  slug            String
-  projectId       String
-  templateId      String?
-  dockerImage     String?     // Custom Docker image (e.g. ghcr.io/org/app:v1)
-  flavor          String?     // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation. (Phase 39)
-  containerPort   Int?        // Port the container listens on (default: 80). Used in SDL generation.
-  volumes         Json?       // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
-  healthProbe     Json?       // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
-  failoverPolicy  Json?       // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null. (Phase 43)
-  internalHostname String?    // Deterministic hostname: {slug}.{project-slug}.internal
-  createdByUserId String?
-  parentServiceId String?     // Companion services share the parent's deployment lifecycle
-  sdlServiceName  String?     // Akash SDL service name for multi-service deployments (e.g. "postgres", "app", "web")
-  shutdownPriority Int        @default(50) @map("shutdown_priority") // Lower = last to shut down. Used by billing scheduler for priority-based suspension.
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  id               String      @id @default(cuid())
+  type             ServiceType
+  name             String
+  slug             String
+  projectId        String
+  templateId       String?
+  dockerImage      String? // Custom Docker image (e.g. ghcr.io/org/app:v1)
+  flavor           String? // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation. (Phase 39)
+  containerPort    Int? // Port the container listens on (default: 80). Used in SDL generation.
+  volumes          Json? // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
+  healthProbe      Json? // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
+  failoverPolicy   Json? // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null. (Phase 43)
+  internalHostname String? // Deterministic hostname: {slug}.{project-slug}.internal
+  createdByUserId  String?
+  parentServiceId  String? // Companion services share the parent's deployment lifecycle
+  sdlServiceName   String? // Akash SDL service name for multi-service deployments (e.g. "postgres", "app", "web")
+  shutdownPriority Int         @default(50) @map("shutdown_priority") // Lower = last to shut down. Used by billing scheduler for priority-based suspension.
 
-  project         Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdByUser   User?       @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
-  parentService   Service?    @relation("CompanionServices", fields: [parentServiceId], references: [id], onDelete: Cascade)
-  companionServices Service[] @relation("CompanionServices")
+  // ── Git-source deploy fields (Vercel-style) ───────────────────────
+  // Set when the Service was created by connecting a git repo. Provider-
+  // agnostic: the same shape works for github / gitlab / bitbucket.
+  // The compute provider that runs the built image is NOT stored here —
+  // it's derived per-deploy from the live ComputeMode picker (Standard
+  // → Akash, Confidential → Phala) just like every other flavor. The
+  // build callback's auto-deploy reads the active deployment's provider
+  // on rebuilds, and falls back to Akash on first deploy (matches the
+  // ServiceDetailPanel default at onDeploy → onDeployToAkash).
+  gitProvider       String? // 'github' | 'gitlab' | 'bitbucket' | …
+  gitOwner          String? // Repo owner (user or org login)
+  gitRepo           String? // Repo name
+  gitBranch         String? // Tracked branch — pushes to this trigger rebuilds
+  gitInstallationId String? // FK → GithubInstallation (or future provider install table)
+  rootDirectory     String? // Subdirectory inside the repo to build from (monorepos)
+  buildCommand      String? // Override build command (else framework-detected)
+  startCommand      String? // Override start command (else framework-detected)
+  detectedFramework String? // Last build's detected framework (Next.js, Vite, Astro, …)
+  detectedPort      Int? // Port the built image listens on
+  lastBuildSha      String? // Most recent built commit SHA
+  lastBuildStatus   String? // 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'
+  lastBuildAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdByUser     User?               @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  parentService     Service?            @relation("CompanionServices", fields: [parentServiceId], references: [id], onDelete: Cascade)
+  companionServices Service[]           @relation("CompanionServices")
+  gitInstallation   GithubInstallation? @relation(fields: [gitInstallationId], references: [id], onDelete: SetNull)
 
   // One-to-one (subtype tables have the FK via serviceId)
-  site            Site?
-  afFunction      AFFunction?
+  site       Site?
+  afFunction AFFunction?
 
   // Akash deployments for this service (can have multiple over time)
   akashDeployments AkashDeployment[]
   phalaDeployments PhalaDeployment[]
 
+  // Build history for git-source services
+  buildJobs BuildJob[]
+
   // Inter-service communication
-  envVars          ServiceEnvVar[]
-  ports            ServicePort[]
-  linksFrom        ServiceLink[]  @relation("ServiceLinksFrom")
-  linksTo          ServiceLink[]  @relation("ServiceLinksTo")
+  envVars   ServiceEnvVar[]
+  ports     ServicePort[]
+  linksFrom ServiceLink[]   @relation("ServiceLinksFrom")
+  linksTo   ServiceLink[]   @relation("ServiceLinksTo")
 
   @@unique([type, slug])
   @@index([projectId])
   @@index([createdByUserId])
   @@index([parentServiceId])
+  @@index([gitInstallationId])
+  @@index([gitOwner, gitRepo])
 }
 
 // ============================================
@@ -298,14 +330,14 @@ model Service {
 // ============================================
 
 model ServiceEnvVar {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   serviceId String
   key       String
-  value     String   @db.Text
-  secret    Boolean  @default(false)
-  source    String?  // null = user-set, "link:<serviceId>" = auto-generated from a service link
+  value     String  @db.Text
+  secret    Boolean @default(false)
+  source    String? // null = user-set, "link:<serviceId>" = auto-generated from a service link
 
-  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -319,16 +351,16 @@ model ServiceEnvVar {
 // ============================================
 
 model ServicePort {
-  id            String  @id @default(cuid())
+  id            String @id @default(cuid())
   serviceId     String
   containerPort Int
-  publicPort    Int?    // null = internal only
-  protocol      String  @default("TCP") // TCP | UDP | HTTP
+  publicPort    Int? // null = internal only
+  protocol      String @default("TCP") // TCP | UDP | HTTP
 
-  service       Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([serviceId, containerPort])
   @@index([serviceId])
@@ -339,16 +371,16 @@ model ServicePort {
 // ============================================
 
 model ServiceLink {
-  id              String   @id @default(cuid())
-  sourceServiceId String   // The service that receives injected env vars
-  targetServiceId String   // The service being connected to (e.g. postgres)
-  alias           String?  // Optional alias for variable interpolation
+  id              String  @id @default(cuid())
+  sourceServiceId String // The service that receives injected env vars
+  targetServiceId String // The service being connected to (e.g. postgres)
+  alias           String? // Optional alias for variable interpolation
 
-  sourceService   Service  @relation("ServiceLinksFrom", fields: [sourceServiceId], references: [id], onDelete: Cascade)
-  targetService   Service  @relation("ServiceLinksTo", fields: [targetServiceId], references: [id], onDelete: Cascade)
+  sourceService Service @relation("ServiceLinksFrom", fields: [sourceServiceId], references: [id], onDelete: Cascade)
+  targetService Service @relation("ServiceLinksTo", fields: [targetServiceId], references: [id], onDelete: Cascade)
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([sourceServiceId, targetServiceId])
   @@index([sourceServiceId])
@@ -360,49 +392,49 @@ model ServiceLink {
 // ============================================
 
 model Domain {
-  id          String       @id @default(cuid())
-  hostname    String       @unique
-  verified    Boolean      @default(false)
-  domainType  DomainType   @default(WEB2)
+  id         String     @id @default(cuid())
+  hostname   String     @unique
+  verified   Boolean    @default(false)
+  domainType DomainType @default(WEB2)
 
   // Org-level ownership (domain can exist at org level without a site)
-  organizationId String?  @map("organization_id")
+  organizationId String?       @map("organization_id")
   organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
-  siteId      String?
-  site        Site?        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId String?
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
-  primarySite Site[]       @relation("PrimaryDomain")
+  primarySite Site[] @relation("PrimaryDomain")
 
   // DNS Verification
-  txtVerificationToken    String?   // Token to verify via TXT record
-  txtVerificationStatus   VerificationStatus @default(PENDING)
-  dnsVerifiedAt           DateTime?
+  txtVerificationToken  String? // Token to verify via TXT record
+  txtVerificationStatus VerificationStatus @default(PENDING)
+  dnsVerifiedAt         DateTime?
 
   // DNS Records for verification
-  expectedCname           String?   // Expected CNAME value
-  expectedARecord         String?   // Expected A record value
+  expectedCname   String? // Expected CNAME value
+  expectedARecord String? // Expected A record value
 
   // SSL Certificate
-  sslStatus               SslStatus @default(NONE)
-  sslCertificateId        String?   // Let's Encrypt cert ID
-  sslIssuedAt             DateTime?
-  sslExpiresAt            DateTime?
-  sslAutoRenew            Boolean   @default(true)
+  sslStatus        SslStatus @default(NONE)
+  sslCertificateId String? // Let's Encrypt cert ID
+  sslIssuedAt      DateTime?
+  sslExpiresAt     DateTime?
+  sslAutoRenew     Boolean   @default(true)
 
   // Web3 Domain Integration
-  arnsName                String?   // ArNS name for Arweave
-  arnsTransactionId       String?   // Arweave transaction ID
-  ensName                 String?   // ENS domain name
-  ensContentHash          String?   // ENS content hash
-  ipnsHash                String?   // IPNS hash
+  arnsName          String? // ArNS name for Arweave
+  arnsTransactionId String? // Arweave transaction ID
+  ensName           String? // ENS domain name
+  ensContentHash    String? // ENS content hash
+  ipnsHash          String? // IPNS hash
 
   // DNS Propagation
-  lastDnsCheck            DateTime?
-  dnsCheckAttempts        Int       @default(0)
+  lastDnsCheck     DateTime?
+  dnsCheckAttempts Int       @default(0)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([siteId])
   @@index([organizationId])
@@ -413,10 +445,10 @@ model Domain {
 }
 
 enum DomainType {
-  WEB2        // Traditional domain (example.com)
-  ARNS        // Arweave Name System
-  ENS         // Ethereum Name System
-  IPNS        // InterPlanetary Name System
+  WEB2 // Traditional domain (example.com)
+  ARNS // Arweave Name System
+  ENS // Ethereum Name System
+  IPNS // InterPlanetary Name System
 }
 
 enum VerificationStatus {
@@ -434,11 +466,11 @@ enum SslStatus {
 }
 
 model Zone {
-  id        String   @id @default(cuid())
-  name      String
+  id   String @id @default(cuid())
+  name String
 
-  siteId    String
-  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -451,27 +483,27 @@ model Zone {
 // ============================================
 
 model Pin {
-  id           String     @id @default(cuid())
-  cid          String     @unique
-  name         String?
-  size         Int?
+  id   String  @id @default(cuid())
+  cid  String  @unique
+  name String?
+  size Int?
 
   deploymentId String     @unique
   deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
 
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([cid])
 }
 
 model IPNSRecord {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  hash      String
+  id   String @id @default(cuid())
+  name String @unique
+  hash String
 
-  siteId    String
-  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -485,27 +517,27 @@ model IPNSRecord {
 // ============================================
 
 model Agent {
-  id          String       @id @default(cuid())
-  name        String
-  slug        String       @unique
-  description String?
-  avatar      String?
+  id           String      @id @default(cuid())
+  name         String
+  slug         String      @unique
+  description  String?
+  avatar       String?
   systemPrompt String?
-  model       String       @default("gpt-4")
-  status      AgentStatus  @default(ACTIVE)
+  model        String      @default("gpt-4")
+  status       AgentStatus @default(ACTIVE)
 
   // Agent can be tied to a deployed function or external service
-  functionId  String?
-  afFunction  AFFunction?  @relation(fields: [functionId], references: [id], onDelete: SetNull)
+  functionId String?
+  afFunction AFFunction? @relation(fields: [functionId], references: [id], onDelete: SetNull)
 
-  userId      String
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  chats       Chat[]
-  messages    Message[]
+  chats    Chat[]
+  messages Message[]
 
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([slug])
@@ -521,25 +553,25 @@ enum AgentStatus {
 }
 
 model Chat {
-  id          String      @id @default(cuid())
-  title       String?
+  id    String  @id @default(cuid())
+  title String?
 
-  userId      String
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  agentId     String
-  agent       Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agentId String
+  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   messages    Message[]
   attachments Attachment[]
 
   // Chat metadata
-  metadata    Json?
+  metadata Json?
 
   lastMessageAt DateTime?
 
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([agentId])
@@ -547,28 +579,28 @@ model Chat {
 }
 
 model Message {
-  id          String        @id @default(cuid())
-  content     String
-  role        MessageRole
+  id      String      @id @default(cuid())
+  content String
+  role    MessageRole
 
-  chatId      String
-  chat        Chat          @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
   // Agent that sent the message (if role is AGENT)
-  agentId     String?
-  agent       Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentId String?
+  agent   Agent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
   // User that sent the message (if role is USER)
-  userId      String?
-  user        User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   attachments Attachment[]
 
   // Message metadata (tokens used, model, etc.)
-  metadata    Json?
+  metadata Json?
 
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([chatId])
   @@index([agentId])
@@ -584,7 +616,7 @@ enum MessageRole {
 }
 
 model Attachment {
-  id          String   @id @default(cuid())
+  id          String @id @default(cuid())
   filename    String
   contentType String
   size        Int
@@ -594,14 +626,14 @@ model Attachment {
   cid         String?
   storageType StorageType?
 
-  chatId      String?
-  chat        Chat?    @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId String?
+  chat   Chat?   @relation(fields: [chatId], references: [id], onDelete: Cascade)
 
-  messageId   String?
-  message     Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId String?
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([chatId])
   @@index([messageId])
@@ -613,28 +645,28 @@ model Attachment {
 // ============================================
 
 model PinnedContent {
-  id          String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // IPFS Content Identifier (immutable)
-  cid         String
+  cid String
 
   // Size in bytes (immutable for this CID)
-  sizeBytes   BigInt
+  sizeBytes BigInt
 
   // Pin tracking
-  pinnedAt    DateTime  @default(now())
-  unpinnedAt  DateTime? // Null if still pinned
+  pinnedAt   DateTime  @default(now())
+  unpinnedAt DateTime? // Null if still pinned
 
   // Optional metadata
-  filename    String?
-  mimeType    String?
-  metadata    Json?
+  filename String?
+  mimeType String?
+  metadata Json?
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@index([cid])
@@ -644,21 +676,21 @@ model PinnedContent {
 }
 
 model StorageSnapshot {
-  id          String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Snapshot date (daily)
-  date        DateTime
+  date DateTime
 
   // Total storage at this date
-  totalBytes  BigInt
+  totalBytes BigInt
 
   // Pin count
-  pinCount    Int
+  pinCount Int
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([userId, date])
   @@index([userId])
@@ -670,23 +702,23 @@ model StorageSnapshot {
 // ============================================
 
 model TelemetryIngestion {
-  id              String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  projectId       String
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   // Ingestion stats per period
-  bytesIngested   BigInt   @default(0)
-  spansCount      Int      @default(0)
-  metricsCount    Int      @default(0)
-  logsCount       Int      @default(0)
+  bytesIngested BigInt @default(0)
+  spansCount    Int    @default(0)
+  metricsCount  Int    @default(0)
+  logsCount     Int    @default(0)
 
   // Billing period (hourly granularity)
-  periodStart     DateTime
-  periodEnd       DateTime
+  periodStart DateTime
+  periodEnd   DateTime
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([projectId, periodStart, periodEnd])
   @@index([projectId])
@@ -694,29 +726,29 @@ model TelemetryIngestion {
 }
 
 model ObservabilitySettings {
-  id              String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  projectId       String   @unique
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   // Feature toggles
-  tracesEnabled   Boolean  @default(true)
-  metricsEnabled  Boolean  @default(true)
-  logsEnabled     Boolean  @default(true)
+  tracesEnabled  Boolean @default(true)
+  metricsEnabled Boolean @default(true)
+  logsEnabled    Boolean @default(true)
 
   // Retention (days)
-  traceRetention  Int      @default(7)
-  metricRetention Int      @default(30)
-  logRetention    Int      @default(7)
+  traceRetention  Int @default(7)
+  metricRetention Int @default(30)
+  logRetention    Int @default(7)
 
   // Sampling rate (1.0 = 100%)
-  sampleRate      Float    @default(1.0)
+  sampleRate Float @default(1.0)
 
   // Rate limits (null = unlimited)
   maxBytesPerHour BigInt?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([projectId])
 }
@@ -731,30 +763,30 @@ model ObservabilitySettings {
 // JSONL stream. Schema-free `payload` — each subsystem writes its own keys
 // with the privacy allowlist enforced in the `audit()` helper, never here.
 model AuditEvent {
-  id           String   @id @default(cuid())
-  timestamp    DateTime @default(now())
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
 
   // Trace correlation — groups events from one user action across services.
   // Populated by the HTTP middleware that mints a cuid per request and
   // forwards it via `x-af-trace-id`. Background jobs mint their own.
-  traceId      String
+  traceId String
 
   // Origin service + logical grouping.
-  source       String   // "auth" | "cloud-api" | "web" | "monitor" | "cron"
-  category     String   // "billing" | "deployment" | "health" | "user" | "auth" | "provider" | "ai-proxy" | "cron" | "system"
-  action       String   // verb-first, dotted: "deployment.requested", "billing.hourly_tick", "lease.closed"
-  status       String   // "ok" | "warn" | "error"
+  source   String // "auth" | "cloud-api" | "web" | "monitor" | "cron"
+  category String // "billing" | "deployment" | "health" | "user" | "auth" | "provider" | "ai-proxy" | "cron" | "system"
+  action   String // verb-first, dotted: "deployment.requested", "billing.hourly_tick", "lease.closed"
+  status   String // "ok" | "warn" | "error"
 
   // Identity dimensions (all nullable — system events have none of these).
   userId       String?
   orgId        String?
   projectId    String?
   serviceId    String?
-  deploymentId String?                                    // Akash, Phala, Site — generic key
+  deploymentId String? // Akash, Phala, Site — generic key
 
   // Timing + payload.
-  durationMs   Int?
-  payload      Json                                       // subsystem-specific; privacy-allowlisted upstream
+  durationMs Int?
+  payload    Json // subsystem-specific; privacy-allowlisted upstream
 
   // Error dimensions (populated when status = "error").
   errorCode    String?
@@ -775,25 +807,25 @@ model AuditEvent {
 // ============================================
 
 model UsageBuffer {
-  id        String   @id @default(cuid())
-  userId    String   @unique
-  
-  bandwidth Int      @default(0)
-  compute   Int      @default(0)
-  requests  Int      @default(0)
-  
+  id     String @id @default(cuid())
+  userId String @unique
+
+  bandwidth Int @default(0)
+  compute   Int @default(0)
+  requests  Int @default(0)
+
   updatedAt DateTime @updatedAt
-  
+
   @@index([userId])
 }
 
 model UsageMetadata {
   id        String   @id @default(cuid())
   userId    String
-  type      String   // BANDWIDTH, COMPUTE, REQUESTS
+  type      String // BANDWIDTH, COMPUTE, REQUESTS
   metadata  Json
   createdAt DateTime @default(now())
-  
+
   @@index([userId])
   @@index([createdAt])
 }
@@ -803,76 +835,76 @@ model UsageMetadata {
 // ============================================
 
 model Customer {
-  id               String   @id @default(cuid())
-  userId           String   @unique
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String  @id @default(cuid())
+  userId           String  @unique
+  user             User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   email            String?
   name             String?
-  stripeCustomerId String?  @unique
-  
+  stripeCustomerId String? @unique
+
   defaultPaymentMethodId String?
   defaultPaymentMethod   PaymentMethod? @relation("DefaultPaymentMethod", fields: [defaultPaymentMethodId], references: [id])
-  
-  paymentMethods   PaymentMethod[] @relation("CustomerPaymentMethods")
-  subscriptions    Subscription[]
-  invoices         Invoice[]
-  payments         Payment[]
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
+
+  paymentMethods PaymentMethod[] @relation("CustomerPaymentMethods")
+  subscriptions  Subscription[]
+  invoices       Invoice[]
+  payments       Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([stripeCustomerId])
 }
 
 model PaymentMethod {
-  id                    String    @id @default(cuid())
-  customerId            String
-  customer              Customer  @relation("CustomerPaymentMethods", fields: [customerId], references: [id], onDelete: Cascade)
-  
-  type                  String    // CARD, CRYPTO
-  provider              String    @default("stripe") // stripe, stax, relay
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation("CustomerPaymentMethods", fields: [customerId], references: [id], onDelete: Cascade)
+
+  type                  String // CARD, CRYPTO
+  provider              String  @default("stripe") // stripe, stax, relay
   cardBrand             String?
   cardLast4             String?
   cardExpMonth          Int?
   cardExpYear           Int?
-  stripePaymentMethodId String?   @unique
+  stripePaymentMethodId String? @unique
   walletAddress         String?
   blockchain            String?
-  isDefault             Boolean   @default(false)
-  isActive              Boolean   @default(true)
-  
-  defaultForCustomers   Customer[] @relation("DefaultPaymentMethod")
-  payments              Payment[]
-  
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  
+  isDefault             Boolean @default(false)
+  isActive              Boolean @default(true)
+
+  defaultForCustomers Customer[] @relation("DefaultPaymentMethod")
+  payments            Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([customerId])
 }
 
 model SubscriptionPlan {
-  id               String   @id @default(cuid())
-  name             String   @unique // FREE, STARTER, PRO, ENTERPRISE
-  basePricePerSeat Int      // in cents
-  usageMarkup      Float    @default(0) // percentage as decimal
-  features         String?  // JSON array
+  id               String  @id @default(cuid())
+  name             String  @unique // FREE, STARTER, PRO, ENTERPRISE
+  basePricePerSeat Int // in cents
+  usageMarkup      Float   @default(0) // percentage as decimal
+  features         String? // JSON array
   stripePriceId    String?
-  
-  subscriptions    Subscription[]
-  
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Subscription {
-  id                   String    @id @default(cuid())
-  customerId           String
-  customer             Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  
-  planId               String
-  plan                 SubscriptionPlan @relation(fields: [planId], references: [id])
-  
-  status               String    // ACTIVE, CANCELED, PAST_DUE, UNPAID, TRIALING
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  planId String
+  plan   SubscriptionPlan @relation(fields: [planId], references: [id])
+
+  status               String // ACTIVE, CANCELED, PAST_DUE, UNPAID, TRIALING
   seats                Int       @default(1)
   stripeSubscriptionId String?   @unique
   currentPeriodStart   DateTime
@@ -880,157 +912,157 @@ model Subscription {
   cancelAt             DateTime?
   canceledAt           DateTime?
   trialEnd             DateTime?
-  
-  invoices             Invoice[]
-  usageRecords         UsageRecord[]
-  
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  
+
+  invoices     Invoice[]
+  usageRecords UsageRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([customerId])
   @@index([status])
 }
 
 model Invoice {
-  id               String    @id @default(cuid())
-  customerId       String
-  customer         Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  
-  subscriptionId   String?
-  subscription     Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  
-  invoiceNumber    String    @unique
-  status           String    // DRAFT, OPEN, PAID, VOID, UNCOLLECTIBLE
-  subtotal         Int       // in cents
-  tax              Int       @default(0)
-  total            Int
-  amountPaid       Int       @default(0)
-  amountDue        Int
-  currency         String    @default("usd")
-  periodStart      DateTime?
-  periodEnd        DateTime?
-  dueDate          DateTime?
-  paidAt           DateTime?
-  pdfUrl           String?
-  stripeInvoiceId  String?   @unique
-  
-  lineItems        InvoiceLineItem[]
-  payments         Payment[]
-  
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  invoiceNumber   String    @unique
+  status          String // DRAFT, OPEN, PAID, VOID, UNCOLLECTIBLE
+  subtotal        Int // in cents
+  tax             Int       @default(0)
+  total           Int
+  amountPaid      Int       @default(0)
+  amountDue       Int
+  currency        String    @default("usd")
+  periodStart     DateTime?
+  periodEnd       DateTime?
+  dueDate         DateTime?
+  paidAt          DateTime?
+  pdfUrl          String?
+  stripeInvoiceId String?   @unique
+
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([customerId])
   @@index([status])
 }
 
 model InvoiceLineItem {
-  id          String   @id @default(cuid())
-  invoiceId   String
-  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
   description String
   quantity    Float
-  unitPrice   Int      // in cents
-  amount      Int      // in cents
+  unitPrice   Int // in cents
+  amount      Int // in cents
   metadata    Json?
-  
-  createdAt   DateTime @default(now())
-  
+
+  createdAt DateTime @default(now())
+
   @@index([invoiceId])
 }
 
 model Payment {
-  id                    String    @id @default(cuid())
-  customerId            String
-  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  
-  invoiceId             String?
-  invoice               Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  
-  paymentMethodId       String?
-  paymentMethod         PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  
-  amount                Int       // in cents
-  currency              String    @default("usd")
-  status                String    // PENDING, SUCCEEDED, FAILED, REFUNDED
-  provider              String    @default("stripe") // stripe, stax, relay
-  stripePaymentIntentId String?   @unique
-  txHash                String?   @unique
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  paymentMethodId String?
+  paymentMethod   PaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+
+  amount                Int // in cents
+  currency              String  @default("usd")
+  status                String // PENDING, SUCCEEDED, FAILED, REFUNDED
+  provider              String  @default("stripe") // stripe, stax, relay
+  stripePaymentIntentId String? @unique
+  txHash                String? @unique
   blockchain            String?
   fromAddress           String?
   toAddress             String?
   failureReason         String?
   failureCode           String?
   failureMessage        String?
-  
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([customerId])
   @@index([invoiceId])
 }
 
 model BillingSettings {
-  id              String   @id @default(cuid())
-  userId          String   @unique
-  
+  id     String @id @default(cuid())
+  userId String @unique
+
   // Feature toggles
-  autoPayEnabled  Boolean  @default(true)
-  
+  autoPayEnabled Boolean @default(true)
+
   // Pricing settings (in cents)
-  bandwidthPerGBCents   Int? // cents per GB
-  computePerHourCents   Int? // cents per compute hour
-  requestsPer1000Cents  Int? // cents per 1000 requests
-  storagePerGBCents     Int? // cents per GB per month
-  telemetryPerGBCents   Int? // cents per GB telemetry
-  pricePerSeatCents     Int? // cents per seat
-  usageMarkupPercent    Float? // percentage markup for usage
-  
+  bandwidthPerGBCents  Int? // cents per GB
+  computePerHourCents  Int? // cents per compute hour
+  requestsPer1000Cents Int? // cents per 1000 requests
+  storagePerGBCents    Int? // cents per GB per month
+  telemetryPerGBCents  Int? // cents per GB telemetry
+  pricePerSeatCents    Int? // cents per seat
+  usageMarkupPercent   Float? // percentage markup for usage
+
   // Tax settings
-  taxId           String?
-  taxCountry      String?
-  taxRatePercent  Float?   // tax rate percentage
-  
+  taxId          String?
+  taxCountry     String?
+  taxRatePercent Float? // tax rate percentage
+
   // Invoice settings
-  invoiceDueDays  Int?     @default(30)
-  
+  invoiceDueDays Int? @default(30)
+
   // Billing address
-  billingEmail    String?
-  billingAddress  String?
-  billingCity     String?
-  billingState    String?
-  billingZip      String?
-  billingCountry  String?
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  
+  billingEmail   String?
+  billingAddress String?
+  billingCity    String?
+  billingState   String?
+  billingZip     String?
+  billingCountry String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId])
 }
 
 model UsageRecord {
-  id             String   @id @default(cuid())
+  id             String        @id @default(cuid())
   customerId     String
   subscriptionId String?
   subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
-  
-  type           String   // BANDWIDTH, COMPUTE, REQUESTS, STORAGE
-  metricType     String   @default("") // storage, bandwidth, compute, requests (alias for type)
-  resourceType   String?  // AGGREGATED, etc.
-  resourceId     String?  // ID of the resource being tracked
-  quantity       Float
-  unit           String?  // GB, HOURS, REQUESTS
-  unitPrice      Int?     // in cents
-  amount         Int?     // in cents
-  periodStart    DateTime
-  periodEnd      DateTime
-  recordedAt     DateTime @default(now())
-  timestamp      DateTime @default(now())
-  metadata       Json?
-  
-  createdAt      DateTime @default(now())
-  
+
+  type         String // BANDWIDTH, COMPUTE, REQUESTS, STORAGE
+  metricType   String   @default("") // storage, bandwidth, compute, requests (alias for type)
+  resourceType String? // AGGREGATED, etc.
+  resourceId   String? // ID of the resource being tracked
+  quantity     Float
+  unit         String? // GB, HOURS, REQUESTS
+  unitPrice    Int? // in cents
+  amount       Int? // in cents
+  periodStart  DateTime
+  periodEnd    DateTime
+  recordedAt   DateTime @default(now())
+  timestamp    DateTime @default(now())
+  metadata     Json?
+
+  createdAt DateTime @default(now())
+
   @@index([customerId, periodStart])
   @@index([type])
   @@index([metricType])
@@ -1042,53 +1074,53 @@ model UsageRecord {
 // ============================================
 
 model AkashDeployment {
-  id              String              @id @default(cuid())
+  id String @id @default(cuid())
 
   // Akash identifiers
-  owner           String              // Akash wallet address (owner)
-  dseq            BigInt              // Deployment sequence number
-  gseq            Int                 @default(1) // Group sequence
-  oseq            Int                 @default(1) // Order sequence
-  provider        String?             // Provider address once lease created
+  owner    String // Akash wallet address (owner)
+  dseq     BigInt // Deployment sequence number
+  gseq     Int     @default(1) // Group sequence
+  oseq     Int     @default(1) // Order sequence
+  provider String? // Provider address once lease created
 
   // Status tracking
-  status          AkashDeploymentStatus @default(CREATING)
+  status AkashDeploymentStatus @default(CREATING)
 
   // Service endpoints (populated after manifest sent)
-  serviceUrls     Json?               // { serviceName: ["url1", "url2"] }
+  serviceUrls Json? // { serviceName: ["url1", "url2"] }
 
   // SDL content used for deployment
-  sdlContent      String              @db.Text
+  sdlContent String @db.Text
 
   // Link to the canonical Service registry (can deploy any service type)
-  serviceId       String
-  service         Service             @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   // Optional direct links to specific resource types (for convenience queries)
-  afFunctionId    String?
-  afFunction      AFFunction?         @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
-  
-  siteId          String?
-  site            Site?               @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  afFunctionId String?
+  afFunction   AFFunction? @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
+
+  siteId String?
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
   // Cost tracking (on-chain)
-  depositUakt     BigInt?             // Deposit amount in uakt
-  pricePerBlock   String?             // Price from accepted bid
+  depositUakt   BigInt? // Deposit amount in uakt
+  pricePerBlock String? // Price from accepted bid
 
   // Billing (platform escrow — mirrors on-chain escrow in USD)
-  escrow          DeploymentEscrow?   // Platform-level escrow for this deployment
-  savedSdl        String?             @db.Text // SDL saved on SUSPEND for re-deploy on resume
+  escrow   DeploymentEscrow? // Platform-level escrow for this deployment
+  savedSdl String?           @db.Text // SDL saved on SUSPEND for re-deploy on resume
 
   // GPU model resolved from provider after lease creation (e.g. "rtx4090", "a100")
-  gpuModel        String?
+  gpuModel String?
 
   // Error info
-  errorMessage    String?
+  errorMessage String?
 
   // QStash background job retry tracking
-  retryCount      Int                 @default(0)
-  parentDeploymentId String?          // Links retries to the original deployment
-  qstashMessageId String?             // For cancellation of pending QStash messages
+  retryCount         Int     @default(0)
+  parentDeploymentId String? // Links retries to the original deployment
+  qstashMessageId    String? // For cancellation of pending QStash messages
 
   // Phase 43 — health-aware auto-failover.
   // failoverParentId chains deployments that were spawned because the previous
@@ -1096,23 +1128,23 @@ model AkashDeployment {
   // links queue-step retries within a single deploy attempt).
   // excludedProviders accumulates per-chain bad providers so successive
   // failovers don't pick the same dead host.
-  failoverParentId    String?         @map("failover_parent_id")
-  excludedProviders   String[]        @default([]) @map("excluded_providers")
-  failoverReason      String?         @map("failover_reason")
+  failoverParentId  String?  @map("failover_parent_id")
+  excludedProviders String[] @default([]) @map("excluded_providers")
+  failoverReason    String?  @map("failover_reason")
 
   // Cost display (computed at lease creation, includes margin)
-  dailyRateCentsRaw     Int?          // Raw provider cost per day in cents
-  dailyRateCentsCharged Int?          // Cost after margin per day in cents
+  dailyRateCentsRaw     Int? // Raw provider cost per day in cents
+  dailyRateCentsCharged Int? // Cost after margin per day in cents
 
   // Deployment policy (budget, GPU, runtime constraints)
-  policyId        String?             @unique @map("policy_id")
-  policy          DeploymentPolicy?   @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  policyId String?           @unique @map("policy_id")
+  policy   DeploymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
 
   // Timestamps
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  deployedAt      DateTime?           // When services became available
-  closedAt        DateTime?           // When deployment was closed
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deployedAt DateTime? // When services became available
+  closedAt   DateTime? // When deployment was closed
 
   @@unique([owner, dseq])
   @@index([serviceId])
@@ -1124,18 +1156,18 @@ model AkashDeployment {
 }
 
 enum AkashDeploymentStatus {
-  CREATING           // Creating deployment on chain
-  WAITING_BIDS       // Waiting for provider bids
-  SELECTING_BID      // Selecting provider
-  CREATING_LEASE     // Creating lease with provider
-  SENDING_MANIFEST   // Sending manifest to provider
-  DEPLOYING          // Provider deploying containers
-  ACTIVE             // Deployment running
-  FAILED             // Deployment failed
-  CLOSED             // Deployment closed (permanent)
-  SUSPENDED          // Paused due to low balance (will auto-resume on topup)
+  CREATING // Creating deployment on chain
+  WAITING_BIDS // Waiting for provider bids
+  SELECTING_BID // Selecting provider
+  CREATING_LEASE // Creating lease with provider
+  SENDING_MANIFEST // Sending manifest to provider
+  DEPLOYING // Provider deploying containers
+  ACTIVE // Deployment running
+  FAILED // Deployment failed
+  CLOSED // Deployment closed (permanent)
+  SUSPENDED // Paused due to low balance (will auto-resume on topup)
   PERMANENTLY_FAILED // Failed after all retries exhausted
-  CLOSE_FAILED       // Local close attempt failed on-chain (RPC down, wallet empty, etc.) — needs operator/sweeper retry
+  CLOSE_FAILED // Local close attempt failed on-chain (RPC down, wallet empty, etc.) — needs operator/sweeper retry
 }
 
 // ============================================
@@ -1202,28 +1234,28 @@ model OrganizationConcurrencyCounter {
 // charge guard: even a buggy caller cannot insert two rows for the same
 // settlement window and end up double-billing the user.
 model PolicySettlementLedger {
-  id              String                  @id @default(cuid())
+  id String @id @default(cuid())
 
-  provider        SettlementProvider
-  kind            SettlementKind
-  deploymentRef   String                  @map("deployment_ref")
+  provider      SettlementProvider
+  kind          SettlementKind
+  deploymentRef String             @map("deployment_ref")
 
-  idempotencyKey  String                  @unique @map("idempotency_key")
+  idempotencyKey String @unique @map("idempotency_key")
 
-  orgBillingId    String                  @map("org_billing_id")
-  amountCents     Int                     @map("amount_cents")
-  settledTo       DateTime                @map("settled_to")
+  orgBillingId String   @map("org_billing_id")
+  amountCents  Int      @map("amount_cents")
+  settledTo    DateTime @map("settled_to")
 
-  status          PolicySettlementStatus  @default(PENDING)
-  attemptCount    Int                     @default(0) @map("attempt_count")
-  lastError       String?                 @map("last_error")
-  committedAt     DateTime?               @map("committed_at")
+  status       PolicySettlementStatus @default(PENDING)
+  attemptCount Int                    @default(0) @map("attempt_count")
+  lastError    String?                @map("last_error")
+  committedAt  DateTime?              @map("committed_at")
 
-  policyId        String?                 @map("policy_id")
-  metadata        Json?
+  policyId String? @map("policy_id")
+  metadata Json?
 
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([deploymentRef])
@@ -1248,38 +1280,38 @@ enum PolicySettlementStatus {
 
 enum EscrowStatus {
   PENDING_DEPOSIT // Write-ahead: row created BEFORE the deposit RPC.
-                  // Reconciler retries / fails-out stuck rows so we never end up
-                  // in a state where the wallet was debited but no row exists
-                  // (or vice-versa: the row was created but the deposit failed).
-  ACTIVE          // Funds locked, daily consumption active
-  DEPLETED        // Escrow consumed, needs top-up or auto-top-up from wallet
-  REFUNDING       // Write-ahead for refund: row marked BEFORE the
-                  // refund RPC so we can reconcile if the credit RPC succeeded
-                  // but our local update never landed.
-  REFUNDED        // Deployment closed, remaining refunded to wallet
-  PAUSED          // Deployment paused due to low org balance
-  FAILED          // Terminal: write-ahead deposit could not be
-                  // completed (insufficient balance, persistent RPC failure).
+  // Reconciler retries / fails-out stuck rows so we never end up
+  // in a state where the wallet was debited but no row exists
+  // (or vice-versa: the row was created but the deposit failed).
+  ACTIVE // Funds locked, daily consumption active
+  DEPLETED // Escrow consumed, needs top-up or auto-top-up from wallet
+  REFUNDING // Write-ahead for refund: row marked BEFORE the
+  // refund RPC so we can reconcile if the credit RPC succeeded
+  // but our local update never landed.
+  REFUNDED // Deployment closed, remaining refunded to wallet
+  PAUSED // Deployment paused due to low org balance
+  FAILED // Terminal: write-ahead deposit could not be
+  // completed (insufficient balance, persistent RPC failure).
 }
 
 model DeploymentEscrow {
-  id                String        @id @default(cuid())
-  akashDeploymentId String        @unique @map("akash_deployment_id")
-  orgBillingId      String        @map("org_billing_id")    // OrganizationBilling.id from auth service
-  organizationId    String        @map("organization_id")
+  id                String @id @default(cuid())
+  akashDeploymentId String @unique @map("akash_deployment_id")
+  orgBillingId      String @map("org_billing_id") // OrganizationBilling.id from auth service
+  organizationId    String @map("organization_id")
 
-  depositCents      Int           @map("deposit_cents")      // Initial escrow amount (USD cents)
-  consumedCents     Int           @default(0) @map("consumed_cents")  // Consumed so far
-  dailyRateCents    Int           @map("daily_rate_cents")    // Provider cost/day + margin (USD cents)
-  refundedCents     Int           @default(0) @map("refunded_cents")  // Refunded on close
-  marginRate        Float         @map("margin_rate")         // Plan markup (0.25 or 0.20)
+  depositCents   Int   @map("deposit_cents") // Initial escrow amount (USD cents)
+  consumedCents  Int   @default(0) @map("consumed_cents") // Consumed so far
+  dailyRateCents Int   @map("daily_rate_cents") // Provider cost/day + margin (USD cents)
+  refundedCents  Int   @default(0) @map("refunded_cents") // Refunded on close
+  marginRate     Float @map("margin_rate") // Plan markup (0.25 or 0.20)
 
-  status            EscrowStatus  @default(ACTIVE)
-  lastBilledAt      DateTime?     @map("last_billed_at")
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  status       EscrowStatus @default(ACTIVE)
+  lastBilledAt DateTime?    @map("last_billed_at")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
-  akashDeployment   AkashDeployment @relation(fields: [akashDeploymentId], references: [id], onDelete: Cascade)
+  akashDeployment AkashDeployment @relation(fields: [akashDeploymentId], references: [id], onDelete: Cascade)
 
   @@index([orgBillingId])
   @@index([organizationId])
@@ -1292,66 +1324,66 @@ model DeploymentEscrow {
 // ============================================
 
 enum PhalaDeploymentStatus {
-  CREATING           // CVM being created
-  STARTING           // CVM starting up
-  ACTIVE             // CVM running
-  FAILED             // Deployment failed
-  STOPPED            // CVM stopped
-  DELETED            // CVM deleted
+  CREATING // CVM being created
+  STARTING // CVM starting up
+  ACTIVE // CVM running
+  FAILED // Deployment failed
+  STOPPED // CVM stopped
+  DELETED // CVM deleted
   PERMANENTLY_FAILED // Failed after all retries exhausted
 }
 
 model PhalaDeployment {
-  id              String                  @id @default(cuid())
+  id String @id @default(cuid())
 
   // Identity
-  appId           String                  // Phala CVM App ID (hex string from CLI)
-  name            String                  // Internal name (e.g. af-<slug>-<suffix>)
+  appId String // Phala CVM App ID (hex string from CLI)
+  name  String // Internal name (e.g. af-<slug>-<suffix>)
 
   // Status
-  status          PhalaDeploymentStatus   @default(CREATING)
-  errorMessage    String?
+  status       PhalaDeploymentStatus @default(CREATING)
+  errorMessage String?
 
   // Config (what we deployed)
-  composeContent  String                  @db.Text
-  envKeys         Json?                   // Array of env var keys only (never values)
-  cvmSize         String?                 @map("cvm_size") // tdx.small, tdx.medium, tdx.large, tdx.xlarge
-  gpuModel        String?                 // GPU model selected at deploy time (e.g. "h200", "h100", "b200")
+  composeContent String  @db.Text
+  envKeys        Json? // Array of env var keys only (never values)
+  cvmSize        String? @map("cvm_size") // tdx.small, tdx.medium, tdx.large, tdx.xlarge
+  gpuModel       String? // GPU model selected at deploy time (e.g. "h200", "h100", "b200")
 
   // Outputs
-  appUrl          String?
-  teepod          String?
+  appUrl String?
+  teepod String?
 
   // Billing (per-hour, no escrow — debited directly from wallet)
-  hourlyRateCents Int?                    @map("hourly_rate_cents")  // Provider rate + margin (USD cents)
-  marginRate      Float?                  @map("margin_rate")        // Plan markup applied
-  orgBillingId    String?                 @map("org_billing_id")     // OrganizationBilling.id
-  organizationId  String?                 @map("organization_id")
-  activeStartedAt DateTime?               @map("active_started_at") // When CVM became ACTIVE
-  lastBilledAt    DateTime?               @map("last_billed_at")    // Last time daily job billed this
-  totalBilledCents Int                    @default(0) @map("total_billed_cents")
+  hourlyRateCents  Int?      @map("hourly_rate_cents") // Provider rate + margin (USD cents)
+  marginRate       Float?    @map("margin_rate") // Plan markup applied
+  orgBillingId     String?   @map("org_billing_id") // OrganizationBilling.id
+  organizationId   String?   @map("organization_id")
+  activeStartedAt  DateTime? @map("active_started_at") // When CVM became ACTIVE
+  lastBilledAt     DateTime? @map("last_billed_at") // Last time daily job billed this
+  totalBilledCents Int       @default(0) @map("total_billed_cents")
 
   // QStash background job retry tracking
-  retryCount      Int                     @default(0)
-  parentDeploymentId String?              // Links retries to original deployment
-  qstashMessageId String?                 // For cancellation of pending QStash messages
+  retryCount         Int     @default(0)
+  parentDeploymentId String? // Links retries to original deployment
+  qstashMessageId    String? // For cancellation of pending QStash messages
 
   // Relations
-  serviceId       String
-  service         Service                 @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
-  siteId          String?
-  site            Site?                   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  siteId String?
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
-  afFunctionId    String?
-  afFunction      AFFunction?             @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
+  afFunctionId String?
+  afFunction   AFFunction? @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
 
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Deployment policy (budget, GPU, runtime constraints)
-  policyId        String?                 @unique @map("policy_id")
-  policy          DeploymentPolicy?       @relation(fields: [policyId], references: [id], onDelete: SetNull)
+  policyId String?           @unique @map("policy_id")
+  policy   DeploymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
 
   @@index([serviceId])
   @@index([siteId])
@@ -1379,38 +1411,38 @@ enum PolicyStopReason {
 }
 
 model DeploymentPolicy {
-  id                    String            @id @default(cuid())
+  id String @id @default(cuid())
 
   // GPU constraints
-  acceptableGpuModels   String[]          // ["h100", "h200", "a100"] — empty = any
-  gpuUnits              Int?              // number of GPU units requested
-  gpuVendor             String?           // "nvidia" | "amd" | null
+  acceptableGpuModels String[] // ["h100", "h200", "a100"] — empty = any
+  gpuUnits            Int? // number of GPU units requested
+  gpuVendor           String? // "nvidia" | "amd" | null
 
   // Budget constraints
-  maxBudgetUsd          Float?            @map("max_budget_usd")
-  maxMonthlyUsd         Float?            @map("max_monthly_usd")
+  maxBudgetUsd  Float? @map("max_budget_usd")
+  maxMonthlyUsd Float? @map("max_monthly_usd")
 
   // Duration constraints
-  runtimeMinutes        Int?              @map("runtime_minutes")
-  expiresAt             DateTime?         @map("expires_at")
+  runtimeMinutes Int?      @map("runtime_minutes")
+  expiresAt      DateTime? @map("expires_at")
 
   // Fund reservation for time-limited deployments (Phase 2).
   // When runtimeMinutes is set, reservedCents holds the full upfront cost
   // deducted from the org's available balance. Consumed as billing runs;
   // remainder refunded on stop/expiry.
-  reservedCents         Int               @default(0) @map("reserved_cents")
+  reservedCents Int @default(0) @map("reserved_cents")
 
   // Enforcement state
-  stopReason            PolicyStopReason? @map("stop_reason")
-  stoppedAt             DateTime?         @map("stopped_at")
-  totalSpentUsd         Float             @default(0) @map("total_spent_usd")
+  stopReason    PolicyStopReason? @map("stop_reason")
+  stoppedAt     DateTime?         @map("stopped_at")
+  totalSpentUsd Float             @default(0) @map("total_spent_usd")
 
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations (1:1 back-references)
-  akashDeployment       AkashDeployment?
-  phalaDeployment       PhalaDeployment?
+  akashDeployment AkashDeployment?
+  phalaDeployment PhalaDeployment?
 
   @@index([expiresAt])
   @@index([stopReason])
@@ -1427,39 +1459,39 @@ enum ComputeProviderType {
 }
 
 model ComputeProvider {
-  id                String              @id @default(cuid())
-  address           String              @unique
-  providerType      ComputeProviderType
-  name              String?
+  id           String              @id @default(cuid())
+  address      String              @unique
+  providerType ComputeProviderType
+  name         String?
 
   // Verification status (from test-deploy runs)
-  verified          Boolean             @default(false)
-  blocked           Boolean             @default(false)
-  blockReason       String?             @map("block_reason")
+  verified    Boolean @default(false)
+  blocked     Boolean @default(false)
+  blockReason String? @map("block_reason")
 
   // Live status (from hourly API scan)
-  isOnline          Boolean             @default(false)  @map("is_online")
-  lastSeenOnlineAt  DateTime?           @map("last_seen_online_at")
+  isOnline         Boolean   @default(false) @map("is_online")
+  lastSeenOnlineAt DateTime? @map("last_seen_online_at")
 
   // GPU inventory (from live API scan)
-  gpuModels         String[]            @map("gpu_models")
-  gpuAvailable      Int                 @default(0) @map("gpu_available")
-  gpuTotal          Int                 @default(0) @map("gpu_total")
+  gpuModels    String[] @map("gpu_models")
+  gpuAvailable Int      @default(0) @map("gpu_available")
+  gpuTotal     Int      @default(0) @map("gpu_total")
 
   // Pricing range (from actual deployment bids, in uact)
-  minPriceUact      BigInt?             @map("min_price_uact")
-  maxPriceUact      BigInt?             @map("max_price_uact")
+  minPriceUact BigInt? @map("min_price_uact")
+  maxPriceUact BigInt? @map("max_price_uact")
 
   // Raw provider attributes from chain/API
-  attributes        Json?
+  attributes Json?
 
   // Test metadata
-  lastTestedAt      DateTime?           @map("last_tested_at")
+  lastTestedAt DateTime? @map("last_tested_at")
 
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  templateResults   ProviderTemplateResult[]
+  templateResults ProviderTemplateResult[]
 
   @@index([providerType])
   @@index([verified])
@@ -1468,19 +1500,19 @@ model ComputeProvider {
 }
 
 model ProviderTemplateResult {
-  id              String          @id @default(cuid())
+  id String @id @default(cuid())
 
-  providerId      String          @map("provider_id")
-  provider        ComputeProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  providerId String          @map("provider_id")
+  provider   ComputeProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
-  templateId      String          @map("template_id")
+  templateId String @map("template_id")
 
-  passed          Boolean
-  priceUact       BigInt?         @map("price_uact")
-  durationMs      Int?            @map("duration_ms")
-  errorMessage    String?         @map("error_message")
+  passed       Boolean
+  priceUact    BigInt? @map("price_uact")
+  durationMs   Int?    @map("duration_ms")
+  errorMessage String? @map("error_message")
 
-  testedAt        DateTime        @default(now()) @map("tested_at")
+  testedAt DateTime @default(now()) @map("tested_at")
 
   @@unique([providerId, templateId])
   @@index([templateId])
@@ -1502,23 +1534,23 @@ model ProviderTemplateResult {
 // a single-row cache of measured Akash block geometry for cost reporting.
 
 model GpuBidObservation {
-  id            String   @id @default(cuid())
+  id String @id @default(cuid())
 
   /// Groups all bids collected during a single runGpuBidProbeCycle invocation.
-  probeRunId    String   @map("probe_run_id")
+  probeRunId String @map("probe_run_id")
 
   /// Lowercase canonical model id ("h100", "rtx4090", "a100"). Matches
   /// `compute_provider.gpu_models` element values.
-  gpuModel      String   @map("gpu_model")
-  vendor        String   // "nvidia" | "amd"
+  gpuModel String @map("gpu_model")
+  vendor   String // "nvidia" | "amd"
 
-  providerAddr  String   @map("provider_addr")
-  pricePerBlock BigInt   @map("price_per_block_uact")
+  providerAddr  String @map("provider_addr")
+  pricePerBlock BigInt @map("price_per_block_uact")
 
   /// dseq of the probe deployment. Useful for audit / debugging the close
   /// path on the "did this probe leak escrow?" question.
-  dseq          BigInt
-  observedAt    DateTime @default(now()) @map("observed_at")
+  dseq       BigInt
+  observedAt DateTime @default(now()) @map("observed_at")
 
   @@index([gpuModel, observedAt])
   @@index([probeRunId])
@@ -1527,18 +1559,18 @@ model GpuBidObservation {
 
 model GpuPriceSummary {
   /// Lowercase model id; primary key (one row per GPU model).
-  gpuModel             String   @id @map("gpu_model")
-  vendor               String
+  gpuModel String @id @map("gpu_model")
+  vendor   String
 
-  minPricePerBlock     BigInt   @map("min_price_per_block_uact")
-  p50PricePerBlock     BigInt   @map("p50_price_per_block_uact")
-  p90PricePerBlock     BigInt   @map("p90_price_per_block_uact")
-  maxPricePerBlock     BigInt   @map("max_price_per_block_uact")
+  minPricePerBlock BigInt @map("min_price_per_block_uact")
+  p50PricePerBlock BigInt @map("p50_price_per_block_uact")
+  p90PricePerBlock BigInt @map("p90_price_per_block_uact")
+  maxPricePerBlock BigInt @map("max_price_per_block_uact")
 
-  sampleCount          Int      @map("sample_count")
-  uniqueProviderCount  Int      @map("unique_provider_count")
-  windowDays           Int      @default(7) @map("window_days")
-  refreshedAt          DateTime @map("refreshed_at")
+  sampleCount         Int      @map("sample_count")
+  uniqueProviderCount Int      @map("unique_provider_count")
+  windowDays          Int      @default(7) @map("window_days")
+  refreshedAt         DateTime @map("refreshed_at")
 
   @@map("gpu_price_summary")
 }
@@ -1566,19 +1598,19 @@ enum FeedbackCategory {
 }
 
 model FeedbackReport {
-  id          String           @id @default(cuid())
+  id String @id @default(cuid())
 
-  userId      String           @map("user_id")
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   title       String
   category    FeedbackCategory
   location    String?
   description String
 
-  userAgent   String?          @map("user_agent")
+  userAgent String? @map("user_agent")
 
-  createdAt   DateTime         @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([userId])
   @@index([category])
@@ -1598,30 +1630,30 @@ model FeedbackReport {
 /// `bidsCollected` and `uniqueProviders` come from the bids inserted
 /// into `gpu_bid_observation` for this run.
 model GpuProbeRun {
-  id              String    @id @default(cuid())
+  id String @id @default(cuid())
 
   /// Mirrors `gpu_bid_observation.probe_run_id` so admin tools can join
   /// bids back to their cycle without an extra index.
-  probeRunId      String    @unique @map("probe_run_id")
+  probeRunId String @unique @map("probe_run_id")
 
-  startedAt       DateTime  @map("started_at")
-  completedAt     DateTime? @map("completed_at")
+  startedAt   DateTime  @map("started_at")
+  completedAt DateTime? @map("completed_at")
 
-  modelsProbed    Int       @default(0) @map("models_probed")
-  bidsCollected   Int       @default(0) @map("bids_collected")
-  uniqueProviders Int       @default(0) @map("unique_providers")
+  modelsProbed    Int @default(0) @map("models_probed")
+  bidsCollected   Int @default(0) @map("bids_collected")
+  uniqueProviders Int @default(0) @map("unique_providers")
 
   /// Wallet uact spend for the cycle (`balanceBefore.uact - balanceAfter.uact`,
   /// floored at 0 — wallet refills mid-cycle would otherwise produce a
   /// misleading negative).
-  costUact        BigInt    @default(0) @map("cost_uact")
+  costUact BigInt @default(0) @map("cost_uact")
   /// Same idea for uakt, included for symmetry with VerificationRun and
   /// for any pre-BME residue. Expected to stay 0 in production.
-  costUakt        BigInt    @default(0) @map("cost_uakt")
+  costUakt BigInt @default(0) @map("cost_uakt")
 
-  status          String    @default("running") // running | completed | failed | skipped
+  status String  @default("running") // running | completed | failed | skipped
   /// Slim error message — full traces go to logs via opsAlert.
-  error           String?
+  error  String?
 
   @@index([startedAt])
   @@index([status])
@@ -1629,28 +1661,104 @@ model GpuProbeRun {
 }
 
 model VerificationRun {
-  id              String    @id @default(cuid())
+  id String @id @default(cuid())
 
-  startedAt       DateTime  @map("started_at")
-  completedAt     DateTime? @map("completed_at")
+  startedAt   DateTime  @map("started_at")
+  completedAt DateTime? @map("completed_at")
 
   // Run results
-  templatesTotal  Int       @map("templates_total")
-  templatesPassed Int       @map("templates_passed")
-  deployments     Int       @default(0)
-  passed          Int       @default(0)
-  failed          Int       @default(0)
-  uniqueProviders Int       @default(0) @map("unique_providers")
+  templatesTotal  Int @map("templates_total")
+  templatesPassed Int @map("templates_passed")
+  deployments     Int @default(0)
+  passed          Int @default(0)
+  failed          Int @default(0)
+  uniqueProviders Int @default(0) @map("unique_providers")
 
   // Cost (balance delta)
-  costUakt        BigInt    @default(0) @map("cost_uakt")
-  costUact        BigInt    @default(0) @map("cost_uact")
+  costUakt BigInt @default(0) @map("cost_uakt")
+  costUact BigInt @default(0) @map("cost_uact")
 
   // Status
-  status          String    @default("running") // running | completed | failed
-  error           String?
+  status String  @default("running") // running | completed | failed
+  error  String?
 
   @@index([startedAt])
   @@index([status])
   @@map("verification_run")
+}
+
+// ============================================
+// GIT-SOURCE DEPLOYMENTS (provider-agnostic)
+// ============================================
+//
+// We model GitHub-specific concepts (App installations, Apps webhooks)
+// here, but Service.git* and BuildJob are intentionally provider-agnostic
+// — adding GitLab/Bitbucket later means a sibling install model and a
+// new value for Service.gitProvider, not a redesign.
+//
+// The compute provider that ultimately runs the built image is decoupled
+// from the source provider: it's chosen per-deploy via the existing
+// ComputeMode picker (Standard → Akash, Confidential → Phala), the same
+// way every other flavor (docker / server / function / template) picks.
+// No git-specific routing column lives on Service.
+
+enum BuildStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+model GithubInstallation {
+  id             String @id @default(cuid())
+  organizationId String
+  installationId BigInt @unique // GitHub's numeric install id
+  accountLogin   String
+  accountId      BigInt
+  accountType    String // 'User' | 'Organization'
+  targetType     String // 'all' | 'selected'
+
+  installedByUserId String?
+  selectedRepos     Json? // Last-known list of selected repo full_names (when targetType='selected')
+  suspendedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  installedBy  User?        @relation("GithubInstallationInstaller", fields: [installedByUserId], references: [id], onDelete: SetNull)
+  services     Service[]
+
+  @@index([organizationId])
+  @@index([accountLogin])
+  @@map("github_installation")
+}
+
+model BuildJob {
+  id                String      @id @default(cuid())
+  serviceId         String
+  commitSha         String
+  commitMessage     String?
+  branch            String
+  status            BuildStatus @default(PENDING)
+  k8sJobName        String? // Kubernetes Job name spawned for this build
+  imageTag          String? // Final image tag pushed to GHCR on success
+  detectedFramework String? // Nixpacks-detected framework (Next.js, Vite, …)
+  detectedPort      Int? // Port the built image listens on
+  logs              String?     @db.Text // Truncated builder logs (≤ 60 kB)
+  triggeredBy       String? // 'first-deploy' | 'webhook:push' | 'manual:<userId>'
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  errorMessage      String? // Truncated (≤ 4 kB)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@index([serviceId])
+  @@index([status])
+  @@index([commitSha])
+  @@map("build_job")
 }

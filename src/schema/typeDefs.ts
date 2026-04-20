@@ -2150,4 +2150,150 @@ export const typeDefs = /* GraphQL */ `
     deploymentLogs(deploymentId: ID!): DeploymentLog!
     deploymentStatus(deploymentId: ID!): DeploymentStatusUpdate!
   }
+
+  # ============================================
+  # GITHUB DEPLOY (Phase: GitHub deploy, 2026-04-20)
+  # ============================================
+
+  enum BuildStatus {
+    PENDING
+    RUNNING
+    SUCCEEDED
+    FAILED
+    CANCELED
+  }
+
+  type GithubInstallation {
+    id: ID!
+    organizationId: ID!
+    """GitHub-side numeric installation id (returned as String to avoid Int32 overflow)."""
+    installationId: String!
+    accountLogin: String!
+    accountId: String!
+    accountType: String!
+    targetType: String!
+    suspendedAt: Date
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  type GithubRepoSummary {
+    id: ID!
+    name: String!
+    fullName: String!
+    owner: String!
+    private: Boolean!
+    defaultBranch: String!
+    description: String
+    pushedAt: String
+    language: String
+    htmlUrl: String!
+  }
+
+  type GithubBranchSummary {
+    name: String!
+    sha: String!
+    protected: Boolean!
+  }
+
+  type BuildJob {
+    id: ID!
+    serviceId: ID!
+    commitSha: String!
+    commitMessage: String
+    branch: String!
+    status: BuildStatus!
+    k8sJobName: String
+    imageTag: String
+    detectedFramework: String
+    detectedPort: Int
+    logs: String
+    triggeredBy: String
+    startedAt: Date
+    finishedAt: Date
+    errorMessage: String
+    createdAt: Date!
+    updatedAt: Date!
+  }
+
+  input CreateGithubServiceEnvVarInput {
+    key: String!
+    value: String!
+    secret: Boolean
+  }
+
+  input CreateGithubServiceInput {
+    projectId: ID!
+    """Local id of the GithubInstallation row (NOT the GitHub-side installation_id)."""
+    installationId: ID!
+    owner: String!
+    repo: String!
+    """Defaults to the repo's default branch when omitted."""
+    branch: String
+    """Monorepo subdir (defaults to '.')."""
+    rootDirectory: String
+    buildCommand: String
+    startCommand: String
+    """Display name; defaults to repo name."""
+    name: String
+    envVars: [CreateGithubServiceEnvVarInput!]
+  }
+
+  """
+  Connect an existing (empty, github-flavor) Service to a GitHub repo. Used
+  by the in-panel Source-tab picker — the Service row is created first by
+  the catalog flow (createService), then connected here. This kicks off
+  the first BuildJob and spawns the K8s builder. The compute provider is
+  NOT chosen here — the build callback auto-deploys via the existing
+  Service compute config the same way the Deploy button would.
+  """
+  input ConnectGithubRepoInput {
+    serviceId: ID!
+    installationId: ID!
+    owner: String!
+    repo: String!
+    branch: String
+    rootDirectory: String
+    buildCommand: String
+    startCommand: String
+  }
+
+  extend type Query {
+    githubAppEnabled: Boolean!
+    githubAppSlug: String
+    githubInstallations(orgId: ID): [GithubInstallation!]!
+    githubInstallationRepos(installationId: ID!): [GithubRepoSummary!]!
+    githubRepoBranches(installationId: ID!, owner: String!, repo: String!): [GithubBranchSummary!]!
+  }
+
+  extend type Mutation {
+    syncGithubInstallation(installationId: String!, orgId: ID): GithubInstallation!
+    createGithubService(input: CreateGithubServiceInput!): Service!
+    connectGithubRepo(input: ConnectGithubRepoInput!): Service!
+    redeployGithubService(serviceId: ID!): BuildJob!
+  }
+
+  extend type Service {
+    """Latest build attempt for git-source services. Null for non-git services."""
+    latestBuild: BuildJob
+    """Recent build attempts (newest first), capped per request."""
+    buildJobs(limit: Int): [BuildJob!]!
+    """Set when this Service is connected to a git repo. One of 'github' | 'gitlab' | 'bitbucket'."""
+    gitProvider: String
+    """Local id of the GithubInstallation row (or future provider install row)."""
+    gitInstallationId: ID
+    gitOwner: String
+    gitRepo: String
+    gitBranch: String
+    rootDirectory: String
+    buildCommand: String
+    startCommand: String
+    detectedFramework: String
+    detectedPort: Int
+    """Most recent built commit SHA. Null until the first build succeeds."""
+    lastBuildSha: String
+    """One of 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' or null."""
+    lastBuildStatus: String
+    lastBuildAt: Date
+  }
 `
