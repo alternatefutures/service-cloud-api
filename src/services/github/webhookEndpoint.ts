@@ -252,8 +252,36 @@ async function handlePushEvent(prisma: PrismaClient, payload: PushEvent): Promis
     'push triggers rebuilds',
   )
 
+  // Webhook redelivery dedup window. GitHub redelivers on ANY non-2xx and on
+  // some "slow handler" heuristics — so the same logical push can arrive 2-5
+  // times. Without this, every redelivery created another BuildJob, every
+  // BuildJob fired autoDeployAfterBuild, and the user saw N AkashDeployments
+  // for the same SHA. We can't add a UNIQUE(serviceId, commitSha) constraint
+  // because legitimate "Rebuild" clicks for the same SHA are valid; instead
+  // we look for any non-FAILED/CANCELED job for this (service, sha) created
+  // recently, and treat that as proof a builder is already (or was just)
+  // running.
+  const DEDUP_WINDOW_MS = 5 * 60_000
+
   for (const svc of services) {
     try {
+      const recent = await prisma.buildJob.findFirst({
+        where: {
+          serviceId: svc.id,
+          commitSha: payload.after,
+          status: { in: ['PENDING', 'RUNNING', 'SUCCEEDED'] },
+          createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) },
+        },
+        select: { id: true, status: true, createdAt: true },
+      })
+      if (recent) {
+        log.info(
+          { serviceId: svc.id, commitSha: payload.after, existingBuildJobId: recent.id, existingStatus: recent.status },
+          'dedup: skipping push-triggered build — existing recent BuildJob found (likely webhook redelivery)',
+        )
+        continue
+      }
+
       const buildJob = await prisma.buildJob.create({
         data: {
           serviceId: svc.id,
