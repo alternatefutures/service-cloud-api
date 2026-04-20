@@ -48,11 +48,13 @@ function assertGithubConfigured() {
 
 function imageTagFor(userId: string, owner: string, repo: string, sha: string): string {
   const cfg = getGithubAppConfig()
-  // ghcr is case-insensitive and lowercases on the server; pre-lowercase
-  // here so logs / DB rows match what any provider will eventually pull.
+  // Docker registry refs MUST be all lowercase. Prisma cuid userIds like
+  // `gbufejdLUQOs2lh3MLjDS` mix case and break `docker build -t …`. Lowercase
+  // every component so the tag is valid before nixpacks/buildx ever sees it.
+  const safeUserId = userId.toLowerCase().replace(/[^a-z0-9-]/g, '-')
   const safeOwner = owner.toLowerCase().replace(/[^a-z0-9-]/g, '-')
   const safeRepo = repo.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-  return `ghcr.io/${cfg.ghcrNamespace}/${userId}--${safeOwner}-${safeRepo}:${sha.slice(0, 12)}`
+  return `ghcr.io/${cfg.ghcrNamespace}/${safeUserId}--${safeOwner}-${safeRepo}:${sha.slice(0, 12)}`
 }
 
 // =====================================================================

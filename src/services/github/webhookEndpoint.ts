@@ -265,9 +265,12 @@ async function handlePushEvent(prisma: PrismaClient, payload: PushEvent): Promis
       })
 
       const cfg = getGithubAppConfig()
+      // Docker registry refs MUST be all lowercase — userId is a Prisma cuid
+      // (mixed case) and would break `docker build -t …` otherwise.
+      const safeUserId = svc.createdByUserId.toLowerCase().replace(/[^a-z0-9-]/g, '-')
       const safeOwner = svc.gitOwner!.toLowerCase().replace(/[^a-z0-9-]/g, '-')
       const safeRepo = svc.gitRepo!.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-      const imageTag = `ghcr.io/${cfg.ghcrNamespace}/${svc.createdByUserId}--${safeOwner}-${safeRepo}:${payload.after.slice(0, 12)}`
+      const imageTag = `ghcr.io/${cfg.ghcrNamespace}/${safeUserId}--${safeOwner}-${safeRepo}:${payload.after.slice(0, 12)}`
 
       const spawned = await spawnBuildJob({
         buildJobId: buildJob.id,
