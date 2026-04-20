@@ -7,8 +7,10 @@
  */
 
 import { getAppJwt, getInstallationToken } from './app.js'
+import { createLogger } from '../../lib/logger.js'
 
 const GH = 'https://api.github.com'
+const log = createLogger('github.client')
 
 interface GhFetchOpts {
   /** Auth via App JWT (for `/app/...` endpoints) vs installation token. */
@@ -110,15 +112,29 @@ export async function getInstallation(installationId: bigint | string): Promise<
 export async function listInstallationRepos(
   installationId: bigint | string,
 ): Promise<GhRepo[]> {
-  // Paginate up to 5 pages (500 repos). Stops early when GitHub returns < per_page.
+  // Hard cap pagination so a misbehaving / huge installation can't pin a
+  // request thread for minutes. UI lists are filtered + repo-pickered so
+  // showing the first MAX_PAGES * per_page is fine; we log a warning if
+  // we truncated so ops can spot orgs hitting the cap.
+  const PER_PAGE = 100
+  const MAX_PAGES = 10 // 1,000 repos — 99.9% of orgs
   const repos: GhRepo[] = []
-  for (let page = 1; page <= 5; page++) {
+  let lastTotal = 0
+  let page = 1
+  for (; page <= MAX_PAGES; page++) {
     const data = await gh<{ total_count: number; repositories: GhRepo[] }>(
-      `/installation/repositories?per_page=100&page=${page}`,
+      `/installation/repositories?per_page=${PER_PAGE}&page=${page}`,
       { auth: { installationId } },
     )
+    lastTotal = data.total_count
     repos.push(...data.repositories)
-    if (data.repositories.length < 100) break
+    if (data.repositories.length < PER_PAGE) break
+  }
+  if (lastTotal > repos.length) {
+    log.warn(
+      { installationId: String(installationId), returned: repos.length, total: lastTotal },
+      'listInstallationRepos truncated — installation has more repos than MAX_PAGES * PER_PAGE',
+    )
   }
   return repos
 }
