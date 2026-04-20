@@ -2268,6 +2268,9 @@ export const typeDefs = /* GraphQL */ `
 
   extend type Mutation {
     syncGithubInstallation(installationId: String!, orgId: ID): GithubInstallation!
+    """Live-pull all App installations from GitHub into the local DB and return them.
+    Slow path — UI uses this only on explicit Refresh / post-install."""
+    refreshGithubInstallations(orgId: ID): [GithubInstallation!]!
     createGithubService(input: CreateGithubServiceInput!): Service!
     connectGithubRepo(input: ConnectGithubRepoInput!): Service!
     redeployGithubService(serviceId: ID!): BuildJob!

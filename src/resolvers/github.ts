@@ -28,6 +28,7 @@ import { createLogger } from '../lib/logger.js'
 import { getGithubAppConfig, isGithubAppConfigured } from '../services/github/config.js'
 import {
   getInstallation,
+  listAllInstallations,
   listInstallationRepos,
   listRepoBranches,
   getRepo,
@@ -67,6 +68,16 @@ export const githubQueries = {
     return getGithubAppConfig().appSlug
   },
 
+  /**
+   * Pure DB read — fast (<10ms). The picker mounts on every panel open
+   * and we used to live-sync to GitHub here, which on a cold module
+   * load (tsx-watch + jsonwebtoken + GitHub TLS + sequential upserts)
+   * blew past 12s and wedged the UI. Live-sync is now an explicit
+   * mutation (`refreshGithubInstallations`) the UI calls only when it
+   * actually needs fresh data: empty cache, Refresh button, or after
+   * the user installs the App in a popup. Webhook-driven upserts will
+   * keep the cache fresh in prod once we wire `installation` events.
+   */
   githubInstallations: async (
     _: unknown,
     args: { orgId?: string },
@@ -163,6 +174,20 @@ async function startBuild(
     },
   })
 
+  // Mirror the new build's metadata onto the Service so the UI's Source-tab
+  // build card reflects progress without waiting for a builder callback. The
+  // build callback later overwrites lastBuildStatus with SUCCEEDED / FAILED;
+  // in BUILDER_DRY_RUN mode the callback never fires, so this is also what
+  // makes local dev show PENDING instead of "No builds yet".
+  await context.prisma.service.update({
+    where: { id: args.serviceId },
+    data: {
+      lastBuildSha: commit.sha,
+      lastBuildStatus: 'PENDING',
+      lastBuildAt: new Date(),
+    },
+  })
+
   const imageTag = imageTagFor(args.userId, args.owner, args.repo, commit.sha)
   try {
     const spawned = await spawnBuildJob({
@@ -180,6 +205,38 @@ async function startBuild(
       where: { id: buildJob.id },
       data: { k8sJobName: spawned.k8sJobName, status: 'RUNNING' },
     })
+    await context.prisma.service.update({
+      where: { id: args.serviceId },
+      data: { lastBuildStatus: 'RUNNING' },
+    })
+
+    // BUILDER_DRY_RUN=1 short-circuit: no K8s Job was actually created, so the
+    // build callback will never fire. Synthesize an immediate SUCCEEDED state
+    // (with a fake imageTag) so local dev mirrors prod end-to-end and the UI
+    // doesn't sit on "Building…" forever. We deliberately skip the
+    // autoDeployAfterBuild step here — local dev usually doesn't want to spend
+    // tAKT every time you connect a repo. The user clicks "Deploy" manually.
+    if (spawned.dryRun) {
+      const now = new Date()
+      await context.prisma.buildJob.update({
+        where: { id: buildJob.id },
+        data: {
+          status: 'SUCCEEDED',
+          imageTag,
+          startedAt: now,
+          finishedAt: now,
+          logs: 'BUILDER_DRY_RUN=1 — synthetic SUCCEEDED (no K8s Job spawned).',
+        },
+      })
+      await context.prisma.service.update({
+        where: { id: args.serviceId },
+        data: {
+          lastBuildStatus: 'SUCCEEDED',
+          lastBuildAt: now,
+          dockerImage: imageTag,
+        },
+      })
+    }
   } catch (err) {
     log.error({ err, buildJobId: buildJob.id }, 'failed to spawn builder Job')
     await context.prisma.buildJob.update({
@@ -189,6 +246,10 @@ async function startBuild(
         errorMessage: err instanceof Error ? err.message : String(err),
         finishedAt: new Date(),
       },
+    })
+    await context.prisma.service.update({
+      where: { id: args.serviceId },
+      data: { lastBuildStatus: 'FAILED' },
     })
     throw new GraphQLError('failed to start build', {
       extensions: { code: 'BUILDER_SPAWN_FAILED' },
@@ -249,6 +310,68 @@ export const githubMutations = {
         targetType: meta.repository_selection,
         suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
       },
+    })
+  },
+
+  /**
+   * Live-sync ALL App installations from GitHub into the local DB and
+   * return the org's installations after the sync. Slow path (one
+   * /app/installations call + N upserts) — only invoked by the UI's
+   * "Refresh" button or after the user installs the App in a popup.
+   * The plain `githubInstallations` query stays a pure DB read.
+   */
+  refreshGithubInstallations: async (
+    _: unknown,
+    args: { orgId?: string },
+    context: Context,
+  ) => {
+    const userId = requireAuth(context)
+    assertGithubConfigured()
+    const orgId = args.orgId || context.organizationId
+    if (!orgId) throw new GraphQLError('orgId required')
+
+    try {
+      const live = await listAllInstallations()
+      for (const inst of live) {
+        const accountLogin = inst.account?.login ?? 'unknown'
+        const accountId = BigInt(inst.account?.id ?? 0)
+        const accountType = inst.account?.type ?? 'User'
+        const targetType = inst.repository_selection === 'selected' ? 'selected' : 'all'
+        const suspendedAt = inst.suspended_at ? new Date(inst.suspended_at) : null
+        await context.prisma.githubInstallation.upsert({
+          where: { installationId: BigInt(inst.id) },
+          create: {
+            installationId: BigInt(inst.id),
+            organizationId: orgId,
+            installedByUserId: userId,
+            accountLogin,
+            accountId,
+            accountType,
+            targetType,
+            suspendedAt,
+          },
+          update: {
+            accountLogin,
+            accountId,
+            accountType,
+            targetType,
+            suspendedAt,
+          },
+        })
+      }
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'live installation sync failed',
+      )
+      throw new GraphQLError('failed to sync installations from GitHub', {
+        extensions: { code: 'GITHUB_SYNC_FAILED' },
+      })
+    }
+
+    return context.prisma.githubInstallation.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
     })
   },
 
