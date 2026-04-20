@@ -94,6 +94,16 @@ export interface ProbeOneResult {
   providersBidding: number
   durationMs: number
   error?: string
+  /**
+   * True if `tx deployment close` was confirmed accepted by the chain
+   * (CLI exit 0 AND `code === 0` in the JSON response). When false but
+   * `dseq` is set, the deposit is in-flight: it'll either come back via
+   * a future close attempt or be reclaimed by the orphan sweeper in
+   * `escrowHealthMonitor`. The cycle uses this to subtract in-flight
+   * deposits from "cycle cost" so the dashboard doesn't double-charge
+   * us for funds that are temporarily locked but coming back.
+   */
+  closed: boolean
 }
 
 export interface ProbeCycleSummary {
@@ -197,6 +207,7 @@ export async function probeOneGpuModel(
     bidsReceived: 0,
     providersBidding: 0,
     durationMs: 0,
+    closed: false,
   }
 
   if (!process.env.AKASH_MNEMONIC) {
@@ -386,21 +397,73 @@ export async function probeOneGpuModel(
     result.error = err instanceof Error ? err.message : String(err)
   } finally {
     if (dseq) {
-      try {
-        await lock(() =>
-          execCli('akash', [
-            'tx', 'deployment', 'close',
-            '--dseq', String(dseq),
-            '-o', 'json', '-y',
-          ])
-        )
-        log.info({ dseq, model }, 'Probe deployment closed')
-      } catch (closeErr) {
-        // Best-effort. The chain-orphan sweep in escrowHealthMonitor
-        // catches any deployment that survives this close failure.
+      // Mirror the create-flow retry shape (line ~241): parse the JSON
+      // `code` and back off on sequence-mismatch (32). Without this, a
+      // CLI exit-0 with code-32 silently leaks the $1 deposit until the
+      // hourly orphan sweeper reclaims it ~1-2h later, and the cycle's
+      // wallet-delta cost calculation over-attributes the leak as
+      // "spend" on the dashboard.
+      let lastCloseErr: string | undefined
+      for (let attempt = 1; attempt <= TX_RETRIES; attempt++) {
+        try {
+          const closeRes = await lock(() =>
+            execCli('akash', [
+              'tx', 'deployment', 'close',
+              '--dseq', String(dseq),
+              '-o', 'json', '-y',
+            ])
+          )
+          if (closeRes.exitCode !== 0) {
+            lastCloseErr = `cli exit ${closeRes.exitCode}: ${closeRes.stderr.trim().slice(0, 200)}`
+            // CLI errors here (gas estimation, RPC blip) are usually
+            // transient — retry, but don't sequence-backoff since the
+            // problem isn't the wallet sequence.
+            if (attempt < TX_RETRIES) {
+              await sleep(TX_SEQ_RETRY_DELAY_MS)
+              continue
+            }
+            break
+          }
+          let closeJson: any = {}
+          try { closeJson = extractJson(closeRes.stdout) } catch { /* treat as parse failure */ }
+          const code =
+            typeof closeJson.code === 'number'
+              ? closeJson.code
+              : parseInt(closeJson.code ?? '0', 10)
+          if (code === 32 && attempt < TX_RETRIES) {
+            // Account-sequence mismatch: the wallet mutex's settle delay
+            // wasn't long enough for the previous TX to land. Same
+            // backoff/retry strategy as the create flow above.
+            lastCloseErr = `code 32 (sequence mismatch)`
+            await sleep(TX_SEQ_RETRY_DELAY_MS)
+            continue
+          }
+          if (code !== 0) {
+            lastCloseErr = `code ${code}: ${(closeJson.raw_log || '').slice(0, 200)}`
+            break
+          }
+          result.closed = true
+          log.info({ dseq, model, attempt }, 'Probe deployment closed')
+          break
+        } catch (closeErr) {
+          lastCloseErr = closeErr instanceof Error ? closeErr.message : String(closeErr)
+          if (attempt < TX_RETRIES) {
+            await sleep(TX_SEQ_RETRY_DELAY_MS)
+            continue
+          }
+        }
+      }
+      if (!result.closed) {
+        // Best-effort exhausted. The chain-orphan sweep in
+        // escrowHealthMonitor catches any deployment that survives this
+        // close failure (deposit is ~$1 per probe; reclaim window
+        // ~ORPHAN_MIN_AGE_BLOCKS ≈ 60 min). The cycle excludes this
+        // dseq's deposit from `costUact` so the dashboard reports
+        // realised spend (gas) and surfaces the in-flight number
+        // separately.
         log.warn(
-          { dseq, model, err: closeErr instanceof Error ? closeErr.message : closeErr },
-          'Probe close failed — orphan sweep will reclaim it'
+          { dseq, model, err: lastCloseErr },
+          'Probe close failed after retries — orphan sweep will reclaim deposit',
         )
       }
     }
@@ -533,11 +596,48 @@ export async function runGpuBidProbeCycle(
 
     // Snapshot wallet after the cycle and compute spend. Floor at 0 — a
     // wallet refill mid-cycle would otherwise produce a negative cost.
+    //
+    // IMPORTANT — in-flight deposit re-attribution.
+    //   Each probe puts DEFAULT_DEPOSIT_UACT (1 ACT ≈ $1) into escrow on
+    //   `tx deployment create` and gets it back on `tx deployment close`.
+    //   When close fails (code 32 sequence-mismatch, RPC blip, etc.) the
+    //   deposit is in-flight: it'll come back via the orphan sweep in
+    //   `escrowHealthMonitor` within ~60-120 min. Without this
+    //   correction, a single failed close attributes a full $1 to the
+    //   probe cycle's "spent" number even though the money returns
+    //   shortly after — which is exactly what produced the misleading
+    //   "4 runs · $3 spent" dashboard reading on 2026-04-20.
+    //
+    //   We subtract the in-flight deposits from the wallet-delta so
+    //   `costUact` reflects realised spend (gas + truly burned funds).
+    //   The in-flight figure is logged separately for visibility; the
+    //   dashboard's totals stop double-counting refunds.
+    const inFlightDepositUact = results.reduce(
+      (acc, r) => (r.dseq && !r.closed ? acc + DEFAULT_DEPOSIT_UACT : acc),
+      0,
+    )
+    const inFlightProbes = results.filter(r => r.dseq && !r.closed).length
+
     if (balanceBefore) {
       try {
         const balanceAfter = await checkBalance()
-        costUact = BigInt(Math.max(0, balanceBefore.uact - balanceAfter.uact))
-        costUakt = BigInt(Math.max(0, balanceBefore.uakt - balanceAfter.uakt))
+        const walletDropUact = Math.max(0, balanceBefore.uact - balanceAfter.uact)
+        const walletDropUakt = Math.max(0, balanceBefore.uakt - balanceAfter.uakt)
+        const realisedUact = Math.max(0, walletDropUact - inFlightDepositUact)
+        costUact = BigInt(realisedUact)
+        costUakt = BigInt(walletDropUakt)
+        if (inFlightProbes > 0) {
+          log.info(
+            {
+              runId,
+              walletDropUact,
+              inFlightDepositUact,
+              inFlightProbes,
+              realisedUact,
+            },
+            'Cycle cost adjusted for in-flight probe deposits — orphan sweep will reclaim',
+          )
+        }
       } catch (err) {
         log.warn(
           { runId, err: err instanceof Error ? err.message : err },
