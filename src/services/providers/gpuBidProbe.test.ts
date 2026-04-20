@@ -366,7 +366,91 @@ describe('probeOneGpuModel', () => {
     // Bids were still recorded; only the close best-effort failed (the
     // chain-orphan sweep in escrowHealthMonitor will reclaim).
     expect(result.bidsReceived).toBe(2)
+    expect(result.closed).toBe(false)
     expect(prisma.gpuBidObservation.createMany).toHaveBeenCalledOnce()
+  })
+
+  it('marks closed=true when close TX returns code 0', async () => {
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') return ok(TX_OK_WITH_DSEQ)
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') return ok(BIDS_EMPTY)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') return ok(TX_CLOSE_OK)
+      return ok('{}')
+    })
+
+    const result = await probeOneGpuModel(buildPrisma() as any, 'h100', 'nvidia', 'run-1', { execCli, sleep: fastSleep })
+
+    expect(result.dseq).toBe(424242)
+    expect(result.closed).toBe(true)
+  })
+
+  it('retries close on sequence-mismatch (code 32) and marks closed=true on eventual success', async () => {
+    // Regression: production "4 runs · $3 spent" dashboard reading came
+    // from close TXs returning CLI exit 0 with JSON code 32. The
+    // previous code only checked exit code and silently leaked the $1
+    // deposit per failed close. Now we parse the JSON code, retry on
+    // 32, and only mark closed=true after a real code-0 confirmation.
+    const TX_CLOSE_SEQ_MISMATCH = JSON.stringify({ code: 32, raw_log: 'account sequence mismatch' })
+    let closeCalls = 0
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') return ok(TX_OK_WITH_DSEQ)
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') return ok(BIDS_EMPTY)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') {
+        closeCalls++
+        if (closeCalls < 3) return ok(TX_CLOSE_SEQ_MISMATCH)
+        return ok(TX_CLOSE_OK)
+      }
+      return ok('{}')
+    })
+
+    const result = await probeOneGpuModel(buildPrisma() as any, 'h100', 'nvidia', 'run-1', { execCli, sleep: fastSleep })
+
+    expect(closeCalls).toBe(3)
+    expect(result.closed).toBe(true)
+  })
+
+  it('exhausts close retries on persistent code-32 and reports closed=false', async () => {
+    const TX_CLOSE_SEQ_MISMATCH = JSON.stringify({ code: 32, raw_log: 'account sequence mismatch' })
+    let closeCalls = 0
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') return ok(TX_OK_WITH_DSEQ)
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') return ok(BIDS_EMPTY)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') {
+        closeCalls++
+        return ok(TX_CLOSE_SEQ_MISMATCH)
+      }
+      return ok('{}')
+    })
+
+    const result = await probeOneGpuModel(buildPrisma() as any, 'h100', 'nvidia', 'run-1', { execCli, sleep: fastSleep })
+
+    expect(closeCalls).toBe(3) // TX_RETRIES = 3
+    expect(result.closed).toBe(false)
+    expect(result.dseq).toBe(424242)
+  })
+
+  it('marks closed=false when close TX returns a non-zero non-32 code (chain rejection)', async () => {
+    const TX_CLOSE_REJECT = JSON.stringify({ code: 7, raw_log: 'unauthorized' })
+    let closeCalls = 0
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') return ok(TX_OK_WITH_DSEQ)
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') return ok(BIDS_EMPTY)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') {
+        closeCalls++
+        return ok(TX_CLOSE_REJECT)
+      }
+      return ok('{}')
+    })
+
+    const result = await probeOneGpuModel(buildPrisma() as any, 'h100', 'nvidia', 'run-1', { execCli, sleep: fastSleep })
+
+    // Non-32 chain rejection breaks out of the retry loop immediately.
+    expect(closeCalls).toBe(1)
+    expect(result.closed).toBe(false)
   })
 })
 
@@ -575,6 +659,99 @@ describe('runGpuBidProbeCycle GpuProbeRun telemetry', () => {
     expect(updateArg.data.bidsCollected).toBe(0)
     expect(updateArg.data.uniqueProviders).toBe(0)
     expect(updateArg.data.completedAt).toBeInstanceOf(Date)
+  })
+
+  it('subtracts in-flight probe deposits from cycle cost (the $3-spent dashboard bug fix)', async () => {
+    // 2026-04-20 incident: probe cycle reported $1 spent per run on a
+    // dashboard showing "4 runs · $3 spent" — root cause was every
+    // failed close (deposit still in escrow, awaiting orphan sweep)
+    // contributing its full DEFAULT_DEPOSIT_UACT to the wallet-delta.
+    // Now we subtract in-flight deposits so the dashboard reflects
+    // realised gas spend, not temporarily-locked refunds.
+    const TX_CLOSE_SEQ_MISMATCH = JSON.stringify({ code: 32, raw_log: 'account sequence mismatch' })
+    const prisma = buildPrisma()
+    prisma.computeProvider.findMany.mockResolvedValue([
+      { gpuModels: ['h100', 'a100'] }, // two probes this cycle
+    ])
+
+    // Wallet drops by 2_050_000 uact across the cycle (2 deposits + gas).
+    vi.mocked(checkBalance)
+      .mockResolvedValueOnce({ uact: 100_000_000, uakt: 0, act: '100' } as any)
+      .mockResolvedValueOnce({ uact: 97_950_000, uakt: 0, act: '97.95' } as any)
+
+    // h100 closes cleanly; a100 close fails permanently (code 32 ×3).
+    let h100Close = 0
+    let a100Close = 0
+    let createCalls = 0
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') {
+        createCalls++
+        // Vary the dseq so finalisation can attribute correctly per probe.
+        const dseq = 100_000 + createCalls
+        return ok(JSON.stringify({
+          code: 0,
+          txhash: `tx${dseq}`,
+          logs: [{ events: [{ attributes: [{ key: 'dseq', value: String(dseq) }] }] }],
+        }))
+      }
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') {
+        return ok(BIDS_EMPTY)
+      }
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') {
+        // First probe (h100, dseq 100_001) succeeds; second probe (a100,
+        // dseq 100_002) fails on every attempt.
+        const dseq = args[args.indexOf('--dseq') + 1]
+        if (dseq === '100001') {
+          h100Close++
+          return ok(TX_CLOSE_OK)
+        }
+        a100Close++
+        return ok(TX_CLOSE_SEQ_MISMATCH)
+      }
+      return ok('{}')
+    })
+
+    await runGpuBidProbeCycle(prisma as any, { execCli, sleep: () => Promise.resolve() })
+
+    expect(h100Close).toBe(1)
+    expect(a100Close).toBe(3) // exhausted retries
+
+    const updateArg = prisma.gpuProbeRun.update.mock.calls[0][0]
+    // Wallet drop = 2_050_000. In-flight = 1 × 1_000_000 (a100 deposit).
+    // Realised cost = 2_050_000 - 1_000_000 = 1_050_000 uact (~$1.05).
+    // Without this fix the dashboard would report 2_050_000 (~$2.05).
+    expect(updateArg.data.costUact).toBe(1_050_000n)
+  })
+
+  it('records full wallet-delta as cost when every close succeeds (no in-flight)', async () => {
+    const prisma = buildPrisma()
+    prisma.computeProvider.findMany.mockResolvedValue([
+      { gpuModels: ['h100'] },
+    ])
+
+    vi.mocked(checkBalance)
+      .mockResolvedValueOnce({ uact: 100_000_000, uakt: 0, act: '100' } as any)
+      .mockResolvedValueOnce({ uact: 99_995_000, uakt: 0, act: '99.995' } as any)
+
+    let createCalls = 0
+    const execCli = vi.fn(async (_bin: string, args: string[]): Promise<ExecResult> => {
+      if (args[0] === 'keys' && args[1] === 'show') return ok(KEYS_SHOW_OUT)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'create') {
+        createCalls++
+        return ok(TX_OK_WITH_DSEQ)
+      }
+      if (args[0] === 'query' && args[1] === 'market' && args[2] === 'bid' && args[3] === 'list') return ok(BIDS_EMPTY)
+      if (args[0] === 'tx' && args[1] === 'deployment' && args[2] === 'close') return ok(TX_CLOSE_OK)
+      return ok('{}')
+    })
+
+    await runGpuBidProbeCycle(prisma as any, { execCli, sleep: () => Promise.resolve() })
+
+    expect(createCalls).toBe(1)
+    const updateArg = prisma.gpuProbeRun.update.mock.calls[0][0]
+    // Pure gas spend, no deposit subtraction — 5_000 uact.
+    expect(updateArg.data.costUact).toBe(5_000n)
   })
 
   it('aggregates bids back into the run record when probes succeed', async () => {
