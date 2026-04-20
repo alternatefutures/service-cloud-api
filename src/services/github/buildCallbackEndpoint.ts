@@ -123,41 +123,45 @@ export async function handleBuildCallback(
   const now = new Date()
   const newStatus = body.status as BuildStatus
 
-  // ── 1. Persist BuildJob update ──────────────────────────
-  await prisma.buildJob.update({
-    where: { id: job.id },
-    data: {
-      status: newStatus,
-      logs: body.logs?.slice(0, 60_000) ?? job.logs ?? undefined,
-      imageTag: body.imageTag ?? job.imageTag,
-      detectedFramework: body.detectedFramework ?? job.detectedFramework,
-      detectedPort: body.detectedPort ?? job.detectedPort,
-      errorMessage: body.errorMessage?.slice(0, 4_000) ?? null,
-      startedAt: newStatus === 'RUNNING' && !job.startedAt ? now : job.startedAt,
-      finishedAt: TERMINAL.has(newStatus) ? now : null,
-    },
-  })
-
-  // ── 2. Mirror status onto Service for fast UI reads ────
-  await prisma.service.update({
-    where: { id: job.serviceId },
-    data: {
-      lastBuildStatus: newStatus,
-      lastBuildAt: now,
-      lastBuildSha: body.commitSha ?? job.commitSha,
-      ...(newStatus === 'SUCCEEDED' && body.imageTag
-        ? {
-            dockerImage: body.imageTag,
-            detectedFramework: body.detectedFramework ?? job.detectedFramework,
-            detectedPort: body.detectedPort ?? job.detectedPort,
-            // Use the detected port as the runtime container port if the user
-            // hasn't pinned one explicitly. SDL generators read containerPort.
-            containerPort:
-              job.service.containerPort ?? body.detectedPort ?? job.detectedPort ?? null,
-          }
-        : {}),
-    },
-  })
+  // BuildJob row + Service mirror MUST move together. If the BuildJob row
+  // landed terminal but the Service mirror failed, the UI would show stale
+  // "Building…" until the next callback or a manual refresh — and an
+  // auto-deploy below would race against the wrong dockerImage. Atomic.
+  await prisma.$transaction([
+    prisma.buildJob.update({
+      where: { id: job.id },
+      data: {
+        status: newStatus,
+        logs: body.logs?.slice(0, 60_000) ?? job.logs ?? undefined,
+        imageTag: body.imageTag ?? job.imageTag,
+        detectedFramework: body.detectedFramework ?? job.detectedFramework,
+        detectedPort: body.detectedPort ?? job.detectedPort,
+        errorMessage: body.errorMessage?.slice(0, 4_000) ?? null,
+        startedAt: newStatus === 'RUNNING' && !job.startedAt ? now : job.startedAt,
+        finishedAt: TERMINAL.has(newStatus) ? now : null,
+      },
+    }),
+    prisma.service.update({
+      where: { id: job.serviceId },
+      data: {
+        lastBuildStatus: newStatus,
+        lastBuildAt: now,
+        lastBuildSha: body.commitSha ?? job.commitSha,
+        ...(newStatus === 'SUCCEEDED' && body.imageTag
+          ? {
+              dockerImage: body.imageTag,
+              detectedFramework: body.detectedFramework ?? job.detectedFramework,
+              detectedPort: body.detectedPort ?? job.detectedPort,
+              // Use the detected port as the runtime container port if the
+              // user hasn't pinned one explicitly. SDL generators read
+              // containerPort.
+              containerPort:
+                job.service.containerPort ?? body.detectedPort ?? job.detectedPort ?? null,
+            }
+          : {}),
+      },
+    }),
+  ])
 
   // ── 3. Best-effort: write commit status back to GitHub ─
   if (job.service.gitInstallation && job.service.gitOwner && job.service.gitRepo) {

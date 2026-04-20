@@ -46,6 +46,52 @@ function assertGithubConfigured() {
   }
 }
 
+/**
+ * Validate user-supplied `rootDirectory` before it lands on the Service row
+ * (and from there into `cd "$ROOT_DIRECTORY"` inside the builder script).
+ *
+ * Allowed: relative paths made of [a-zA-Z0-9._-/] segments, no `..` segments,
+ * no leading `/`, no leading `~`, max 256 chars. `null`/empty pass through
+ * (means "repo root", handled downstream by `input.rootDirectory || '.'`).
+ *
+ * We deliberately reject `..` even mid-path — there's no legitimate use case
+ * for a builder workdir to escape the clone, and silently allowing it is
+ * how shell-injection foot-guns get found by reviewers (rightly so).
+ */
+function normalizeRootDirectory(input: string | null | undefined): string | null {
+  if (input == null) return null
+  const trimmed = input.trim()
+  if (trimmed === '' || trimmed === '.' || trimmed === './') return null
+  if (trimmed.length > 256) {
+    throw new GraphQLError('rootDirectory too long (max 256 chars)', {
+      extensions: { code: 'INVALID_ROOT_DIRECTORY' },
+    })
+  }
+  if (trimmed.startsWith('/') || trimmed.startsWith('~')) {
+    throw new GraphQLError('rootDirectory must be a relative path inside the repo', {
+      extensions: { code: 'INVALID_ROOT_DIRECTORY' },
+    })
+  }
+  // Disallow any segment that's exactly `..` — safer than a regex `..` ban
+  // which would also reject a legitimate `my..weird..folder` (uncommon but
+  // legal on GitHub).
+  const segments = trimmed.split('/')
+  for (const seg of segments) {
+    if (seg === '..') {
+      throw new GraphQLError('rootDirectory cannot traverse above the repo root', {
+        extensions: { code: 'INVALID_ROOT_DIRECTORY' },
+      })
+    }
+  }
+  if (!/^[A-Za-z0-9._\-/]+$/.test(trimmed)) {
+    throw new GraphQLError(
+      'rootDirectory may only contain letters, numbers, dot, dash, underscore, and slash',
+      { extensions: { code: 'INVALID_ROOT_DIRECTORY' } },
+    )
+  }
+  return trimmed
+}
+
 function imageTagFor(userId: string, owner: string, repo: string, sha: string): string {
   const cfg = getGithubAppConfig()
   // Docker registry refs MUST be all lowercase. Prisma cuid userIds like
@@ -403,6 +449,7 @@ export const githubMutations = {
     const userId = requireAuth(context)
     assertGithubConfigured()
     const { input } = args
+    const safeRootDirectory = normalizeRootDirectory(input.rootDirectory)
 
     const project = await context.prisma.project.findUnique({
       where: { id: input.projectId },
@@ -446,7 +493,7 @@ export const githubMutations = {
         gitRepo: input.repo,
         gitBranch: branchName,
         gitInstallationId: install.id,
-        rootDirectory: input.rootDirectory ?? null,
+        rootDirectory: safeRootDirectory,
         buildCommand: input.buildCommand ?? null,
         startCommand: input.startCommand ?? null,
         internalHostname: generateInternalHostname(slug, project.slug),
@@ -471,7 +518,7 @@ export const githubMutations = {
       owner: input.owner,
       repo: input.repo,
       branch: branchName,
-      rootDirectory: input.rootDirectory ?? null,
+      rootDirectory: safeRootDirectory,
       buildCommand: input.buildCommand ?? null,
       startCommand: input.startCommand ?? null,
       triggeredBy: 'first-deploy',
@@ -506,6 +553,7 @@ export const githubMutations = {
     const userId = requireAuth(context)
     assertGithubConfigured()
     const { input } = args
+    const safeRootDirectory = normalizeRootDirectory(input.rootDirectory)
 
     const service = await context.prisma.service.findUnique({
       where: { id: input.serviceId },
@@ -543,7 +591,7 @@ export const githubMutations = {
         gitRepo: input.repo,
         gitBranch: branchName,
         gitInstallationId: install.id,
-        rootDirectory: input.rootDirectory ?? null,
+        rootDirectory: safeRootDirectory,
         buildCommand: input.buildCommand ?? null,
         startCommand: input.startCommand ?? null,
       },
@@ -556,7 +604,7 @@ export const githubMutations = {
       owner: input.owner,
       repo: input.repo,
       branch: branchName,
-      rootDirectory: input.rootDirectory ?? null,
+      rootDirectory: safeRootDirectory,
       buildCommand: input.buildCommand ?? null,
       startCommand: input.startCommand ?? null,
       triggeredBy: 'first-deploy',
