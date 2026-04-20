@@ -239,8 +239,24 @@ export async function deleteBuildJob(k8sJobName: string): Promise<void> {
   }
 }
 
+/**
+ * Escape a string for safe interpolation into a YAML double-quoted scalar.
+ *
+ * The values currently passing through (GitHub install tokens, GHCR PATs,
+ * a templated clone URL) cannot in practice contain control chars — but
+ * defense-in-depth is cheap, and someone WILL eventually pipe a user-
+ * supplied value through here without re-reading this comment. Escape
+ * `\\`, `"`, and the three control chars that actually break YAML scalar
+ * parsing. We don't reach for js-yaml because we own the template, this
+ * single helper, and know the surrounding context is always `"…"`.
+ */
 function escapeYamlValue(v: string): string {
-  return v.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+  return v
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('\n', '\\n')
+    .replaceAll('\r', '\\r')
+    .replaceAll('\t', '\\t')
 }
 
 function toB64(v: string): string {

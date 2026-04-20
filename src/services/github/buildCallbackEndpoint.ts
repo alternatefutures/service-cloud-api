@@ -110,26 +110,34 @@ export async function handleBuildCallback(
     return reply(res, 404, 'build job not found')
   }
 
-  // Idempotency: don't allow downgrading from a terminal status.
   const TERMINAL: ReadonlySet<BuildStatus> = new Set(['SUCCEEDED', 'FAILED', 'CANCELED'] as const)
-  if (TERMINAL.has(job.status) && job.status !== body.status) {
-    log.info(
-      { buildJobId: job.id, current: job.status, incoming: body.status },
-      'ignoring callback that would downgrade terminal status',
-    )
-    return reply(res, 200, { ok: true, ignored: 'terminal' })
-  }
-
   const now = new Date()
   const newStatus = body.status as BuildStatus
 
-  // BuildJob row + Service mirror MUST move together. If the BuildJob row
-  // landed terminal but the Service mirror failed, the UI would show stale
-  // "Building…" until the next callback or a manual refresh — and an
-  // auto-deploy below would race against the wrong dockerImage. Atomic.
-  await prisma.$transaction([
-    prisma.buildJob.update({
-      where: { id: job.id },
+  // Atomic idempotency + write. The previous version did a read (line 100),
+  // a JS-level terminal check, then a write — leaving a window where two
+  // near-simultaneous callbacks (e.g. builder posts SUCCEEDED, K8s pod-
+  // deletion handler posts FAILED) could both pass the gate and double-apply.
+  //
+  // We collapse the gate INTO the WHERE clause: `updateMany` succeeds only
+  // if the current status is non-terminal OR the incoming status equals the
+  // current one (idempotent retry of a terminal callback). If count === 0,
+  // somebody else already drove this row terminal-with-a-different-status —
+  // treat as a benign no-op and DON'T write the Service mirror (the winning
+  // callback's own service write is the truth).
+  //
+  // Interactive transaction (vs the array form) so the Service write is
+  // conditional on the BuildJob CAS succeeding — and both still commit
+  // atomically when the CAS wins.
+  const txResult = await prisma.$transaction(async (tx) => {
+    const updated = await tx.buildJob.updateMany({
+      where: {
+        id: job.id,
+        OR: [
+          { status: { notIn: ['SUCCEEDED', 'FAILED', 'CANCELED'] } },
+          { status: newStatus },
+        ],
+      },
       data: {
         status: newStatus,
         logs: body.logs?.slice(0, 60_000) ?? job.logs ?? undefined,
@@ -140,8 +148,9 @@ export async function handleBuildCallback(
         startedAt: newStatus === 'RUNNING' && !job.startedAt ? now : job.startedAt,
         finishedAt: TERMINAL.has(newStatus) ? now : null,
       },
-    }),
-    prisma.service.update({
+    })
+    if (updated.count === 0) return { applied: false as const }
+    await tx.service.update({
       where: { id: job.serviceId },
       data: {
         lastBuildStatus: newStatus,
@@ -160,8 +169,17 @@ export async function handleBuildCallback(
             }
           : {}),
       },
-    }),
-  ])
+    })
+    return { applied: true as const }
+  })
+
+  if (!txResult.applied) {
+    log.info(
+      { buildJobId: job.id, current: job.status, incoming: body.status },
+      'ignoring callback that would downgrade terminal status',
+    )
+    return reply(res, 200, { ok: true, ignored: 'terminal' })
+  }
 
   // ── 3. Best-effort: write commit status back to GitHub ─
   if (job.service.gitInstallation && job.service.gitOwner && job.service.gitRepo) {
