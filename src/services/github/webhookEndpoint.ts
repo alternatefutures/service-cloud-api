@@ -264,6 +264,10 @@ async function handlePushEvent(prisma: PrismaClient, payload: PushEvent): Promis
         },
       })
 
+      if (!svc.createdByUserId) {
+        log.warn({ serviceId: svc.id }, 'service has no createdByUserId — cannot tag image; skipping')
+        continue
+      }
       const cfg = getGithubAppConfig()
       // Docker registry refs MUST be all lowercase — userId is a Prisma cuid
       // (mixed case) and would break `docker build -t …` otherwise.
