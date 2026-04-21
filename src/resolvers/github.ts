@@ -147,6 +147,55 @@ function imageTagFor(userId: string, owner: string, repo: string, sha: string): 
 export const githubQueries = {
   githubAppEnabled: () => isGithubAppConfigured(),
 
+  /**
+   * Lazy-load a single BuildJob by id, including the heavy `logs` blob.
+   *
+   * The Source-tab build-history list intentionally omits `logs` from its
+   * polling query (logs can be 60KB per row, polled every 3s while a build
+   * is in flight — that's a lot of bytes for collapsed rows nobody is
+   * looking at). When the user expands a row, we hit this query for that
+   * one job. Auth-checked: caller must own the parent service's project.
+   */
+  buildJob: async (_: unknown, args: { id: string }, context: Context) => {
+    requireAuth(context)
+    const job = await context.prisma.buildJob.findUnique({
+      where: { id: args.id },
+      include: { service: { include: { project: true } } },
+    })
+    if (!job) return null
+    assertProjectAccess(context, job.service.project)
+    return job
+  },
+
+  /**
+   * List recent BuildJobs for a service. Mirrors the `Service.buildJobs(limit)`
+   * field resolver but is reachable without first fetching the parent Service
+   * — the Source-tab build-history list only knows the serviceId and doesn't
+   * want to round-trip the entire Service payload on every 3s poll.
+   *
+   * Logs blob is intentionally available on each row (the schema can't gate
+   * fields per-query), but the frontend polling query OMITS `logs` from its
+   * selection set; logs are fetched via `buildJob(id)` only on row expand.
+   */
+  serviceBuildJobs: async (
+    _: unknown,
+    args: { serviceId: string; limit?: number },
+    context: Context,
+  ) => {
+    requireAuth(context)
+    const service = await context.prisma.service.findUnique({
+      where: { id: args.serviceId },
+      include: { project: true },
+    })
+    if (!service) throw new GraphQLError('service not found')
+    assertProjectAccess(context, service.project)
+    return context.prisma.buildJob.findMany({
+      where: { serviceId: args.serviceId },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(args.limit ?? 20, 1), 100),
+    })
+  },
+
   /** Slug used in install URLs: https://github.com/apps/<slug>/installations/new */
   githubAppSlug: () => {
     if (!isGithubAppConfigured()) return null
@@ -240,14 +289,23 @@ async function startBuild(
     installationIdNum: bigint
     owner: string
     repo: string
+    /** Branch name persisted on the BuildJob — what shows up in the UI as "main", "develop", etc. */
     branch: string
+    /**
+     * Optional override of the GitHub ref used to RESOLVE the commit (passes
+     * through to GET /repos/:owner/:repo/commits/:ref, which accepts a branch
+     * name OR a SHA). Used by per-commit rebuilds from the build-history UI:
+     * we still tag the BuildJob with the original branch label, but resolve
+     * the commit at the user-specified SHA. Defaults to `branch`.
+     */
+    ref?: string
     rootDirectory: string | null
     buildCommand: string | null
     startCommand: string | null
     triggeredBy: string
   },
 ) {
-  const commit = await getCommit(args.installationIdNum, args.owner, args.repo, args.branch)
+  const commit = await getCommit(args.installationIdNum, args.owner, args.repo, args.ref ?? args.branch)
 
   const buildJob = await context.prisma.buildJob.create({
     data: {
@@ -656,7 +714,7 @@ export const githubMutations = {
 
   redeployGithubService: async (
     _: unknown,
-    args: { serviceId: string },
+    args: { serviceId: string; sha?: string | null },
     context: Context,
   ) => {
     const userId = requireAuth(context)
@@ -672,6 +730,24 @@ export const githubMutations = {
       throw new GraphQLError('service is not connected to a git repo')
     }
 
+    // Optional `sha` override: per-commit rebuild from the build-history UI.
+    // Validate strictly to a hex SHA before flowing it into the GitHub commit
+    // URL path — `getCommit` accepts any ref (branch, SHA, tag), and we don't
+    // want unvalidated user input riding along to GitHub or, after resolution,
+    // becoming part of a docker image tag.
+    let ref: string | undefined
+    let triggeredBy = `manual:${userId}`
+    if (args.sha != null && args.sha !== '') {
+      const sha = args.sha.trim().toLowerCase()
+      if (!/^[0-9a-f]{7,40}$/.test(sha)) {
+        throw new GraphQLError('sha must be a 7-40 character hex commit SHA', {
+          extensions: { code: 'INVALID_SHA' },
+        })
+      }
+      ref = sha
+      triggeredBy = `manual-sha:${userId}`
+    }
+
     return startBuild(context, {
       serviceId: service.id,
       userId,
@@ -679,10 +755,11 @@ export const githubMutations = {
       owner: service.gitOwner,
       repo: service.gitRepo,
       branch: service.gitBranch,
+      ref,
       rootDirectory: service.rootDirectory,
       buildCommand: service.buildCommand,
       startCommand: service.startCommand,
-      triggeredBy: `manual:${userId}`,
+      triggeredBy,
     })
   },
 }
