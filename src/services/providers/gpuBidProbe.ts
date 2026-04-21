@@ -30,7 +30,7 @@ import { join } from 'path'
 import type { PrismaClient } from '@prisma/client'
 import { getAkashEnv as getAkashEnvBase } from '../../lib/akashEnv.js'
 import { withWalletLock } from '../akash/walletMutex.js'
-import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
+import { DEFAULT_DEPOSIT_UAKT } from '../akash/orchestrator.js'
 import { createLogger } from '../../lib/logger.js'
 import { buildProbeSdl, PROBE_PRICING_CEILING_UACT, type GpuVendor } from './probeBidSdl.js'
 import { checkBalance, type WalletBalance } from './providerVerification.js'
@@ -253,7 +253,7 @@ export async function probeOneGpuModel(
       const txRes = await lock(() =>
         execCli('akash', [
           'tx', 'deployment', 'create', sdlPath,
-          '--deposit', `${DEFAULT_DEPOSIT_UACT}uact`,
+          '--deposit', `${DEFAULT_DEPOSIT_UAKT}uakt`,
           '-o', 'json', '-y',
         ])
       )
@@ -598,7 +598,7 @@ export async function runGpuBidProbeCycle(
     // wallet refill mid-cycle would otherwise produce a negative cost.
     //
     // IMPORTANT — in-flight deposit re-attribution.
-    //   Each probe puts DEFAULT_DEPOSIT_UACT (1 ACT ≈ $1) into escrow on
+    //   Each probe puts DEFAULT_DEPOSIT_UAKT (1 ACT ≈ $1) into escrow on
     //   `tx deployment create` and gets it back on `tx deployment close`.
     //   When close fails (code 32 sequence-mismatch, RPC blip, etc.) the
     //   deposit is in-flight: it'll come back via the orphan sweep in
@@ -613,7 +613,7 @@ export async function runGpuBidProbeCycle(
     //   The in-flight figure is logged separately for visibility; the
     //   dashboard's totals stop double-counting refunds.
     const inFlightDepositUact = results.reduce(
-      (acc, r) => (r.dseq && !r.closed ? acc + DEFAULT_DEPOSIT_UACT : acc),
+      (acc, r) => (r.dseq && !r.closed ? acc + DEFAULT_DEPOSIT_UAKT : acc),
       0,
     )
     const inFlightProbes = results.filter(r => r.dseq && !r.closed).length

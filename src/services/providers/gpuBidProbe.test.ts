@@ -17,7 +17,7 @@ vi.mock('../akash/walletMutex.js', () => ({
 }))
 
 vi.mock('../akash/orchestrator.js', () => ({
-  DEFAULT_DEPOSIT_UACT: 1_000_000,
+  DEFAULT_DEPOSIT_UAKT: 1_000_000,
 }))
 
 // Stub the wallet-balance helper used by the cycle telemetry path —
@@ -665,7 +665,7 @@ describe('runGpuBidProbeCycle GpuProbeRun telemetry', () => {
     // 2026-04-20 incident: probe cycle reported $1 spent per run on a
     // dashboard showing "4 runs · $3 spent" — root cause was every
     // failed close (deposit still in escrow, awaiting orphan sweep)
-    // contributing its full DEFAULT_DEPOSIT_UACT to the wallet-delta.
+    // contributing its full DEFAULT_DEPOSIT_UAKT to the wallet-delta.
     // Now we subtract in-flight deposits so the dashboard reflects
     // realised gas spend, not temporarily-locked refunds.
     const TX_CLOSE_SEQ_MISMATCH = JSON.stringify({ code: 32, raw_log: 'account sequence mismatch' })

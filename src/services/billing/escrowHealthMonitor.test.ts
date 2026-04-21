@@ -140,12 +140,12 @@ function installAkashCli(overrides: {
       return Promise.resolve(`${overrides.walletAddress ?? 'akash1owner'}\n`)
     }
 
-    // query bank balances → wallet ACT balance
+    // query bank balances → wallet AKT balance (deposits require uakt)
     if (args[0] === 'query' && args[1] === 'bank' && args[2] === 'balances') {
       return Promise.resolve(
         JSON.stringify({
           balances: [
-            { denom: 'uact', amount: String(overrides.walletUactBalance ?? 100_000_000) },
+            { denom: 'uakt', amount: String(overrides.walletUactBalance ?? 100_000_000) },
           ],
         }),
       )
@@ -214,7 +214,7 @@ describe('EscrowHealthMonitor', () => {
     )
     expect(depositCall).toBeDefined()
     // Refill amount: ppb * BLOCKS_PER_HOUR * REFILL_HOURS = 1000 * 588 * 1 = 588_000
-    expect(depositCall![1]).toContain('588000uact')
+    expect(depositCall![1]).toContain('588000uakt')
     expect(depositCall![1]).toContain('--dseq')
     expect(depositCall![1]).toContain('100')
   })
@@ -342,7 +342,7 @@ describe('EscrowHealthMonitor', () => {
       if (args[0] === 'keys') return Promise.resolve('akash1owner\n')
       if (args[0] === 'query' && args[1] === 'bank') {
         return Promise.resolve(
-          JSON.stringify({ balances: [{ denom: 'uact', amount: '100000000' }] }),
+          JSON.stringify({ balances: [{ denom: 'uakt', amount: '100000000' }] }),
         )
       }
       return Promise.resolve('{}')
@@ -442,7 +442,7 @@ describe('EscrowHealthMonitor', () => {
       if (args[0] === 'keys') return Promise.resolve('akash1owner\n')
       if (args[0] === 'query' && args[1] === 'bank') {
         return Promise.resolve(
-          JSON.stringify({ balances: [{ denom: 'uact', amount: '100000000' }] }),
+          JSON.stringify({ balances: [{ denom: 'uakt', amount: '100000000' }] }),
         )
       }
       if (args[0] === 'query' && args[1] === 'deployment' && args[2] === 'list') {

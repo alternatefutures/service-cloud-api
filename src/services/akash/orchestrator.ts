@@ -34,8 +34,9 @@ const BID_POLL_MAX_ATTEMPTS = 10
 const SERVICE_POLL_INTERVAL_MS = 5000
 const SERVICE_POLL_MAX_ATTEMPTS = 24
 
-/** Default Akash deposit in uact (1 ACT — buffer for bid/lease process). */
-export const DEFAULT_DEPOSIT_UACT = 1_000_000
+/** Default Akash deposit in uakt (1 AKT — buffer for bid/lease process).
+ *  Escrow deposits use AKT (uakt), not ACT (uact). SDL pricing uses uact. */
+export const DEFAULT_DEPOSIT_UAKT = 1_000_000
 
 /**
  * Phase 38 — persistent volume attached to a raw Docker image. Mirrors the
@@ -448,7 +449,7 @@ export class AkashOrchestrator {
     const { broadcast, confirmed, txhash } = await runAkashTxAsync(
       [
         'tx', 'deployment', 'create', sdlPath,
-        '--deposit', `${deposit}uact`,
+        '--deposit', `${deposit}uakt`,
       ],
       { op: 'createDeployment', meta: { deposit } },
     )
@@ -530,7 +531,7 @@ export class AkashOrchestrator {
     const { txhash } = await runAkashTxAsync(
       [
         'tx', 'escrow', 'deposit', 'deployment',
-        `${amountUact}uact`,
+        `${amountUact}uakt`,
         '--dseq', String(dseq),
       ],
       { op: 'topUpDeploymentDeposit', meta: { dseq, amountUact } },
@@ -1179,7 +1180,7 @@ export class AkashOrchestrator {
       baseImage?: string
     } = {}
   ): Promise<string> {
-    const deposit = options.deposit || DEFAULT_DEPOSIT_UACT
+    const deposit = options.deposit || DEFAULT_DEPOSIT_UAKT
 
     const service = await this.prisma.service.findUnique({
       where: { id: serviceId },
@@ -1295,7 +1296,7 @@ export class AkashOrchestrator {
     functionId: string,
     sourceCode: string,
     functionName: string,
-    deposit = DEFAULT_DEPOSIT_UACT
+    deposit = DEFAULT_DEPOSIT_UAKT
   ): Promise<string> {
     const func = await this.prisma.aFFunction.findUnique({
       where: { id: functionId },

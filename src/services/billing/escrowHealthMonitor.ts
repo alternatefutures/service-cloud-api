@@ -38,8 +38,8 @@ const REFILL_HOURS = 1
 /** Safety-net cron — hourly at :30 (30 min after billing cycle at :00). */
 const ESCROW_CHECK_CRON = '30 * * * *'
 
-/** Warn when deployer wallet ACT balance falls below this (5 ACT). */
-const LOW_WALLET_THRESHOLD_UACT = 5_000_000
+/** Warn when deployer wallet AKT balance falls below this (5 AKT). Deposits require uakt. */
+const LOW_WALLET_THRESHOLD_UAKT = 5_000_000
 
 /**
  * Minimum on-chain age before we consider a deployment a sweep-able orphan.
@@ -74,17 +74,17 @@ const ORPHAN_MIN_AGE_BLOCKS = (() => {
  * the runbook (Section M of AF_INCIDENT_RUNBOOKS.md — "Akash Hot-Wallet
  * Cap Exceeded / Key Rotation"; §L is the unrelated failover-loop runbook).
  *
- * Override in production via `AKASH_HOT_WALLET_CAP_UACT` if the
+ * Override in production via `AKASH_HOT_WALLET_CAP_UAKT` if the
  * default is too tight for current usage.
  */
-const DEFAULT_HOT_WALLET_CAP_UACT = 50_000_000 // 50 ACT
-const HOT_WALLET_CAP_UACT = (() => {
-  const raw = process.env.AKASH_HOT_WALLET_CAP_UACT
-  if (!raw) return DEFAULT_HOT_WALLET_CAP_UACT
+const DEFAULT_HOT_WALLET_CAP_UAKT = 50_000_000 // 50 AKT
+const HOT_WALLET_CAP_UAKT = (() => {
+  const raw = process.env.AKASH_HOT_WALLET_CAP_UAKT
+  if (!raw) return DEFAULT_HOT_WALLET_CAP_UAKT
   const parsed = parseInt(raw, 10)
-  return Number.isFinite(parsed) && parsed > LOW_WALLET_THRESHOLD_UACT
+  return Number.isFinite(parsed) && parsed > LOW_WALLET_THRESHOLD_UAKT
     ? parsed
-    : DEFAULT_HOT_WALLET_CAP_UACT
+    : DEFAULT_HOT_WALLET_CAP_UAKT
 })()
 
 async function runAkashCmd(args: string[], timeout = AKASH_CLI_TIMEOUT_MS): Promise<string> {
@@ -461,27 +461,27 @@ export class EscrowHealthMonitor {
         '-o', 'json',
       ])
       const data = JSON.parse(output)
-      const uactBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uact')
-      const balance = parseInt(uactBal?.amount || '0', 10)
-      const balanceAct = (balance / 1_000_000).toFixed(4)
+      const uaktBal = data?.balances?.find((b: { denom: string }) => b.denom === 'uakt')
+      const balance = parseInt(uaktBal?.amount || '0', 10)
+      const balanceAkt = (balance / 1_000_000).toFixed(4)
 
-      if (balance < LOW_WALLET_THRESHOLD_UACT) {
+      if (balance < LOW_WALLET_THRESHOLD_UAKT) {
         log.warn(
-          { balanceUact: balance, balanceAct },
-          'CRITICAL: Deployer wallet ACT balance is low — escrow refills will fail soon'
+          { balanceUakt: balance, balanceAkt },
+          'CRITICAL: Deployer wallet AKT balance is low — escrow refills will fail soon'
         )
         await opsAlert({
           key: 'deployer-wallet-low-balance',
           severity: 'critical',
-          title: 'Deployer wallet ACT balance low',
+          title: 'Deployer wallet AKT balance low',
           message:
-            `Deployer wallet is below the ${(LOW_WALLET_THRESHOLD_UACT / 1_000_000).toFixed(0)} ACT threshold. ` +
+            `Deployer wallet is below the ${(LOW_WALLET_THRESHOLD_UAKT / 1_000_000).toFixed(0)} AKT threshold. ` +
             `On-chain escrow top-ups will start failing; deployments will be closed by providers and the platform will eat the uncovered time.`,
           context: {
             address,
-            balanceAct,
-            balanceUact: String(balance),
-            thresholdUact: String(LOW_WALLET_THRESHOLD_UACT),
+            balanceAkt,
+            balanceUakt: String(balance),
+            thresholdUakt: String(LOW_WALLET_THRESHOLD_UAKT),
           },
           // Alert hourly (matches the health-monitor cadence), not every 10 min.
           suppressMs: 55 * 60 * 1000,
@@ -492,9 +492,9 @@ export class EscrowHealthMonitor {
       // Hot-Wallet Cap Exceeded / Key Rotation"). The deployer wallet is
       // online — keeping it lean limits blast radius if the pod / key is
       // ever compromised.
-      if (balance > HOT_WALLET_CAP_UACT) {
+      if (balance > HOT_WALLET_CAP_UAKT) {
         log.warn(
-          { balanceUact: balance, balanceAct, capUact: HOT_WALLET_CAP_UACT },
+          { balanceUakt: balance, balanceAkt, capUakt: HOT_WALLET_CAP_UAKT },
           'Deployer hot wallet exceeds configured cap — sweep excess to cold storage',
         )
         await opsAlert({
@@ -502,14 +502,14 @@ export class EscrowHealthMonitor {
           severity: 'warning',
           title: 'Deployer hot wallet over cap',
           message:
-            `Deployer wallet holds ${balanceAct} ACT, above the ${(HOT_WALLET_CAP_UACT / 1_000_000).toFixed(0)} ACT hot-wallet cap. ` +
+            `Deployer wallet holds ${balanceAkt} AKT, above the ${(HOT_WALLET_CAP_UAKT / 1_000_000).toFixed(0)} AKT hot-wallet cap. ` +
             `Sweep the excess back to cold storage per AF_INCIDENT_RUNBOOKS.md §M. ` +
-            `Override the cap by setting AKASH_HOT_WALLET_CAP_UACT if usage justifies a larger float.`,
+            `Override the cap by setting AKASH_HOT_WALLET_CAP_UAKT if usage justifies a larger float.`,
           context: {
             address,
-            balanceAct,
-            balanceUact: String(balance),
-            capUact: String(HOT_WALLET_CAP_UACT),
+            balanceAkt,
+            balanceUakt: String(balance),
+            capUakt: String(HOT_WALLET_CAP_UAKT),
             excessUact: String(balance - HOT_WALLET_CAP_UACT),
           },
           // Daily nudge — over-cap is a slow-burn risk, not a page-now event.
@@ -676,7 +676,7 @@ export class EscrowHealthMonitor {
         'escrow',
         'deposit',
         'deployment',
-        `${refillUact}uact`,
+        `${refillUact}uakt`,
         '--dseq',
         dseq,
         '-y',

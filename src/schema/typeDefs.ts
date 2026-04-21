@@ -693,7 +693,7 @@ export const typeDefs = /* GraphQL */ `
   input DeployToAkashInput {
     # The canonical service ID from the Service registry
     serviceId: ID!
-    # Deposit amount in uact (default: 500000 = 0.5 ACT)
+    # Deposit amount in uakt (default: 500000 = 0.5 AKT)
     depositUakt: Int
     # Optional custom SDL content (if not provided, will be auto-generated based on service type)
     sdlContent: String

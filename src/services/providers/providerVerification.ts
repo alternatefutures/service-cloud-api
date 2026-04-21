@@ -19,7 +19,7 @@ import { join } from 'path'
 import type { PrismaClient, ComputeProviderType } from '@prisma/client'
 import { getAkashEnv as getAkashEnvBase } from '../../lib/akashEnv.js'
 import { getAllTemplates } from '../../templates/registry.js'
-import { DEFAULT_DEPOSIT_UACT } from '../akash/orchestrator.js'
+import { DEFAULT_DEPOSIT_UAKT } from '../akash/orchestrator.js'
 import { withWalletLock } from '../akash/walletMutex.js'
 import { generateSDLFromTemplate } from '../../templates/sdl.js'
 import { createLogger } from '../../lib/logger.js'
@@ -236,7 +236,7 @@ async function testSingleTemplate(
       const txResult = await withWalletLock(() =>
         execCli('akash', [
           'tx', 'deployment', 'create', sdlPath,
-          '--deposit', `${DEFAULT_DEPOSIT_UACT}uact`, '-o', 'json', '-y',
+          '--deposit', `${DEFAULT_DEPOSIT_UAKT}uakt`, '-o', 'json', '-y',
         ])
       )
       if (txResult.exitCode !== 0) return mkFail(txResult.stderr.trim().slice(0, 300))
