@@ -1323,6 +1323,10 @@ export class AkashOrchestrator {
     // Phase 38 — persistent volumes for raw Docker images. Json column on
     // Service. Templates own their own volumes via template.persistentStorage.
     volumes?: unknown
+    // Phase 39 / GitHub-source flavor — used to pick a sensible default port
+    // when the user (or builder) didn't set one. See port-fallback below.
+    flavor?: string | null
+    gitProvider?: string | null
     site?: { id: string } | null
     afFunction?: { id: string; sourceCode: string | null } | null
   }, resourceOverrides?: {
@@ -1409,7 +1413,23 @@ export class AkashOrchestrator {
     // Priority 2: Custom Docker image or user-selected base image
     const effectiveImage = service.dockerImage || baseImage
     if (effectiveImage) {
-      const port = service.containerPort || 80
+      // Default-port heuristic: GitHub-source builds (Next/Nuxt/Bun/etc.)
+      // overwhelmingly listen on 3000, so falling back to 80 there is the
+      // single biggest source of "deploy succeeds but URL 404s" reports.
+      // For docker / server flavors the user explicitly picked the image,
+      // so 80 stays the right default (nginx, caddy, traefik all listen
+      // there). Builder writes the detected port back to Service.containerPort
+      // when nixpacks reports it, so this fallback only kicks in for the
+      // (common) case where neither builder nor user supplied one.
+      const isGithubBuild = service.flavor === 'github' || !!service.gitProvider
+      const fallbackPort = isGithubBuild ? 3000 : 80
+      const port = service.containerPort || fallbackPort
+      if (!service.containerPort) {
+        log.warn(
+          { serviceId: service.id, slug: service.slug, isGithubBuild, fallbackPort },
+          `Service '${service.slug}' has no containerPort — defaulting SDL port to ${fallbackPort}. Set it explicitly via Config → Container port if your app listens elsewhere.`
+        )
+      }
       const parsedVolumes = parseServiceVolumes(service.volumes)
       log.info(
         { volumes: parsedVolumes.length },
