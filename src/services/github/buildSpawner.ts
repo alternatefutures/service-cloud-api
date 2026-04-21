@@ -1,15 +1,29 @@
 /**
- * af-builder Job spawner.
+ * af-builder spawner — dispatches a BuildJob to one of two backends:
  *
- * Reads `infra/k8s/builder/job.template.yaml`, substitutes per-build env,
- * and creates the Job in the `alternatefutures-builds` namespace.
+ *   - `k8s` (default): renders `infra/k8s/builder/job.template.yaml`,
+ *     creates a Job in `alternatefutures-builds`. The pod runs the
+ *     builder container alongside a privileged `docker:24-dind`
+ *     sidecar over a shared process namespace.
  *
- * In-cluster: uses the pod's mounted ServiceAccount token (the `af-builder-spawner`
- * SA has RBAC to manage Jobs in that namespace via `infra/k8s/builder/rbac.yaml`).
+ *   - `fly`: spawns a single ephemeral Fly Machine running the
+ *     `service-builder` Fly variant (`Dockerfile.fly`) which embeds
+ *     `dockerd` in-VM. Pay-per-second, auto-destroying, fully
+ *     isolated from our cluster. See `flyioBuilder.ts`.
+ *
+ * The active backend is selected via `BUILD_EXECUTOR=k8s|fly` (default
+ * `k8s` for safe rollback). The callback URL, HMAC token, env contract,
+ * and BuildJob row lifecycle are byte-identical across backends — this
+ * file is the only place that knows the difference.
+ *
+ * In-cluster (K8s path): uses the pod's mounted ServiceAccount token
+ * (the `af-builder-spawner` SA has RBAC to manage Jobs in the builds
+ * namespace via `infra/k8s/builder/rbac.yaml`).
  * Local dev: uses the developer's `~/.kube/config`.
  *
- * Local dev without a cluster: set `BUILDER_DRY_RUN=1` to skip Job creation
- * and only persist the BuildJob row — useful for UI iteration.
+ * Local dev without a cluster (any backend): set `BUILDER_DRY_RUN=1`
+ * to skip the spawn and only persist the BuildJob row — useful for
+ * UI iteration.
  */
 
 import * as k8s from '@kubernetes/client-node'
@@ -19,8 +33,21 @@ import { createLogger } from '../../lib/logger.js'
 import { getGithubAppConfig } from './config.js'
 import { signBuildToken } from './buildToken.js'
 import { buildCloneUrl } from './client.js'
+import { destroyFlyMachine, spawnFlyBuilder } from './flyioBuilder.js'
 
 const log = createLogger('github.buildSpawner')
+
+type BuildExecutor = 'k8s' | 'fly'
+
+/** `fly:<machine_id>` for Fly machines, raw `build-<jobid>` for K8s Jobs.
+ *  Stored verbatim into BuildJob.k8sJobName so deleteBuildJob can route. */
+const FLY_PREFIX = 'fly:'
+
+function getExecutor(): BuildExecutor {
+  const raw = (process.env.BUILD_EXECUTOR || 'k8s').toLowerCase()
+  if (raw === 'fly' || raw === 'flyio' || raw === 'fly.io') return 'fly'
+  return 'k8s'
+}
 
 const NAMESPACE = process.env.BUILDER_NAMESPACE || 'alternatefutures-builds'
 const BUILDER_IMAGE =
@@ -173,13 +200,44 @@ export interface SpawnBuildInput {
 }
 
 export interface SpawnedBuildJob {
+  /**
+   * Identifier we persist into `BuildJob.k8sJobName`. Despite the
+   * historical column name, this can be either a K8s Job name
+   * (`build-<jobId>`) OR a prefixed Fly machine handle
+   * (`fly:<machineId>`). `deleteBuildJob` routes on the prefix.
+   */
   k8sJobName: string
   /** True only when BUILDER_DRY_RUN=1 — used by tests + local dev. */
   dryRun: boolean
+  /** Which backend actually ran the build. Mirrored into logs/metrics. */
+  executor: BuildExecutor
+}
+
+/** Shared env contract for both K8s and Fly. The keys exactly match the
+ *  variables `service-builder/scripts/build.sh` reads. */
+function buildEnvFor(
+  input: SpawnBuildInput,
+  cloneUrl: string,
+  callbackUrl: string,
+  callbackToken: string,
+): Record<string, string> {
+  const cfg = getGithubAppConfig()
+  return {
+    BUILD_JOB_ID: input.buildJobId,
+    CALLBACK_URL: callbackUrl,
+    CALLBACK_TOKEN: callbackToken,
+    REPO_CLONE_URL: cloneUrl,
+    REPO_REF: input.commitSha,
+    IMAGE_TAG: input.imageTag,
+    GHCR_USER: cfg.ghcrUser,
+    GHCR_TOKEN: cfg.ghcrPushToken,
+    ROOT_DIRECTORY: input.rootDirectory || '.',
+    BUILD_COMMAND_B64: input.buildCommand ? toB64(input.buildCommand) : '',
+    START_COMMAND_B64: input.startCommand ? toB64(input.startCommand) : '',
+  }
 }
 
 export async function spawnBuildJob(input: SpawnBuildInput): Promise<SpawnedBuildJob> {
-  const cfg = getGithubAppConfig()
   const cloneUrl = await buildCloneUrl(input.installationId, input.repoOwner, input.repoName)
   const callbackBase =
     input.callbackBaseUrl || process.env.API_BASE_URL || 'https://api.alternatefutures.ai'
@@ -187,46 +245,97 @@ export async function spawnBuildJob(input: SpawnBuildInput): Promise<SpawnedBuil
   const callbackToken = signBuildToken(input.buildJobId)
 
   const jobName = `build-${input.buildJobId.toLowerCase()}`.slice(0, 63)
-
-  const yaml = loadTemplate()
-    .replaceAll('__JOB_NAME__', jobName)
-    .replaceAll('__NAMESPACE__', NAMESPACE)
-    .replaceAll('__BUILDER_IMAGE__', BUILDER_IMAGE)
-    .replaceAll('__BUILD_JOB_ID__', input.buildJobId)
-    .replaceAll('__CALLBACK_URL__', callbackUrl)
-    .replaceAll('__CALLBACK_TOKEN__', callbackToken)
-    // YAML strings are double-quoted in the template; embed-safely escape
-    // the few characters that could break out (`"` and `\`).
-    .replaceAll('__REPO_CLONE_URL__', escapeYamlValue(cloneUrl))
-    .replaceAll('__REPO_REF__', input.commitSha)
-    .replaceAll('__IMAGE_TAG__', input.imageTag)
-    .replaceAll('__GHCR_USER__', cfg.ghcrUser)
-    .replaceAll('__GHCR_TOKEN__', escapeYamlValue(cfg.ghcrPushToken))
-    .replaceAll('__ROOT_DIRECTORY__', input.rootDirectory || '.')
-    .replaceAll('__BUILD_COMMAND_B64__', input.buildCommand ? toB64(input.buildCommand) : '')
-    .replaceAll('__START_COMMAND_B64__', input.startCommand ? toB64(input.startCommand) : '')
+  const env = buildEnvFor(input, cloneUrl, callbackUrl, callbackToken)
+  const executor = getExecutor()
 
   if (process.env.BUILDER_DRY_RUN === '1') {
-    log.warn({ jobName, buildJobId: input.buildJobId }, 'BUILDER_DRY_RUN=1 — skipping K8s create')
-    return { k8sJobName: jobName, dryRun: true }
+    log.warn(
+      { jobName, buildJobId: input.buildJobId, executor },
+      'BUILDER_DRY_RUN=1 — skipping spawn',
+    )
+    return { k8sJobName: jobName, dryRun: true, executor }
   }
 
+  if (executor === 'fly') {
+    try {
+      const result = await spawnFlyBuilder({ name: jobName, env })
+      log.info(
+        { machineId: result.machineId, jobName, buildJobId: input.buildJobId, region: result.region },
+        'Fly builder machine launched',
+      )
+      return { k8sJobName: `${FLY_PREFIX}${result.machineId}`, dryRun: false, executor }
+    } catch (err) {
+      log.error(
+        { err, jobName, buildJobId: input.buildJobId },
+        'Fly builder spawn failed — falling back to K8s',
+      )
+      // Fall through to the K8s path so a Fly outage during cutover
+      // doesn't block builds entirely. Operators can disable the
+      // fallback by setting `BUILD_EXECUTOR_NO_FALLBACK=1`.
+      if (process.env.BUILD_EXECUTOR_NO_FALLBACK === '1') {
+        throw new Error(
+          `Fly builder spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }
+  }
+
+  return spawnK8sBuilderJob({ jobName, env, buildJobId: input.buildJobId })
+}
+
+function renderK8sJobYaml(args: { jobName: string; env: Record<string, string> }): string {
+  return loadTemplate()
+    .replaceAll('__JOB_NAME__', args.jobName)
+    .replaceAll('__NAMESPACE__', NAMESPACE)
+    .replaceAll('__BUILDER_IMAGE__', BUILDER_IMAGE)
+    .replaceAll('__BUILD_JOB_ID__', args.env.BUILD_JOB_ID)
+    .replaceAll('__CALLBACK_URL__', args.env.CALLBACK_URL)
+    .replaceAll('__CALLBACK_TOKEN__', args.env.CALLBACK_TOKEN)
+    // YAML strings are double-quoted in the template; embed-safely escape
+    // the few characters that could break out (`"` and `\`).
+    .replaceAll('__REPO_CLONE_URL__', escapeYamlValue(args.env.REPO_CLONE_URL))
+    .replaceAll('__REPO_REF__', args.env.REPO_REF)
+    .replaceAll('__IMAGE_TAG__', args.env.IMAGE_TAG)
+    .replaceAll('__GHCR_USER__', args.env.GHCR_USER)
+    .replaceAll('__GHCR_TOKEN__', escapeYamlValue(args.env.GHCR_TOKEN))
+    .replaceAll('__ROOT_DIRECTORY__', args.env.ROOT_DIRECTORY)
+    .replaceAll('__BUILD_COMMAND_B64__', args.env.BUILD_COMMAND_B64)
+    .replaceAll('__START_COMMAND_B64__', args.env.START_COMMAND_B64)
+}
+
+async function spawnK8sBuilderJob(args: {
+  jobName: string
+  env: Record<string, string>
+  buildJobId: string
+}): Promise<SpawnedBuildJob> {
+  const yaml = renderK8sJobYaml({ jobName: args.jobName, env: args.env })
   const parsed = k8s.loadYaml<k8s.V1Job>(yaml)
   const api = getKubeClient()
   try {
     await api.createNamespacedJob({ namespace: NAMESPACE, body: parsed })
   } catch (err: unknown) {
-    log.error({ err, jobName }, 'failed to create builder Job')
+    log.error({ err, jobName: args.jobName }, 'failed to create builder Job')
     throw new Error(`builder spawn failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  log.info({ jobName, buildJobId: input.buildJobId }, 'builder Job created')
-  return { k8sJobName: jobName, dryRun: false }
+  log.info({ jobName: args.jobName, buildJobId: args.buildJobId }, 'builder Job created')
+  return { k8sJobName: args.jobName, dryRun: false, executor: 'k8s' }
 }
 
-/** Best-effort delete of a builder Job (used on cancel + manual cleanup). */
+/**
+ * Best-effort cancel of an in-flight build. Routes to the right backend
+ * based on the prefix we wrote in `spawnBuildJob` (Fly machines carry
+ * the `fly:` prefix; raw K8s job names do not).
+ */
 export async function deleteBuildJob(k8sJobName: string): Promise<void> {
   if (process.env.BUILDER_DRY_RUN === '1') return
+
+  if (k8sJobName.startsWith(FLY_PREFIX)) {
+    const machineId = k8sJobName.slice(FLY_PREFIX.length)
+    await destroyFlyMachine(machineId)
+    return
+  }
+
   try {
     const api = getKubeClient()
     await api.deleteNamespacedJob({
