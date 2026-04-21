@@ -2264,6 +2264,10 @@ export const typeDefs = /* GraphQL */ `
     githubInstallations(orgId: ID): [GithubInstallation!]!
     githubInstallationRepos(installationId: ID!): [GithubRepoSummary!]!
     githubRepoBranches(installationId: ID!, owner: String!, repo: String!): [GithubBranchSummary!]!
+    """Fetch a single BuildJob by id (auth: caller must have access to the parent service's project). Used by the Source-tab build-history UI to lazy-load the logs blob on row expand."""
+    buildJob(id: ID!): BuildJob
+    """List recent BuildJobs for a service, newest first. Logs blob omitted — fetch it via buildJob(id) on demand. Used by the Source-tab build-history list (polled every 3s while a build is in flight)."""
+    serviceBuildJobs(serviceId: ID!, limit: Int): [BuildJob!]!
   }
 
   extend type Mutation {
@@ -2273,7 +2277,8 @@ export const typeDefs = /* GraphQL */ `
     refreshGithubInstallations(orgId: ID): [GithubInstallation!]!
     createGithubService(input: CreateGithubServiceInput!): Service!
     connectGithubRepo(input: ConnectGithubRepoInput!): Service!
-    redeployGithubService(serviceId: ID!): BuildJob!
+    """Trigger a new build. With no sha, builds the tip of the tracked branch (default behaviour, used by top-level Rebuild). With a sha (7-40 char hex commit SHA), rebuilds that exact commit — used by the per-row rebuild button in build history."""
+    redeployGithubService(serviceId: ID!, sha: String): BuildJob!
   }
 
   extend type Service {
