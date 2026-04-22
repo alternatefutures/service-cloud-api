@@ -56,6 +56,7 @@ RUN apt-get update && \
     ca-certificates \
     curl \
     dumb-init \
+    jq \
     unzip && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
