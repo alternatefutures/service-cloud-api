@@ -71,22 +71,44 @@ interface FlyConfig {
   memoryMb: number
   apiToken: string
   /**
-   * Fly Volume id (e.g. `vol_42kg90p00e8ywj14`) that backs the persistent
-   * buildkit/dockerd state. Set via FLY_BUILDER_CACHE_VOLUME. When set,
-   * every spawned machine attaches this volume at `cacheMountPath` and
-   * `build-fly.sh` points `dockerd --data-root` into a subdir of that
-   * mount. Result: base images, cache mounts (pnpm/pip/cargo stores),
-   * and buildkit snapshotter state all survive machine reaping.
+   * Fly Volume ids (e.g. `vol_42kg90p00e8ywj14`) that back the persistent
+   * buildkit/dockerd state. Set via FLY_BUILDER_CACHE_VOLUME as a
+   * comma-separated list. When non-empty, each spawned machine attaches
+   * ONE volume from the pool at `cacheMountPath` and `build-fly.sh`
+   * points `dockerd --data-root` into a subdir of that mount. Result:
+   * base images, cache mounts (pnpm/pip/cargo stores), and buildkit
+   * snapshotter state all survive machine reaping.
    *
    * Fly Volumes are single-attach. We spawn machines with `auto_destroy:
    * true`, so the previous machine's volume detaches when it exits —
    * but there's a small window where the new machine's POST /machines
-   * returns 409 "volume in use." Spawn retries with exp backoff.
+   * returns 409 "volume in use." With multiple volumes we pick a random
+   * one first, then rotate through the list on each 409 retry so N
+   * concurrent builds proceed fully warm instead of serializing on one
+   * volume and mostly falling back to ephemeral.
    *
-   * Leaving this unset falls back to ephemeral state (slow but works).
+   * Leaving this unset (empty list) falls back to ephemeral state
+   * (slow but works).
    */
-  cacheVolumeId: string | null
+  cacheVolumeIds: string[]
   cacheMountPath: string
+  /**
+   * Hard cap on how long `build-fly.sh` lets `/app/build.sh` run before
+   * SIGTERM + SIGKILL. Passed into the machine as AF_BUILD_TIMEOUT_SECONDS
+   * so the timeout wrapper lives in the builder image (closer to the
+   * actual process tree) rather than polling Fly from here. A 15-min cap
+   * means a runaway build costs at most ~$0.09 instead of the $0.11+
+   * zombies we saw in §5 of HANDOFF.md.
+   */
+  maxRuntimeSeconds: number
+}
+
+function parseVolumeList(raw: string | undefined): string[] {
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0)
 }
 
 function getFlyConfig(): FlyConfig {
@@ -103,10 +125,14 @@ function getFlyConfig(): FlyConfig {
     cpuKind: (process.env.FLY_BUILDER_CPU_KIND as 'shared' | 'performance') || 'performance',
     cpus: Number(process.env.FLY_BUILDER_CPUS || 2),
     memoryMb: Number(process.env.FLY_BUILDER_MEMORY_MB || 4096),
-    cacheVolumeId: process.env.FLY_BUILDER_CACHE_VOLUME || null,
+    cacheVolumeIds: parseVolumeList(process.env.FLY_BUILDER_CACHE_VOLUME),
     cacheMountPath: process.env.FLY_BUILDER_CACHE_MOUNT || '/var/lib/af-cache',
+    maxRuntimeSeconds: Number(process.env.FLY_BUILDER_MAX_RUNTIME_SECONDS || 900),
   }
 }
+
+/** Exported for testability — see flyioBuilder.test.ts. */
+export const __test__ = { parseVolumeList }
 
 /**
  * Returns parsed JSON for 2xx-with-body responses, or `undefined` for
@@ -148,60 +174,81 @@ async function flyFetch<T>(
  * The machine self-destructs on exit (`auto_destroy: true`), so there
  * is nothing to clean up unless the caller explicitly cancels.
  *
- * If `FLY_BUILDER_CACHE_VOLUME` is set, the volume is attached at
- * `cacheMountPath` so the builder can reuse dockerd + buildkit state
- * across machines. Fly Volumes are single-attach; if the previous
- * build's machine is still detaching we retry POST /machines with
- * exponential backoff (up to ~60s). Longer than that and we give up
- * — the caller's dispatcher will surface the failure.
+ * If `FLY_BUILDER_CACHE_VOLUME` is set (comma-separated volume id list),
+ * one volume from the pool is attached at `cacheMountPath` so the
+ * builder can reuse dockerd + buildkit state across machines. Fly
+ * Volumes are single-attach; on a 409 "volume busy" we rotate through
+ * the pool on each retry so N concurrent builds land on distinct
+ * volumes instead of serializing on one.
+ *
+ * If `FLY_BUILDER_MAX_RUNTIME_SECONDS` is set (default 900), the spawner
+ * passes the cap through as `AF_BUILD_TIMEOUT_SECONDS` in the machine's
+ * env; `build-fly.sh` enforces it via the `timeout(1)` command so a
+ * runaway build is killed and the Fly machine auto-destroys on exit —
+ * capping the worst-case cost per build.
  */
 export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnResult> {
   const cfg = getFlyConfig()
 
-  const baseConfig: Record<string, unknown> = {
-    image: cfg.image,
-    auto_destroy: true,
-    restart: { policy: 'no' as const },
-    guest: {
-      cpu_kind: cfg.cpuKind,
-      cpus: cfg.cpus,
-      memory_mb: cfg.memoryMb,
-    },
-    env: {
-      ...input.env,
-      // Echo mount info into the machine env so build-fly.sh doesn't
-      // have to probe `/proc/mounts` — keeps the shell side simple
-      // and makes the contract obvious: "if AF_CACHE_ROOT is set,
-      // dockerd data-root lives there."
-      ...(cfg.cacheVolumeId ? { AF_CACHE_ROOT: cfg.cacheMountPath } : {}),
-    },
-  }
-
-  if (cfg.cacheVolumeId) {
-    baseConfig.mounts = [
-      {
-        volume: cfg.cacheVolumeId,
-        path: cfg.cacheMountPath,
-      },
-    ]
-  }
-
-  const body = {
-    name: input.name,
-    region: cfg.region,
-    config: baseConfig,
-  }
+  // Randomize starting volume so concurrent spawns from different
+  // API replicas (or webhooks firing in quick succession) don't all
+  // pick pool[0] and collide. Each retry then rotates by +1 in the
+  // pool so we deterministically sweep every slot before giving up.
+  const poolSize = cfg.cacheVolumeIds.length
+  const startIndex = poolSize > 0 ? Math.floor(Math.random() * poolSize) : 0
 
   // Volume-attach race. If the previous builder machine is still in
   // `destroying`/`destroyed` state, its volume attachment lingers for
-  // a few seconds. Fly returns 409 "volume already attached to machine
-  // X" or similar; only cure is to wait. Base backoff: 2,4,8,16,30s,
-  // each scaled by a random [0.75, 1.25] jitter factor so concurrent
-  // pushes (e.g. CI fan-out, queued webhooks) don't synchronize their
-  // retries and re-collide on the same Fly volume slot every time.
+  // a few seconds. Base backoff: 2,4,8,16,30s, each scaled by a random
+  // [0.75, 1.25] jitter factor so concurrent pushes don't synchronize
+  // their retries. With a multi-volume pool we also rotate the chosen
+  // volume on each attempt, so attempt=0 may succeed immediately on a
+  // free slot even if pool[startIndex] was busy.
   const baseDelays = [2000, 4000, 8000, 16000, 30000]
   let lastErr: unknown = null
   for (let attempt = 0; attempt <= baseDelays.length; attempt += 1) {
+    const chosenVolume =
+      poolSize > 0 ? cfg.cacheVolumeIds[(startIndex + attempt) % poolSize] : null
+
+    const baseConfig: Record<string, unknown> = {
+      image: cfg.image,
+      auto_destroy: true,
+      restart: { policy: 'no' as const },
+      guest: {
+        cpu_kind: cfg.cpuKind,
+        cpus: cfg.cpus,
+        memory_mb: cfg.memoryMb,
+      },
+      env: {
+        ...input.env,
+        // Echo mount info into the machine env so build-fly.sh doesn't
+        // have to probe `/proc/mounts` — keeps the shell side simple
+        // and makes the contract obvious: "if AF_CACHE_ROOT is set,
+        // dockerd data-root lives there."
+        ...(chosenVolume ? { AF_CACHE_ROOT: cfg.cacheMountPath } : {}),
+        // Runtime cap enforced inside build-fly.sh via `timeout(1)`.
+        // Kept as a string because Fly's API coerces env values to
+        // strings anyway.
+        AF_BUILD_TIMEOUT_SECONDS: String(cfg.maxRuntimeSeconds),
+      },
+      ...(chosenVolume
+        ? {
+            mounts: [
+              {
+                volume: chosenVolume,
+                path: cfg.cacheMountPath,
+              },
+            ],
+          }
+        : {}),
+    }
+
+    const body = {
+      name: input.name,
+      region: cfg.region,
+      config: baseConfig,
+    }
+
     try {
       const machine = await flyFetch<FlyMachineResponse>(cfg, '/machines', {
         method: 'POST',
@@ -218,7 +265,9 @@ export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnRes
           name: machine.name,
           region: machine.region,
           state: machine.state,
-          volume: cfg.cacheVolumeId ?? null,
+          volume: chosenVolume,
+          volumePoolSize: poolSize,
+          maxRuntimeSeconds: cfg.maxRuntimeSeconds,
           attempt,
         },
         'Fly builder machine created',
@@ -227,16 +276,19 @@ export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnRes
     } catch (err) {
       lastErr = err
       const msg = err instanceof Error ? err.message : String(err)
+      // Retry only on volume-attach conflicts. When a pool is configured
+      // we always have somewhere else to try; rotating the volume choice
+      // above usually avoids the backoff wait entirely by the second attempt.
       const retryable =
-        cfg.cacheVolumeId !== null &&
+        poolSize > 0 &&
         (msg.includes('volume') || msg.includes('409')) &&
         attempt < baseDelays.length
       if (!retryable) throw err
       const jitter = 0.75 + Math.random() * 0.5 // [0.75, 1.25]
       const delayMs = Math.round(baseDelays[attempt] * jitter)
       log.warn(
-        { attempt, delayMs, err: msg },
-        'Fly machine spawn rejected (volume busy) — retrying',
+        { attempt, delayMs, err: msg, triedVolume: chosenVolume, poolSize },
+        'Fly machine spawn rejected (volume busy) — rotating volume + retrying',
       )
       await new Promise((r) => setTimeout(r, delayMs))
     }
