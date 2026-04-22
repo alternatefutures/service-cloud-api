@@ -128,6 +128,65 @@ function normalizeShellCommand(
   return trimmed
 }
 
+/**
+ * Throws unless the caller is a member of the AF org that owns the
+ * given GitHub installation.
+ *
+ * Use this on every read/mutation that derives data from (or attaches
+ * downstream resources to) a `GithubInstallation` row. The row's
+ * `organizationId` is the only authoritative tenant boundary —
+ * `context.organizationId` (header-derived) cannot be trusted for
+ * GitHub-related authz because:
+ *
+ *   1. Many legitimate code paths don't set `X-Organization-Id`
+ *      (web-app's `services/github/actions.ts`, CLI, PAT users).
+ *      Falsy `context.organizationId` previously short-circuited the
+ *      check `if (context.organizationId && install.organizationId !== context.organizationId)`,
+ *      letting any authenticated user fetch any install's repos.
+ *   2. `githubInstallations(orgId: X)` historically returned the
+ *      install's local cuid id without verifying the caller's org
+ *      membership, giving an attacker the cuid needed to call
+ *      `githubInstallationRepos`.
+ *
+ * Combining (1) and (2) gave a fully-closed exploit chain. This helper
+ * shuts both halves: every GitHub resolver derives the required org
+ * from the install row itself and verifies membership against
+ * `OrganizationMember` directly, ignoring the request header.
+ */
+async function assertInstallationAccess(
+  context: Context,
+  install: { organizationId: string },
+): Promise<void> {
+  const userId = requireAuth(context)
+  const member = await context.prisma.organizationMember.findFirst({
+    where: { organizationId: install.organizationId, userId },
+    select: { id: true },
+  })
+  if (!member) {
+    throw new GraphQLError('not authorized for this GitHub installation', {
+      extensions: { code: 'FORBIDDEN' },
+    })
+  }
+}
+
+/**
+ * Throws unless the caller is a member of the given AF organization.
+ * Lighter-weight cousin of `assertInstallationAccess` for queries that
+ * take an `orgId` arg directly (e.g. `githubInstallations`).
+ */
+async function assertOrgMembership(context: Context, orgId: string): Promise<void> {
+  const userId = requireAuth(context)
+  const member = await context.prisma.organizationMember.findFirst({
+    where: { organizationId: orgId, userId },
+    select: { id: true },
+  })
+  if (!member) {
+    throw new GraphQLError('not a member of this organization', {
+      extensions: { code: 'FORBIDDEN' },
+    })
+  }
+}
+
 function imageTagFor(userId: string, owner: string, repo: string, sha: string): string {
   const cfg = getGithubAppConfig()
   // Docker registry refs MUST be all lowercase. Prisma cuid userIds like
@@ -220,6 +279,10 @@ export const githubQueries = {
     assertGithubConfigured()
     const orgId = args.orgId || context.organizationId
     if (!orgId) throw new GraphQLError('orgId required')
+    // Without this membership check, any authenticated user could pass
+    // an arbitrary `orgId` and enumerate every GithubInstallation row
+    // (including the local cuid used as input to githubInstallationRepos).
+    await assertOrgMembership(context, orgId)
     return context.prisma.githubInstallation.findMany({
       where: { organizationId: orgId },
       orderBy: { createdAt: 'desc' },
@@ -237,9 +300,9 @@ export const githubQueries = {
       where: { id: args.installationId },
     })
     if (!install) throw new GraphQLError('installation not found')
-    if (context.organizationId && install.organizationId !== context.organizationId) {
-      throw new GraphQLError('not authorized', { extensions: { code: 'FORBIDDEN' } })
-    }
+    // Authoritative tenant boundary is the install row itself, not
+    // the caller's request header — see assertInstallationAccess docs.
+    await assertInstallationAccess(context, install)
     const repos = await listInstallationRepos(install.installationId)
     return repos.map((r) => ({
       id: String(r.id),
@@ -266,9 +329,7 @@ export const githubQueries = {
       where: { id: args.installationId },
     })
     if (!install) throw new GraphQLError('installation not found')
-    if (context.organizationId && install.organizationId !== context.organizationId) {
-      throw new GraphQLError('not authorized', { extensions: { code: 'FORBIDDEN' } })
-    }
+    await assertInstallationAccess(context, install)
     const branches = await listRepoBranches(install.installationId, args.owner, args.repo)
     return branches.map((b) => ({ name: b.name, sha: b.commit.sha, protected: b.protected }))
   },
@@ -605,6 +666,22 @@ export const githubMutations = {
       where: { id: input.installationId },
     })
     if (!install) throw new GraphQLError('installation not found')
+    // Even though `assertProjectAccess` proved the caller owns the
+    // project, that says nothing about whether they're allowed to
+    // attach THIS installation to it. Without this check a caller
+    // could enumerate any install's local cuid (until the
+    // githubInstallations membership check landed in the same diff)
+    // and bridge a victim's GitHub repo into their own project,
+    // triggering a build that pulls private source from GitHub via
+    // the install token. Require the install's org match the
+    // project's org (and the caller be a member of that org).
+    await assertInstallationAccess(context, install)
+    if (install.organizationId !== project.organizationId) {
+      throw new GraphQLError(
+        'GitHub installation belongs to a different organization than this project',
+        { extensions: { code: 'INSTALL_ORG_MISMATCH' } },
+      )
+    }
     if (install.suspendedAt) throw new GraphQLError('installation is suspended on GitHub')
 
     // Confirm the repo + branch are real (live API call)
@@ -723,6 +800,16 @@ export const githubMutations = {
       where: { id: input.installationId },
     })
     if (!install) throw new GraphQLError('installation not found')
+    // Same reasoning as createGithubService — the project ownership
+    // check doesn't authorize the install. Require both: caller is a
+    // member of install's org AND that org owns the project.
+    await assertInstallationAccess(context, install)
+    if (install.organizationId !== service.project.organizationId) {
+      throw new GraphQLError(
+        'GitHub installation belongs to a different organization than this service',
+        { extensions: { code: 'INSTALL_ORG_MISMATCH' } },
+      )
+    }
     if (install.suspendedAt) throw new GraphQLError('installation is suspended on GitHub')
 
     const repo = await getRepo(install.installationId, input.owner, input.repo)
