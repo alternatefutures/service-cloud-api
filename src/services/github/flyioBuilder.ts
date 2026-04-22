@@ -70,6 +70,23 @@ interface FlyConfig {
   cpus: number
   memoryMb: number
   apiToken: string
+  /**
+   * Fly Volume id (e.g. `vol_42kg90p00e8ywj14`) that backs the persistent
+   * buildkit/dockerd state. Set via FLY_BUILDER_CACHE_VOLUME. When set,
+   * every spawned machine attaches this volume at `cacheMountPath` and
+   * `build-fly.sh` points `dockerd --data-root` into a subdir of that
+   * mount. Result: base images, cache mounts (pnpm/pip/cargo stores),
+   * and buildkit snapshotter state all survive machine reaping.
+   *
+   * Fly Volumes are single-attach. We spawn machines with `auto_destroy:
+   * true`, so the previous machine's volume detaches when it exits —
+   * but there's a small window where the new machine's POST /machines
+   * returns 409 "volume in use." Spawn retries with exp backoff.
+   *
+   * Leaving this unset falls back to ephemeral state (slow but works).
+   */
+  cacheVolumeId: string | null
+  cacheMountPath: string
 }
 
 function getFlyConfig(): FlyConfig {
@@ -86,6 +103,8 @@ function getFlyConfig(): FlyConfig {
     cpuKind: (process.env.FLY_BUILDER_CPU_KIND as 'shared' | 'performance') || 'performance',
     cpus: Number(process.env.FLY_BUILDER_CPUS || 2),
     memoryMb: Number(process.env.FLY_BUILDER_MEMORY_MB || 4096),
+    cacheVolumeId: process.env.FLY_BUILDER_CACHE_VOLUME || null,
+    cacheMountPath: process.env.FLY_BUILDER_CACHE_MOUNT || '/var/lib/af-cache',
   }
 }
 
@@ -123,37 +142,91 @@ async function flyFetch<T>(
  * Spawn a one-shot Fly Machine that runs the builder image and exits.
  * The machine self-destructs on exit (`auto_destroy: true`), so there
  * is nothing to clean up unless the caller explicitly cancels.
+ *
+ * If `FLY_BUILDER_CACHE_VOLUME` is set, the volume is attached at
+ * `cacheMountPath` so the builder can reuse dockerd + buildkit state
+ * across machines. Fly Volumes are single-attach; if the previous
+ * build's machine is still detaching we retry POST /machines with
+ * exponential backoff (up to ~60s). Longer than that and we give up
+ * — the caller's dispatcher will surface the failure.
  */
 export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnResult> {
   const cfg = getFlyConfig()
 
-  const body = {
-    name: input.name,
-    region: cfg.region,
-    config: {
-      image: cfg.image,
-      auto_destroy: true,
-      restart: { policy: 'no' as const },
-      guest: {
-        cpu_kind: cfg.cpuKind,
-        cpus: cfg.cpus,
-        memory_mb: cfg.memoryMb,
-      },
-      env: input.env,
+  const baseConfig: Record<string, unknown> = {
+    image: cfg.image,
+    auto_destroy: true,
+    restart: { policy: 'no' as const },
+    guest: {
+      cpu_kind: cfg.cpuKind,
+      cpus: cfg.cpus,
+      memory_mb: cfg.memoryMb,
+    },
+    env: {
+      ...input.env,
+      // Echo mount info into the machine env so build-fly.sh doesn't
+      // have to probe `/proc/mounts` — keeps the shell side simple
+      // and makes the contract obvious: "if AF_CACHE_ROOT is set,
+      // dockerd data-root lives there."
+      ...(cfg.cacheVolumeId ? { AF_CACHE_ROOT: cfg.cacheMountPath } : {}),
     },
   }
 
-  const machine = await flyFetch<FlyMachineResponse>(cfg, '/machines', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
+  if (cfg.cacheVolumeId) {
+    baseConfig.mounts = [
+      {
+        volume: cfg.cacheVolumeId,
+        path: cfg.cacheMountPath,
+      },
+    ]
+  }
 
-  log.info(
-    { machineId: machine.id, name: machine.name, region: machine.region, state: machine.state },
-    'Fly builder machine created',
-  )
+  const body = {
+    name: input.name,
+    region: cfg.region,
+    config: baseConfig,
+  }
 
-  return { machineId: machine.id, name: machine.name, region: machine.region }
+  // Volume-attach race. If the previous builder machine is still in
+  // `destroying`/`destroyed` state, its volume attachment lingers for
+  // a few seconds. Fly returns 409 "volume already attached to machine
+  // X" or similar; only cure is to wait. Back off 2,4,8,16,30s.
+  const delays = [2000, 4000, 8000, 16000, 30000]
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      const machine = await flyFetch<FlyMachineResponse>(cfg, '/machines', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+      log.info(
+        {
+          machineId: machine.id,
+          name: machine.name,
+          region: machine.region,
+          state: machine.state,
+          volume: cfg.cacheVolumeId ?? null,
+          attempt,
+        },
+        'Fly builder machine created',
+      )
+      return { machineId: machine.id, name: machine.name, region: machine.region }
+    } catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      const retryable =
+        cfg.cacheVolumeId !== null &&
+        (msg.includes('volume') || msg.includes('409')) &&
+        attempt < delays.length
+      if (!retryable) throw err
+      log.warn(
+        { attempt, delayMs: delays[attempt], err: msg },
+        'Fly machine spawn rejected (volume busy) — retrying',
+      )
+      await new Promise((r) => setTimeout(r, delays[attempt]))
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('spawnFlyBuilder: exhausted retries')
 }
 
 /**

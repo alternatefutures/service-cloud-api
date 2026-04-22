@@ -153,6 +153,12 @@ spec:
               value: "__BUILD_COMMAND_B64__"
             - name: START_COMMAND_B64
               value: "__START_COMMAND_B64__"
+            - name: REPO_SOURCE_URL
+              value: "__REPO_SOURCE_URL__"
+            - name: REPO_OWNER
+              value: "__REPO_OWNER__"
+            - name: REPO_NAME
+              value: "__REPO_NAME__"
           resources:
             requests:
               cpu: "500m"
@@ -234,6 +240,22 @@ function buildEnvFor(
     ROOT_DIRECTORY: input.rootDirectory || '.',
     BUILD_COMMAND_B64: input.buildCommand ? toB64(input.buildCommand) : '',
     START_COMMAND_B64: input.startCommand ? toB64(input.startCommand) : '',
+    /**
+     * Canonical GitHub URL for the source repository. `build.sh` stamps
+     * this into the built image as the `org.opencontainers.image.source`
+     * label; GHCR reads that label on push and auto-links the container
+     * package to this repository. Without a linked repo, the REST API
+     * refuses to change package visibility (PATCH /orgs/.../visibility
+     * returns 404 for any target value), which is exactly the failure
+     * mode that leaves Akash pulls stuck on a private/internal image.
+     *
+     * Passed as the clean https URL — NOT the authenticated clone URL
+     * (that has a token embedded; the OCI label would leak it into
+     * every built image's manifest).
+     */
+    REPO_SOURCE_URL: `https://github.com/${input.repoOwner}/${input.repoName}`,
+    REPO_OWNER: input.repoOwner,
+    REPO_NAME: input.repoName,
   }
 }
 
@@ -301,6 +323,9 @@ function renderK8sJobYaml(args: { jobName: string; env: Record<string, string> }
     .replaceAll('__ROOT_DIRECTORY__', args.env.ROOT_DIRECTORY)
     .replaceAll('__BUILD_COMMAND_B64__', args.env.BUILD_COMMAND_B64)
     .replaceAll('__START_COMMAND_B64__', args.env.START_COMMAND_B64)
+    .replaceAll('__REPO_SOURCE_URL__', escapeYamlValue(args.env.REPO_SOURCE_URL))
+    .replaceAll('__REPO_OWNER__', args.env.REPO_OWNER)
+    .replaceAll('__REPO_NAME__', args.env.REPO_NAME)
 }
 
 async function spawnK8sBuilderJob(args: {
