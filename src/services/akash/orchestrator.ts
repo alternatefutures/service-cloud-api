@@ -408,6 +408,66 @@ function hasAnyServiceUris(serviceUrls: unknown): boolean {
   )
 }
 
+/**
+ * Emit an Akash SDL `credentials:` block (indented for nesting under
+ * `services.<name>:`) for GHCR-hosted images. Returns the empty string
+ * for images on other registries or when no token is configured — in
+ * that case we fall back to the "image is public" assumption (either
+ * intentionally, for templates pulling public base images, or as a
+ * graceful failure mode that a human will notice in the provider logs).
+ *
+ * Security posture: the emitted token is shipped to the *winning
+ * provider only* inside the manifest payload (NOT on-chain), but a
+ * malicious provider can still exfiltrate whatever password we hand
+ * them. We therefore STRONGLY prefer a dedicated read-only PAT
+ * (`GHCR_PULL_TOKEN`). If we have to fall back to `GHCR_PUSH_TOKEN`
+ * (which has `write:packages`), we log a loud warning so ops sees it.
+ *
+ * Usage site: prepended to the body of the service block in
+ * generateCustomDockerSDL (and, if we extend it, the template generator).
+ */
+function buildGhcrCredentialsBlock(image: string): string {
+  if (!image.startsWith('ghcr.io/')) return ''
+
+  const pullToken = process.env.GHCR_PULL_TOKEN || process.env.GHCR_PUSH_TOKEN
+  if (!pullToken) {
+    log.warn(
+      { image },
+      'GHCR image used but no GHCR_PULL_TOKEN/GHCR_PUSH_TOKEN configured — provider pulls will fail for private packages',
+    )
+    return ''
+  }
+
+  if (!process.env.GHCR_PULL_TOKEN && process.env.GHCR_PUSH_TOKEN) {
+    // Rate-limited warning: log once per unique image, not every SDL
+    // regeneration, to avoid flooding logs on busy deploys. Keyed on
+    // the image ref because same image = same leak surface.
+    if (!ghcrPullFallbackWarned.has(image)) {
+      ghcrPullFallbackWarned.add(image)
+      log.warn(
+        { image },
+        'Using GHCR_PUSH_TOKEN as pull credential — provider would gain write access if exfiltrated. Provision a read-only GHCR_PULL_TOKEN.',
+      )
+    }
+  }
+
+  // Username for GHCR PAT auth is a nonce; the token carries all the
+  // auth signal. We use a neutral literal rather than leaking a human
+  // identity (e.g. the owner of the push token).
+  // `host:` must include the scheme per Akash SDL spec (see SDL Advanced
+  // Features docs → "Private Container Registries"). Dropping the
+  // `https://` prefix makes providers silently treat the manifest as
+  // "no auth required" and ImagePullBackOff right back where we started.
+  return `    credentials:
+      host: https://ghcr.io
+      username: af-deploy
+      password: ${pullToken}
+`
+}
+
+/** Module-level set so the GHCR_PUSH_TOKEN fallback warning doesn't spam logs. */
+const ghcrPullFallbackWarned = new Set<string>()
+
 export class AkashOrchestrator {
   constructor(private prisma: PrismaClient) {}
 
@@ -1593,6 +1653,20 @@ export class AkashOrchestrator {
 `
       : ''
 
+    // ── Registry auth ───────────────────────────────────────────────
+    // GitHub-source builds push to GHCR as private packages (team-plan
+    // orgs can't flip container visibility via REST API; this was the
+    // previous unblocker and it's fragile as fuck). Akash SDL supports
+    // per-service `credentials:` which the provider uses as an
+    // imagePullSecret when scheduling the pod — private images pull
+    // fine and we never touch GitHub package visibility.
+    //
+    // The token ends up in the manifest that is sent to the *winning
+    // provider only* (not on-chain), so scope it minimally. We
+    // explicitly require a read-only PAT (GHCR_PULL_TOKEN); falling
+    // back to GHCR_PUSH_TOKEN works but leaks write access — log loud.
+    const credentialsBlock = buildGhcrCredentialsBlock(image)
+
     const cpu = resourceOverrides?.cpu ?? 0.5
     const memory = resourceOverrides?.memory ?? '512Mi'
     const ephemeralStorage = resourceOverrides?.storage ?? '1Gi'
@@ -1646,7 +1720,7 @@ version: "2.0"
 services:
   ${name}:
     image: ${image}
-${argsBlock}    expose:
+${credentialsBlock}${argsBlock}    expose:
       - port: ${containerPort}
         as: 80
         to:
