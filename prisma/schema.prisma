@@ -1478,6 +1478,14 @@ model ComputeProvider {
   gpuAvailable Int      @default(0) @map("gpu_available")
   gpuTotal     Int      @default(0) @map("gpu_total")
 
+  // Per-model VRAM and interface, populated from the Akash console API's
+  // `gpuModels[].ram` / `.interface` fields (e.g. {"h100":"80Gi","a100":"80Gi"}
+  // and {"h100":"sxm","a100":"sxm"}). Same model always has the same VRAM in
+  // practice; we key by model so a multi-GPU rig can expose both a 24Gi
+  // RTX 4090 and an 80Gi A100 without ambiguity.
+  gpuRam       Json? @map("gpu_ram")
+  gpuInterface Json? @map("gpu_interface")
+
   // Pricing range (from actual deployment bids, in uact)
   minPriceUact BigInt? @map("min_price_uact")
   maxPriceUact BigInt? @map("max_price_uact")
