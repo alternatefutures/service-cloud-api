@@ -346,7 +346,11 @@ async function startBuild(
     })
     await context.prisma.buildJob.update({
       where: { id: buildJob.id },
-      data: { k8sJobName: spawned.k8sJobName, status: 'RUNNING' },
+      data: {
+        k8sJobName: spawned.k8sJobName,
+        status: 'RUNNING',
+        logs: spawned.initialLog,
+      },
     })
     await context.prisma.service.update({
       where: { id: args.serviceId },

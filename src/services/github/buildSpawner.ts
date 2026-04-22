@@ -217,6 +217,17 @@ export interface SpawnedBuildJob {
   dryRun: boolean
   /** Which backend actually ran the build. Mirrored into logs/metrics. */
   executor: BuildExecutor
+  /**
+   * One-shot log line the caller should write into `BuildJob.logs` alongside
+   * the RUNNING status transition. Bridges the ~15-20s window between
+   * "spawn returned" and "builder container starts streaming" — otherwise
+   * the UI shows "No logs yet — the builder hasn't started writing." for
+   * long enough that users assume the build is stuck. Fly machines are
+   * the worst offender (image pull ~17s on cold machines); K8s Jobs get
+   * their own line too for consistency so the UI never shows the blank
+   * placeholder for a successfully spawned build.
+   */
+  initialLog: string
 }
 
 /** Shared env contract for both K8s and Fly. The keys exactly match the
@@ -261,8 +272,21 @@ function buildEnvFor(
 
 export async function spawnBuildJob(input: SpawnBuildInput): Promise<SpawnedBuildJob> {
   const cloneUrl = await buildCloneUrl(input.installationId, input.repoOwner, input.repoName)
+  // Precedence: explicit per-call override → `CALLBACK_BASE_URL` (public
+  // ingress, required when BUILD_EXECUTOR=fly because Fly machines can't
+  // resolve K8s internal DNS) → `API_BASE_URL` (in-cluster URL, works for
+  // BUILD_EXECUTOR=k8s) → hardcoded production ingress. The reason
+  // CALLBACK_BASE_URL exists as its own var: `API_BASE_URL` is widely
+  // referenced for "this pod's own base URL" and is set to the in-cluster
+  // DNS in both environments. Overloading it to mean "where the *builder*
+  // should post back to" breaks Fly (unreachable) or pollutes internal
+  // service-to-service calls with an unnecessary round-trip through the
+  // ingress. Keep the two concerns separate.
   const callbackBase =
-    input.callbackBaseUrl || process.env.API_BASE_URL || 'https://api.alternatefutures.ai'
+    input.callbackBaseUrl ||
+    process.env.CALLBACK_BASE_URL ||
+    process.env.API_BASE_URL ||
+    'https://api.alternatefutures.ai'
   const callbackUrl = `${callbackBase.replace(/\/$/, '')}/internal/build-callback`
   const callbackToken = signBuildToken(input.buildJobId)
 
@@ -275,7 +299,12 @@ export async function spawnBuildJob(input: SpawnBuildInput): Promise<SpawnedBuil
       { jobName, buildJobId: input.buildJobId, executor },
       'BUILDER_DRY_RUN=1 — skipping spawn',
     )
-    return { k8sJobName: jobName, dryRun: true, executor }
+    return {
+      k8sJobName: jobName,
+      dryRun: true,
+      executor,
+      initialLog: `[spawner] BUILDER_DRY_RUN=1 — no builder spawned (executor=${executor})\n`,
+    }
   }
 
   if (executor === 'fly') {
@@ -285,7 +314,21 @@ export async function spawnBuildJob(input: SpawnBuildInput): Promise<SpawnedBuil
         { machineId: result.machineId, jobName, buildJobId: input.buildJobId, region: result.region },
         'Fly builder machine launched',
       )
-      return { k8sJobName: `${FLY_PREFIX}${result.machineId}`, dryRun: false, executor }
+      // The Fly Machine API returns ~immediately but the VM then does a
+      // ~15-20s image pull of af-builder before our build.sh starts
+      // streaming. Write a human-readable breadcrumb now so the UI has
+      // SOMETHING to show during that window — otherwise we look hung.
+      const ts = new Date().toISOString()
+      const initialLog =
+        `[${ts}] [spawner] Fly machine ${result.machineId} created in region=${result.region}\n` +
+        `[${ts}] [spawner] Waiting for Fly to pull the af-builder image (~15-20s on cold machines)…\n` +
+        `[${ts}] [spawner] Build logs will appear here once the container starts.\n`
+      return {
+        k8sJobName: `${FLY_PREFIX}${result.machineId}`,
+        dryRun: false,
+        executor,
+        initialLog,
+      }
     } catch (err) {
       log.error(
         { err, jobName, buildJobId: input.buildJobId },
@@ -344,7 +387,12 @@ async function spawnK8sBuilderJob(args: {
   }
 
   log.info({ jobName: args.jobName, buildJobId: args.buildJobId }, 'builder Job created')
-  return { k8sJobName: args.jobName, dryRun: false, executor: 'k8s' }
+  const ts = new Date().toISOString()
+  const initialLog =
+    `[${ts}] [spawner] Kubernetes Job ${args.jobName} created in namespace ${NAMESPACE}\n` +
+    `[${ts}] [spawner] Waiting for builder pod to start (dind + builder containers)…\n` +
+    `[${ts}] [spawner] Build logs will appear here once the builder container starts.\n`
+  return { k8sJobName: args.jobName, dryRun: false, executor: 'k8s', initialLog }
 }
 
 /**
