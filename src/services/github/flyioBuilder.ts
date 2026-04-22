@@ -108,11 +108,16 @@ function getFlyConfig(): FlyConfig {
   }
 }
 
+/**
+ * Returns parsed JSON for 2xx-with-body responses, or `undefined` for
+ * 204 No Content. Callers that depend on a body should narrow with a
+ * runtime check rather than assuming non-null.
+ */
 async function flyFetch<T>(
   cfg: FlyConfig,
   pathSuffix: string,
   init: RequestInit & { method: 'GET' | 'POST' | 'DELETE' },
-): Promise<T> {
+): Promise<T | undefined> {
   const url = `${FLY_API_BASE}/apps/${encodeURIComponent(cfg.app)}${pathSuffix}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), FLY_TIMEOUT_MS)
@@ -131,7 +136,7 @@ async function flyFetch<T>(
       throw new Error(`Fly API ${init.method} ${pathSuffix} failed: ${res.status} ${body}`)
     }
     // DELETE returns 200 with `{ ok: true }`, GET/POST return JSON; both safe to parse.
-    if (res.status === 204) return undefined as unknown as T
+    if (res.status === 204) return undefined
     return (await res.json()) as T
   } finally {
     clearTimeout(timer)
@@ -190,15 +195,23 @@ export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnRes
   // Volume-attach race. If the previous builder machine is still in
   // `destroying`/`destroyed` state, its volume attachment lingers for
   // a few seconds. Fly returns 409 "volume already attached to machine
-  // X" or similar; only cure is to wait. Back off 2,4,8,16,30s.
-  const delays = [2000, 4000, 8000, 16000, 30000]
+  // X" or similar; only cure is to wait. Base backoff: 2,4,8,16,30s,
+  // each scaled by a random [0.75, 1.25] jitter factor so concurrent
+  // pushes (e.g. CI fan-out, queued webhooks) don't synchronize their
+  // retries and re-collide on the same Fly volume slot every time.
+  const baseDelays = [2000, 4000, 8000, 16000, 30000]
   let lastErr: unknown = null
-  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+  for (let attempt = 0; attempt <= baseDelays.length; attempt += 1) {
     try {
       const machine = await flyFetch<FlyMachineResponse>(cfg, '/machines', {
         method: 'POST',
         body: JSON.stringify(body),
       })
+      // POST /machines always returns a body on success; if it didn't, Fly
+      // changed its contract and we have no machine id to track.
+      if (!machine) {
+        throw new Error('Fly POST /machines returned no body — cannot track machine lifecycle')
+      }
       log.info(
         {
           machineId: machine.id,
@@ -217,13 +230,15 @@ export async function spawnFlyBuilder(input: FlySpawnInput): Promise<FlySpawnRes
       const retryable =
         cfg.cacheVolumeId !== null &&
         (msg.includes('volume') || msg.includes('409')) &&
-        attempt < delays.length
+        attempt < baseDelays.length
       if (!retryable) throw err
+      const jitter = 0.75 + Math.random() * 0.5 // [0.75, 1.25]
+      const delayMs = Math.round(baseDelays[attempt] * jitter)
       log.warn(
-        { attempt, delayMs: delays[attempt], err: msg },
+        { attempt, delayMs, err: msg },
         'Fly machine spawn rejected (volume busy) — retrying',
       )
-      await new Promise((r) => setTimeout(r, delays[attempt]))
+      await new Promise((r) => setTimeout(r, delayMs))
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('spawnFlyBuilder: exhausted retries')

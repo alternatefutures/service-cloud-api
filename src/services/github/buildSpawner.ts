@@ -432,7 +432,7 @@ export async function deleteBuildJob(k8sJobName: string): Promise<void> {
  * parsing. We don't reach for js-yaml because we own the template, this
  * single helper, and know the surrounding context is always `"…"`.
  */
-function escapeYamlValue(v: string): string {
+export function escapeYamlValue(v: string): string {
   return v
     .replaceAll('\\', '\\\\')
     .replaceAll('"', '\\"')
