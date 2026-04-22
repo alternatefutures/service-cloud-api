@@ -317,7 +317,11 @@ async function handlePushEvent(prisma: PrismaClient, payload: PushEvent): Promis
       })
       await prisma.buildJob.update({
         where: { id: buildJob.id },
-        data: { k8sJobName: spawned.k8sJobName, status: 'RUNNING' },
+        data: {
+          k8sJobName: spawned.k8sJobName,
+          status: 'RUNNING',
+          logs: spawned.initialLog,
+        },
       })
     } catch (err) {
       log.error({ err, serviceId: svc.id }, 'push-triggered rebuild failed to spawn')
