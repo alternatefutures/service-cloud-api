@@ -426,7 +426,7 @@ function hasAnyServiceUris(serviceUrls: unknown): boolean {
  * Usage site: prepended to the body of the service block in
  * generateCustomDockerSDL (and, if we extend it, the template generator).
  */
-function buildGhcrCredentialsBlock(image: string): string {
+export function buildGhcrCredentialsBlock(image: string): string {
   if (!image.startsWith('ghcr.io/')) return ''
 
   const pullToken = process.env.GHCR_PULL_TOKEN || process.env.GHCR_PUSH_TOKEN
@@ -439,11 +439,27 @@ function buildGhcrCredentialsBlock(image: string): string {
   }
 
   if (!process.env.GHCR_PULL_TOKEN && process.env.GHCR_PUSH_TOKEN) {
-    // Rate-limited warning: log once per unique image, not every SDL
-    // regeneration, to avoid flooding logs on busy deploys. Keyed on
-    // the image ref because same image = same leak surface.
-    if (!ghcrPullFallbackWarned.has(image)) {
-      ghcrPullFallbackWarned.add(image)
+    // Rate-limited warning: log at most once per image per TTL window,
+    // not every SDL regeneration, to avoid flooding logs on busy deploys.
+    // Keyed on the image ref because same image = same leak surface.
+    // Bounded with a TTL + size cap so we don't grow unbounded if a
+    // misconfigured env stays broken for weeks across many image refs.
+    const now = Date.now()
+    const lastWarned = ghcrPullFallbackWarned.get(image)
+    if (!lastWarned || now - lastWarned > GHCR_WARN_TTL_MS) {
+      // Opportunistic eviction: drop expired entries when we touch the map,
+      // and hard-cap size to prevent pathological growth in degraded mode.
+      if (ghcrPullFallbackWarned.size > GHCR_WARN_MAX_ENTRIES) {
+        for (const [k, ts] of ghcrPullFallbackWarned) {
+          if (now - ts > GHCR_WARN_TTL_MS) ghcrPullFallbackWarned.delete(k)
+        }
+        // If still over cap after expiry sweep, clear the oldest half by
+        // simply clearing the whole thing — re-warning is cheap.
+        if (ghcrPullFallbackWarned.size > GHCR_WARN_MAX_ENTRIES) {
+          ghcrPullFallbackWarned.clear()
+        }
+      }
+      ghcrPullFallbackWarned.set(image, now)
       log.warn(
         { image },
         'Using GHCR_PUSH_TOKEN as pull credential — provider would gain write access if exfiltrated. Provision a read-only GHCR_PULL_TOKEN.',
@@ -465,8 +481,14 @@ function buildGhcrCredentialsBlock(image: string): string {
 `
 }
 
-/** Module-level set so the GHCR_PUSH_TOKEN fallback warning doesn't spam logs. */
-const ghcrPullFallbackWarned = new Set<string>()
+/**
+ * Bounded TTL map so the GHCR_PUSH_TOKEN fallback warning doesn't spam logs
+ * AND doesn't grow unbounded across many image refs in long-running
+ * processes. Values are timestamps (ms epoch) of the last warn for that key.
+ */
+const GHCR_WARN_TTL_MS = 60 * 60 * 1000 // 1 hour
+const GHCR_WARN_MAX_ENTRIES = 1000
+const ghcrPullFallbackWarned = new Map<string, number>()
 
 export class AkashOrchestrator {
   constructor(private prisma: PrismaClient) {}
