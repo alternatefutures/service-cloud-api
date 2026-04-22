@@ -28,7 +28,6 @@ import { createLogger } from '../lib/logger.js'
 import { getGithubAppConfig, isGithubAppConfigured } from '../services/github/config.js'
 import {
   getInstallation,
-  listAllInstallations,
   listInstallationRepos,
   listRepoBranches,
   getRepo,
@@ -429,13 +428,40 @@ export const githubMutations = {
     const orgId = args.orgId || context.organizationId
     if (!orgId) throw new GraphQLError('orgId required')
 
-    // Verify ownership of the org
     const member = await context.prisma.organizationMember.findFirst({
       where: { organizationId: orgId, userId },
     })
     if (!member) throw new GraphQLError('not a member of this org', { extensions: { code: 'FORBIDDEN' } })
 
     const installIdNum = BigInt(args.installationId)
+
+    // Tenant-ownership check: if a row already exists for this
+    // installationId, it can only be (re-)synced by its owning org.
+    // The previous upsert-by-installationId would silently run the
+    // `update` branch and return the row to the caller — exposing
+    // the install's account metadata even though downstream
+    // resolvers (githubInstallationRepos etc.) would 403. We now
+    // fail loud instead.
+    const existing = await context.prisma.githubInstallation.findUnique({
+      where: { installationId: installIdNum },
+      select: { id: true, organizationId: true },
+    })
+    if (existing && existing.organizationId !== orgId) {
+      log.warn(
+        {
+          installationId: args.installationId,
+          callingOrgId: orgId,
+          ownedByOrgId: existing.organizationId,
+          userId,
+        },
+        'syncGithubInstallation refused: install already owned by another tenant',
+      )
+      throw new GraphQLError(
+        'this GitHub installation is already connected to a different AlternateFutures organization',
+        { extensions: { code: 'INSTALL_OWNED_BY_OTHER_ORG' } },
+      )
+    }
+
     const meta = await getInstallation(installIdNum)
 
     return context.prisma.githubInstallation.upsert({
@@ -461,60 +487,76 @@ export const githubMutations = {
   },
 
   /**
-   * Live-sync ALL App installations from GitHub into the local DB and
-   * return the org's installations after the sync. Slow path (one
-   * /app/installations call + N upserts) — only invoked by the UI's
-   * "Refresh" button or after the user installs the App in a popup.
-   * The plain `githubInstallations` query stays a pure DB read.
+   * Re-sync **the caller's own** installations' metadata from GitHub.
+   *
+   * History: this mutation used to call `listAllInstallations()` (which
+   * returns every install of the App across ALL of GitHub, via the App
+   * JWT) and then upsert every row with `organizationId = caller's org`.
+   * That made the **first AF tenant to hit Refresh** silently claim
+   * every installation in the world into their tenant — a critical
+   * multi-tenant data leak the moment the App went public on
+   * 2026-04-22.
+   *
+   * Fixed shape:
+   *  1. Read the caller org's existing installations from the DB.
+   *  2. For each, hit `GET /app/installations/{id}` to refresh metadata
+   *     (suspended_at, repository_selection, account rename, etc.).
+   *  3. Never create a new row here. New installs are claimed exactly
+   *     once, by `syncGithubInstallation`, which is called from the
+   *     post-install setup_url hook with the exact install_id GitHub
+   *     redirected with. That path verifies org membership and uses
+   *     `installationId` as the unique key, so an installation can
+   *     only be claimed by one AF tenant for its lifetime.
+   *
+   * If you need to re-discover installs that are known to GitHub but
+   * missing locally (e.g. webhook delivery failed), the intended UX is
+   * to have the user click "Install" again — GitHub routes them to the
+   * configure page, which triggers a fresh setup_url redirect and
+   * therefore a fresh `syncGithubInstallation` call.
    */
   refreshGithubInstallations: async (
     _: unknown,
     args: { orgId?: string },
     context: Context,
   ) => {
-    const userId = requireAuth(context)
+    requireAuth(context)
     assertGithubConfigured()
     const orgId = args.orgId || context.organizationId
     if (!orgId) throw new GraphQLError('orgId required')
 
-    try {
-      const live = await listAllInstallations()
-      for (const inst of live) {
-        const accountLogin = inst.account?.login ?? 'unknown'
-        const accountId = BigInt(inst.account?.id ?? 0)
-        const accountType = inst.account?.type ?? 'User'
-        const targetType = inst.repository_selection === 'selected' ? 'selected' : 'all'
-        const suspendedAt = inst.suspended_at ? new Date(inst.suspended_at) : null
-        await context.prisma.githubInstallation.upsert({
-          where: { installationId: BigInt(inst.id) },
-          create: {
-            installationId: BigInt(inst.id),
-            organizationId: orgId,
-            installedByUserId: userId,
-            accountLogin,
-            accountId,
-            accountType,
-            targetType,
-            suspendedAt,
-          },
-          update: {
-            accountLogin,
-            accountId,
-            accountType,
-            targetType,
-            suspendedAt,
-          },
-        })
-      }
-    } catch (err) {
-      log.warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'live installation sync failed',
-      )
-      throw new GraphQLError('failed to sync installations from GitHub', {
-        extensions: { code: 'GITHUB_SYNC_FAILED' },
-      })
-    }
+    const owned = await context.prisma.githubInstallation.findMany({
+      where: { organizationId: orgId },
+      select: { id: true, installationId: true },
+    })
+
+    await Promise.all(
+      owned.map(async (row) => {
+        try {
+          const meta = await getInstallation(row.installationId)
+          await context.prisma.githubInstallation.update({
+            where: { id: row.id },
+            data: {
+              accountLogin: meta.account.login,
+              accountId: BigInt(meta.account.id),
+              accountType: meta.account.type,
+              targetType: meta.repository_selection,
+              suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
+            },
+          })
+        } catch (err) {
+          // Per-row failure is expected (install deleted out-of-band,
+          // transient GitHub 5xx, etc.). Log + move on; caller still
+          // gets the DB view below.
+          log.warn(
+            {
+              installationId: String(row.installationId),
+              err: err instanceof Error ? err.message : String(err),
+            },
+            'per-installation refresh failed',
+          )
+        }
+      }),
+    )
 
     return context.prisma.githubInstallation.findMany({
       where: { organizationId: orgId },
