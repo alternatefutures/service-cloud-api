@@ -135,10 +135,32 @@ export class ProviderRegistryScheduler {
       const gpuStats = provider.stats?.gpu
       const gpuAvailable = gpuStats?.available ?? 0
       const gpuTotal = gpuStats?.total ?? 0
-      const gpuModels = (provider.gpuModels ?? [])
-        .map(g => g.model?.toLowerCase())
-        .filter((m): m is string => !!m)
+      // Normalise the console API's gpuModels[] into three parallel
+      // structures: a deduped string[] of model names (kept for backward
+      // compat with every existing query/filter), and two JSON maps that
+      // surface VRAM + interface per model so the dropdown/overview
+      // cards can render "H100 · 80GB" without re-parsing chain attrs.
+      const rawGpuModels = provider.gpuModels ?? []
+      const gpuModels: string[] = []
+      const gpuRam: Record<string, string> = {}
+      const gpuInterface: Record<string, string> = {}
+      for (const g of rawGpuModels) {
+        const model = g.model?.toLowerCase()
+        if (!model) continue
+        gpuModels.push(model)
+        // First write wins; same model on the same provider always
+        // reports the same VRAM in the wild, but in case the console
+        // ever returns conflicting rows we prefer the one with a
+        // non-empty value over an empty placeholder.
+        if (g.ram && !gpuRam[model]) gpuRam[model] = g.ram
+        if (g.interface && !gpuInterface[model]) {
+          gpuInterface[model] = g.interface.toLowerCase()
+        }
+      }
       const uniqueGpuModels = [...new Set(gpuModels)]
+      const gpuRamPayload = Object.keys(gpuRam).length > 0 ? gpuRam : null
+      const gpuInterfacePayload =
+        Object.keys(gpuInterface).length > 0 ? gpuInterface : null
 
       try {
         await this.prisma.computeProvider.upsert({
@@ -151,6 +173,8 @@ export class ProviderRegistryScheduler {
             gpuModels: uniqueGpuModels,
             gpuAvailable,
             gpuTotal,
+            gpuRam: gpuRamPayload as any,
+            gpuInterface: gpuInterfacePayload as any,
             attributes: provider.attributes as any ?? null,
           },
           update: {
@@ -159,6 +183,8 @@ export class ProviderRegistryScheduler {
             gpuModels: uniqueGpuModels,
             gpuAvailable,
             gpuTotal,
+            gpuRam: gpuRamPayload as any,
+            gpuInterface: gpuInterfacePayload as any,
             attributes: provider.attributes as any ?? null,
           },
         })

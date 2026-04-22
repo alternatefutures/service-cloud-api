@@ -76,6 +76,8 @@ export async function handleProviderRegistryRequest(
         gpuModels: p.gpuModels,
         gpuAvailable: p.gpuAvailable,
         gpuTotal: p.gpuTotal,
+        gpuRam: p.gpuRam ?? null,
+        gpuInterface: p.gpuInterface ?? null,
         minPriceUact: p.minPriceUact?.toString() ?? null,
         maxPriceUact: p.maxPriceUact?.toString() ?? null,
         templateResults: p.templateResults.map(tr => ({
