@@ -7,8 +7,11 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { execFile } from 'node:child_process'
 import type { PrismaClient } from '@prisma/client'
 import { createLogger } from '../../lib/logger.js'
+import { getAkashEnv } from '../../lib/akashEnv.js'
+import { checkBalance } from '../providers/providerVerification.js'
 
 const log = createLogger('admin-billing-stats')
 
@@ -26,6 +29,55 @@ interface PhalaRow {
   active_hourly_burn_cents: bigint
 }
 
+interface WalletBalanceSnapshot {
+  address: string
+  uakt: number
+  uact: number
+  akt: number
+  act: number
+}
+
+async function resolveAkashWalletAddress(): Promise<string> {
+  const env = getAkashEnv({ skipMnemonicCheck: true })
+  const keyName = process.env.AKASH_KEY_NAME || 'default'
+  return new Promise<string>((resolve, reject) => {
+    execFile(
+      'akash',
+      ['keys', 'show', keyName, '-a'],
+      { env, timeout: 15_000, encoding: 'utf-8' },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(`akash keys show failed: ${(stderr || err.message).trim()}`))
+          return
+        }
+        resolve(stdout.trim())
+      },
+    )
+  })
+}
+
+async function getAkashWalletSnapshot(): Promise<WalletBalanceSnapshot | null> {
+  try {
+    const [address, balance] = await Promise.all([
+      resolveAkashWalletAddress(),
+      checkBalance(),
+    ])
+    return {
+      address,
+      uakt: balance.uakt,
+      uact: balance.uact,
+      akt: balance.akt,
+      act: balance.act,
+    }
+  } catch (error) {
+    log.warn(
+      { err: error, message: (error as Error)?.message },
+      'Failed to read Akash wallet balance for admin stats',
+    )
+    return null
+  }
+}
+
 export async function handleAdminBillingStats(
   req: IncomingMessage,
   res: ServerResponse,
@@ -41,16 +93,16 @@ export async function handleAdminBillingStats(
   }
 
   try {
-    const akashRows = await prisma.$queryRaw<AkashRow[]>`
+    const [akashRows, phalaRows, akashWallet] = await Promise.all([
+      prisma.$queryRaw<AkashRow[]>`
       SELECT
         COALESCE(SUM(e."consumed_cents"), 0)::bigint AS total_charged_cents,
         COALESCE(SUM(ROUND(e."consumed_cents" / (1.0 + e."margin_rate")))::bigint, 0) AS total_cost_cents,
         COUNT(DISTINCT CASE WHEN e."status" = 'ACTIVE' THEN e.id END)::bigint AS active_count,
         COALESCE(SUM(CASE WHEN e."status" = 'ACTIVE' THEN e."daily_rate_cents" ELSE 0 END), 0)::bigint AS active_daily_burn_cents
       FROM "deployment_escrow" e
-    `
-
-    const phalaRows = await prisma.$queryRaw<PhalaRow[]>`
+    `,
+      prisma.$queryRaw<PhalaRow[]>`
       SELECT
         COALESCE(SUM(pd."total_billed_cents"), 0)::bigint AS total_charged_cents,
         COALESCE(SUM(CASE WHEN pd."margin_rate" IS NOT NULL AND pd."margin_rate" > 0
@@ -59,7 +111,9 @@ export async function handleAdminBillingStats(
         COUNT(DISTINCT CASE WHEN pd."status" = 'ACTIVE' THEN pd.id END)::bigint AS active_count,
         COALESCE(SUM(CASE WHEN pd."status" = 'ACTIVE' THEN pd."hourly_rate_cents" ELSE 0 END), 0)::bigint AS active_hourly_burn_cents
       FROM "PhalaDeployment" pd
-    `
+    `,
+      getAkashWalletSnapshot(),
+    ])
 
     const akash = akashRows[0]
     const phala = phalaRows[0]
@@ -77,6 +131,7 @@ export async function handleAdminBillingStats(
         profitCents: akashCharged - akashCost,
         activeCount: Number(akash.active_count),
         activeDailyBurnCents: Number(akash.active_daily_burn_cents),
+        wallet: akashWallet,
       },
       phala: {
         totalChargedCents: phalaCharged,
@@ -84,6 +139,7 @@ export async function handleAdminBillingStats(
         profitCents: phalaCharged - phalaCost,
         activeCount: Number(phala.active_count),
         activeHourlyBurnCents: Number(phala.active_hourly_burn_cents),
+        wallet: null,
       },
     }))
   } catch (err) {
