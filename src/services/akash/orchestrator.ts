@@ -1128,12 +1128,12 @@ export class AkashOrchestrator {
   ): Promise<ShellSession> {
     const env = getAkashEnv()
 
-    // Default to /bin/sh because provider-services treats extra command
-    // args like `-c` as its own flags. /bin/sh is present on minimal images
-    // like Alpine, while /bin/bash is not. Caller-provided `command` is
-    // still passed through unchanged for images/users that explicitly want
-    // bash, zsh, or another entrypoint.
-    const shellPositional = [command || '/bin/sh']
+    // Default to an interactive POSIX shell. Pass it as ONE positional
+    // command string: provider-services treats additional split args like
+    // `-c` as its own flags. `/bin/sh -i` works on minimal images such as
+    // Alpine and still works on Ubuntu/Debian/Fedora. Caller-provided
+    // `command` is passed through unchanged.
+    const shellPositional = [command || '/bin/sh -i']
 
     const args = [
       'lease-shell',
