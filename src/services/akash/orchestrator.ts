@@ -1124,13 +1124,30 @@ export class AkashOrchestrator {
     dseq: number,
     provider: string,
     service: string,
-    command = '/bin/bash'
+    command?: string
   ): Promise<ShellSession> {
     const env = getAkashEnv()
+
+    // Default shell selection — minimal images (alpine, scratch-derived,
+    // distroless-shell) often DO NOT have /bin/bash. Hard-defaulting to
+    // /bin/bash makes `af ssh` fail on those images even though the
+    // container is alive and the platform exec path works fine. We pick
+    // bash if it exists, fall back to sh, and run interactively in both
+    // cases. Caller-provided `command` is passed through unchanged so
+    // explicit `--command /bin/bash` / `--command /bin/zsh` / etc still
+    // work the way the user typed it.
+    const shellPositional = command
+      ? [command]
+      : [
+          '/bin/sh',
+          '-c',
+          'if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi',
+        ]
+
     const args = [
       'lease-shell',
       service,
-      command,
+      ...shellPositional,
       '--dseq', String(dseq),
       '--provider', provider,
       '--stdin',
