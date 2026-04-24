@@ -327,11 +327,6 @@ export class ShellEndpoint {
       'SHELL_OPEN'
     )
 
-    // Start in home directory with a clean screen
-    session.write('cd ~ 2>/dev/null; clear\r')
-
-    sendJson(ws, { type: 'ready' })
-
     // Idle timeout management
     let idleTimer = setTimeout(() => {
       cleanup('idle_timeout')
@@ -372,6 +367,14 @@ export class ShellEndpoint {
     session.onExit((code) => {
       cleanup(`process_exit(${code})`)
     })
+
+    sendJson(ws, { type: 'ready' })
+
+    // Initialize after the client receives `ready`; otherwise early shell
+    // output can arrive while the CLI is still waiting for JSON and be
+    // discarded. Avoid `clear` here: minimal shells such as Alpine's ash can
+    // leave the terminal looking blank even though the PTY is alive.
+    session.write("cd ~ 2>/dev/null || cd /; export PS1='\\w # '; printf '\\n'\r")
 
     // Replace the message handler: now pipe WebSocket → shell stdin
     ws.removeAllListeners('message')
