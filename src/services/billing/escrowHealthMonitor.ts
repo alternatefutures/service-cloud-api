@@ -153,22 +153,32 @@ export class EscrowHealthMonitor {
         },
       })
 
-      // Broader set used ONLY for orphan-sweep exclusion. We must NEVER close
-      // a chain deployment we've ever recorded — it could be a row in any
-      // non-terminal state (CREATING, WAITING_BIDS, DEPLOYING, SUSPENDED,
-      // CLOSE_FAILED, etc.) where the chain side is intentionally still open.
-      // Even CLOSED / PERMANENTLY_FAILED rows are safer to skip — close is
-      // idempotent so re-closing wastes a TX, and "leak escrow on a row we
-      // already know about" is strictly better than "wrongly close a user
-      // lease we forgot to filter out".
-      const allKnownDseqs = await this.prisma.akashDeployment.findMany({
-        select: { dseq: true },
+      // dseq → status map for every row we've ever recorded. The orphan
+      // sweep below uses this to bucket chain leases into:
+      //   • known + intermediate (CREATING / WAITING_BIDS / … / DEPLOYING /
+      //     CLOSE_FAILED) → SKIP, the row is intentionally mid-flow on chain
+      //     and racing it would destroy a real user workload.
+      //   • known + ACTIVE  → SKIP, the upstream per-deployment loop already
+      //     handles refill / chain-dead detection for these.
+      //   • known + closed-from-our-perspective (SUSPENDED / CLOSED /
+      //     PERMANENTLY_FAILED / FAILED) → CLOSE on chain. Chain still being
+      //     open here is a consistency bug — it leaks escrow continuously
+      //     because the user already considers the lease gone (suspendOrgHandler
+      //     marked SUSPENDED *after* an on-chain close that must have
+      //     subsequently regressed; or a manual close path skipped the chain
+      //     close; or a SUSPENDED resume created a new lease without
+      //     terminating the old one).
+      //   • unknown (no DB row) → CLOSE on chain (the existing chain-orphan
+      //     case, e.g. half-completed manual `akash` runs or probe-bid
+      //     try/finally close failures).
+      const allKnownRows = await this.prisma.akashDeployment.findMany({
+        select: { dseq: true, status: true, id: true },
       })
 
       log.info(
         {
           activeCount: activeDeployments.length,
-          knownDseqCount: allKnownDseqs.length,
+          knownDseqCount: allKnownRows.length,
         },
         'Escrow health check — DB snapshot loaded',
       )
@@ -304,12 +314,14 @@ export class EscrowHealthMonitor {
         }
       }
 
-      // Sweep deployments that exist on-chain but have no DB row.
-      // Catches: half-completed manual `akash` CLI runs, probe-bid (PR 2)
-      // deployments whose try/finally close failed, any other path that
-      // writes to the chain but bypasses the queue.
+      // Sweep deployments that exist on-chain but either have no DB row
+      // OR whose DB row says the lease is supposed to be gone (SUSPENDED /
+      // CLOSED / PERMANENTLY_FAILED / FAILED). Catches: half-completed
+      // manual `akash` runs, probe-bid try/finally close failures, AND
+      // SUSPENDED-LEAKs where the original on-chain close at suspend time
+      // didn't take but the row got marked SUSPENDED anyway.
       const sweptOrphans = await this.sweepChainOrphans(
-        allKnownDseqs,
+        allKnownRows,
         chainEscrows,
         currentBlockHeight,
       )
@@ -352,42 +364,102 @@ export class EscrowHealthMonitor {
   }
 
   /**
-   * Close every chain deployment that has no matching DB row, is not already
-   * closed on-chain, and is older than `ORPHAN_MIN_AGE_BLOCKS`.
+   * Close every chain deployment that either:
    *
-   * Why this exists: the rest of `checkAndRefill` walks DB → chain to detect
-   * leases that died on-chain. The reverse direction (chain has it, DB
-   * doesn't) had no sweeper, so any path that bypasses the queue — manual
-   * `akash tx deployment create`, future probe-bid runs whose
-   * `try/finally` close failed, queue workers that crashed between the
-   * deployment-create TX and the DB write — leaked $1+ of escrow forever.
+   *   (a) has no matching DB row at all (true ORPHAN — bypassed the queue
+   *       entirely, e.g. manual `akash tx deployment create`, probe-bid
+   *       try/finally failure, queue worker crash before persisting), OR
    *
-   * SAFETY: `allKnownDseqs` MUST contain every dseq we have ever recorded,
-   * regardless of status. A row in WAITING_BIDS / DEPLOYING / SUSPENDED /
-   * CLOSE_FAILED is intentionally still open on-chain and closing it would
-   * destroy a real user workload. Filtering by `status: 'ACTIVE'` here would
-   * be a critical bug.
+   *   (b) has a DB row whose status implies the lease should already be
+   *       gone (SUSPENDED / CLOSED / PERMANENTLY_FAILED / FAILED /
+   *       CLOSE_FAILED). The on-chain close at suspend / close time must
+   *       have failed silently, OR a manual close path skipped the chain
+   *       close, OR the resume path created a new lease without
+   *       terminating the old one. Either way the chain is leaking escrow
+   *       continuously — the row already represents "lease gone" to the
+   *       user, so re-closing it on chain is the only correct outcome.
    *
-   * Returns the number of orphans we successfully closed.
+   * Skipped (with reason logged):
+   *
+   *   • DB row in an INTERMEDIATE state (CREATING / WAITING_BIDS /
+   *     SELECTING_BID / CREATING_LEASE / SENDING_MANIFEST / DEPLOYING):
+   *     the row is intentionally mid-flow on chain — closing here races
+   *     the queue worker and would destroy a real user workload.
+   *   • DB row in ACTIVE state: handled by the per-deployment loop above
+   *     (refill or chain-dead detection).
+   *   • Anything younger than `ORPHAN_MIN_AGE_BLOCKS` blocks on chain:
+   *     too young, may still be mid-flow even if no DB row exists yet.
+   *   • Already-closed entries on chain.
+   *
+   * Returns the number of leases we successfully closed (orphans + leaks).
    */
   private async sweepChainOrphans(
-    allKnownDseqs: Array<{ dseq: bigint }>,
+    allKnownRows: Array<{ dseq: bigint; status: string; id: string }>,
     chainEscrows: Map<string, ChainEscrowEntry>,
     currentBlockHeight: number,
   ): Promise<number> {
-    const dbDseqs = new Set(allKnownDseqs.map((d) => d.dseq.toString()))
+    // dseq → DB row info (status + row id, used for alert context)
+    const dbByDseq = new Map<string, { status: string; id: string }>()
+    for (const r of allKnownRows) {
+      dbByDseq.set(r.dseq.toString(), { status: r.status, id: r.id })
+    }
+
+    // Statuses where the row is mid-flight on chain — closing races the
+    // queue worker. NEVER close these.
+    const INTERMEDIATE_SKIP = new Set([
+      'CREATING',
+      'WAITING_BIDS',
+      'SELECTING_BID',
+      'CREATING_LEASE',
+      'SENDING_MANIFEST',
+      'DEPLOYING',
+    ])
+    // Statuses where the user-facing row says the lease is already gone.
+    // Chain-still-open here is a consistency bug → close.
+    const SHOULD_BE_CLOSED = new Set([
+      'SUSPENDED',
+      'CLOSED',
+      'PERMANENTLY_FAILED',
+      'FAILED',
+      'CLOSE_FAILED',
+    ])
+
     let swept = 0
 
     for (const [dseq, entry] of chainEscrows) {
-      if (dbDseqs.has(dseq)) continue
       if (entry.closed) continue
+
+      const db = dbByDseq.get(dseq)
+      let leakReason: 'no_db_row' | 'db_terminal' | 'db_suspended' | null = null
+
+      if (!db) {
+        leakReason = 'no_db_row'
+      } else if (INTERMEDIATE_SKIP.has(db.status)) {
+        log.debug(
+          { dseq, dbStatus: db.status },
+          'chain-orphan-sweep: row is mid-flight on chain — skipping',
+        )
+        continue
+      } else if (db.status === 'ACTIVE') {
+        // Handled by the per-deployment loop above.
+        continue
+      } else if (SHOULD_BE_CLOSED.has(db.status)) {
+        leakReason = db.status === 'SUSPENDED' ? 'db_suspended' : 'db_terminal'
+      } else {
+        // Unknown status — log loudly, skip for safety.
+        log.warn(
+          { dseq, dbStatus: db.status },
+          'chain-orphan-sweep: unknown DB status for chain-active dseq — skipping',
+        )
+        continue
+      }
 
       // `settled_at` defaults to the deployment's create-block height for
       // never-touched escrows, so it doubles as an age proxy. Skip anything
       // younger than the threshold to avoid racing brand-new deployments
-      // mid-flow.
+      // mid-flow that haven't yet been persisted.
       const ageBlocks = currentBlockHeight - entry.settledAtBlock
-      if (ageBlocks < ORPHAN_MIN_AGE_BLOCKS) {
+      if (leakReason === 'no_db_row' && ageBlocks < ORPHAN_MIN_AGE_BLOCKS) {
         log.info(
           { dseq, ageBlocks, threshold: ORPHAN_MIN_AGE_BLOCKS },
           'Chain-orphan candidate younger than threshold — skipping (likely deployment mid-flow)',
@@ -398,11 +470,14 @@ export class EscrowHealthMonitor {
       log.warn(
         {
           dseq,
+          leakReason,
+          dbStatus: db?.status ?? 'NONE',
+          dbDeploymentId: db?.id ?? null,
           ageBlocks,
           fundsUact: entry.fundsUact,
           settledAtBlock: entry.settledAtBlock,
         },
-        'Chain-orphan deployment found (no DB row) — closing to reclaim escrow',
+        'Chain lease leaking escrow — closing to reclaim',
       )
 
       try {
@@ -411,34 +486,69 @@ export class EscrowHealthMonitor {
         if (result.chainStatus === 'FAILED') {
           log.error(
             { dseq, error: result.error },
-            'Failed to close chain-orphan deployment (will retry next cycle)',
+            'Failed to close chain-leaking deployment (will retry next cycle)',
           )
           continue
         }
         swept++
-        // One alert per orphan closed — operator should know that something
-        // outside the application created a chain deployment we had to clean up.
+
+        // If we have a DB row, advance any non-terminal status to CLOSED so
+        // the next pass doesn't keep flagging it. The check is idempotent —
+        // CLOSED rows are unaffected.
+        if (db?.id) {
+          try {
+            await this.prisma.akashDeployment.updateMany({
+              where: {
+                id: db.id,
+                NOT: { status: { in: ['CLOSED', 'PERMANENTLY_FAILED'] } },
+              },
+              data: {
+                status: 'CLOSED',
+                closedAt: new Date(),
+                errorMessage:
+                  `escrow-monitor: closed chain lease that DB had as ${db.status}; ` +
+                  `synced ${new Date().toISOString()}`,
+              },
+            })
+          } catch (dbErr) {
+            log.warn(
+              { dseq, dbId: db.id, err: (dbErr as Error).message },
+              'Closed on chain but DB sync update failed (will reconcile on next pass)',
+            )
+          }
+        }
+
+        const reasonLabel =
+          leakReason === 'no_db_row'
+            ? 'no matching row in akash_deployment'
+            : leakReason === 'db_suspended'
+              ? `DB row was SUSPENDED (id=${db?.id})`
+              : `DB row was ${db?.status} (id=${db?.id})`
+
         await opsAlert({
           key: `chain-orphan-closed:${dseq}`,
           severity: 'warning',
-          title: 'Auto-closed chain-orphan deployment',
+          title:
+            leakReason === 'no_db_row'
+              ? 'Auto-closed chain-orphan deployment'
+              : 'Auto-closed leaking chain lease (DB/chain mismatch)',
           message:
-            `Closed dseq ${dseq} on-chain — it had no matching row in akash_deployment. ` +
-            `Likely cause: a manual akash CLI invocation, a queue worker that crashed before persisting, ` +
-            `or a probe-bid run whose try/finally close failed. Reclaimed ~${(entry.fundsUact / 1_000_000).toFixed(2)} ACT to deployer wallet.`,
+            `Closed dseq ${dseq} on-chain — ${reasonLabel}. ` +
+            `Reclaimed ~${(entry.fundsUact / 1_000_000).toFixed(2)} ACT to deployer wallet.`,
           context: {
             dseq,
+            leakReason,
+            dbStatus: db?.status ?? 'NONE',
+            dbDeploymentId: db?.id ?? '',
             ageBlocks: String(ageBlocks),
             fundsUact: String(entry.fundsUact),
           },
-          // Per-dseq key dedupes naturally; suppress repeats anyway in case
-          // close keeps failing and the same dseq retries.
           suppressMs: 24 * 60 * 60 * 1000,
         })
       } catch (err) {
         log.error(
           { dseq, error: (err as Error).message },
-          'Error closing chain-orphan deployment (will retry next cycle)',
+          'Error closing chain-leaking deployment (will retry next cycle)',
         )
       }
     }

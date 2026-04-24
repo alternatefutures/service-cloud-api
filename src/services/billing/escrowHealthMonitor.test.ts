@@ -71,25 +71,34 @@ interface FakeAkashDeployment {
 
 /**
  * `deployments` represents the ACTIVE rows used by the refill loop.
- * `inFlightDseqs` represents additional dseqs we've recorded in any
- * non-ACTIVE state (CREATING, WAITING_BIDS, DEPLOYING, SUSPENDED,
- * CLOSE_FAILED, etc.) that the orphan sweep MUST also exclude.
+ * `nonActiveRows` represents additional rows we've recorded in any
+ * non-ACTIVE state. The orphan sweep now needs the {status, id} pair to
+ * decide whether a chain-active dseq should be left alone (mid-flow on
+ * chain) or closed (DB says lease is supposed to be gone — escrow leak).
  */
 function buildPrisma(
   deployments: FakeAkashDeployment[],
-  inFlightDseqs: bigint[] = [],
+  nonActiveRows: Array<{ id: string; dseq: bigint; status: string }> = [],
 ) {
   return {
     akashDeployment: {
       findMany: vi.fn().mockImplementation(({ where, select }: any = {}) => {
         // First call: ACTIVE-only with full select for refill loop.
         if (where?.status === 'ACTIVE') return Promise.resolve(deployments)
-        // Second call: all known dseqs for orphan-sweep exclusion set.
-        // Returns ACTIVE rows + in-flight rows.
+        // Second call: every known row (no filter) projected with
+        // {dseq, status, id} for the orphan-sweep classifier.
+        if (select?.dseq && select?.status && !where) {
+          const all = [
+            ...deployments.map(d => ({ dseq: d.dseq, status: 'ACTIVE', id: d.id })),
+            ...nonActiveRows.map(r => ({ dseq: r.dseq, status: r.status, id: r.id })),
+          ]
+          return Promise.resolve(all)
+        }
         if (select?.dseq && !where) {
+          // Backwards-compat for any caller still requesting only dseq.
           const all = [
             ...deployments.map(d => ({ dseq: d.dseq })),
-            ...inFlightDseqs.map(dseq => ({ dseq })),
+            ...nonActiveRows.map(r => ({ dseq: r.dseq })),
           ]
           return Promise.resolve(all)
         }
@@ -618,23 +627,19 @@ describe('EscrowHealthMonitor', () => {
       expect(mismatchAlert![0].context?.resolvedDeployerAddress).toBe('akash1real')
     })
 
-    it('SAFETY: never closes a chain dseq we have a non-ACTIVE row for', async () => {
-      // Regression test for a subtle bug class: the sweep exclusion set MUST
-      // include every dseq we have ever recorded, NOT just ACTIVE rows.
-      // Statuses to protect:
-      //   - WAITING_BIDS / CREATING / DEPLOYING — TX submitted, lease not yet
-      //     established; row not ACTIVE but chain has it.
-      //   - SUSPENDED — lease intentionally kept open while user tops up;
-      //     closing it would destroy a paying customer's workload.
-      //   - CLOSE_FAILED — by definition still open on-chain.
+    it('SAFETY: protects chain dseqs whose DB row is mid-flight (CREATING/WAITING_BIDS/…/DEPLOYING)', async () => {
+      // The sweep MUST never close a row that's mid-flow on chain — closing
+      // races the queue worker and would destroy a real user workload that
+      // hasn't reached ACTIVE yet.
       const prisma = buildPrisma(
         [], // no ACTIVE rows
         [
-          150n, // CREATING
-          151n, // WAITING_BIDS
-          152n, // DEPLOYING
-          153n, // SUSPENDED  ← user paused for low balance, must NOT touch
-          154n, // CLOSE_FAILED
+          { id: 'r150', dseq: 150n, status: 'CREATING' },
+          { id: 'r151', dseq: 151n, status: 'WAITING_BIDS' },
+          { id: 'r152', dseq: 152n, status: 'SELECTING_BID' },
+          { id: 'r153', dseq: 153n, status: 'CREATING_LEASE' },
+          { id: 'r154', dseq: 154n, status: 'SENDING_MANIFEST' },
+          { id: 'r155', dseq: 155n, status: 'DEPLOYING' },
         ],
       )
 
@@ -646,6 +651,7 @@ describe('EscrowHealthMonitor', () => {
           { dseq: '152', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
           { dseq: '153', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
           { dseq: '154', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+          { dseq: '155', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
           // The actual orphan — proves the sweep DOES still fire when it should.
           { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
         ],
@@ -654,11 +660,91 @@ describe('EscrowHealthMonitor', () => {
       const monitor = new EscrowHealthMonitor(prisma)
       await monitor.checkAndRefill()
 
-      for (const protectedDseq of [150, 151, 152, 153, 154]) {
+      for (const protectedDseq of [150, 151, 152, 153, 154, 155]) {
         expect(closeDeploymentMock).not.toHaveBeenCalledWith(protectedDseq)
       }
       expect(closeDeploymentMock).toHaveBeenCalledWith(999)
       expect(closeDeploymentMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('LEAK FIX: closes chain leases whose DB row is SUSPENDED (suspendOrgHandler chain-close failure)', async () => {
+      // Reproduces the silent escrow burner: suspendOrgHandler tried to
+      // close on-chain at suspend time, the chain close didn't take, but
+      // the DB row was marked SUSPENDED anyway. Pre-fix the sweep skipped
+      // these (because dseq was "known"); now we close them.
+      const prisma = buildPrisma(
+        [],
+        [{ id: 'r1', dseq: 153n, status: 'SUSPENDED' }],
+      )
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '153', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).toHaveBeenCalledWith(153)
+
+      const alert = opsAlertMock.mock.calls.find(c => c[0]?.key === 'chain-orphan-closed:153')
+      expect(alert).toBeDefined()
+      expect(alert![0].context?.leakReason).toBe('db_suspended')
+      expect(alert![0].context?.dbStatus).toBe('SUSPENDED')
+
+      // Idempotent DB sync: SUSPENDED → CLOSED so the next pass doesn't
+      // re-flag the same row.
+      expect(prisma.akashDeployment.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ id: 'r1' }),
+          data: expect.objectContaining({ status: 'CLOSED' }),
+        }),
+      )
+    })
+
+    it('LEAK FIX: closes chain leases whose DB row is CLOSE_FAILED (close-tx retry)', async () => {
+      const prisma = buildPrisma(
+        [],
+        [{ id: 'r1', dseq: 154n, status: 'CLOSE_FAILED' }],
+      )
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '154', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).toHaveBeenCalledWith(154)
+      const alert = opsAlertMock.mock.calls.find(c => c[0]?.key === 'chain-orphan-closed:154')
+      expect(alert).toBeDefined()
+      expect(alert![0].context?.leakReason).toBe('db_terminal')
+    })
+
+    it('LEAK FIX: closes chain leases whose DB row is CLOSED but chain still open', async () => {
+      // Pure mismatch: DB committed CLOSED but chain didn't receive / accept
+      // the close. Pre-fix this leaked forever.
+      const prisma = buildPrisma(
+        [],
+        [{ id: 'r1', dseq: 200n, status: 'CLOSED' }],
+      )
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '200', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).toHaveBeenCalledWith(200)
+      const alert = opsAlertMock.mock.calls.find(c => c[0]?.key === 'chain-orphan-closed:200')
+      expect(alert).toBeDefined()
+      expect(alert![0].context?.leakReason).toBe('db_terminal')
     })
 
     it('does not alert when on-chain close fails (will retry next cycle)', async () => {

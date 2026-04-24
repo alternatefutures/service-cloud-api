@@ -587,6 +587,13 @@ export const typeDefs = /* GraphQL */ `
     updatedAt: Date!
     deployedAt: Date
     closedAt: Date
+    """
+    Earliest deployedAt across the auto-retry / auto-failover chain that
+    ends at this row. Use this (not deployedAt) for "Running for Xh"
+    timers — auto-failover and queue-step retries spawn new rows under
+    the hood but should not reset the user-visible uptime.
+    """
+    activeSince: Date
   }
 
   enum AkashDeploymentStatus {
@@ -641,6 +648,12 @@ export const typeDefs = /* GraphQL */ `
 
     createdAt: Date!
     updatedAt: Date!
+    """
+    Earliest activeStartedAt across the queue-retry chain that ends at
+    this row. Same purpose as AkashDeployment.activeSince — drives the
+    "Running for Xh" timer without being reset by background retries.
+    """
+    activeSince: Date
   }
 
   enum PhalaDeploymentStatus {

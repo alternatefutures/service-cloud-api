@@ -141,6 +141,29 @@ export async function handleComputeResumeCheck(
           }
         )
 
+        // Link the new row to the SUSPENDED row so the lease-chain walker
+        // can compute a continuous "Running for Xh" timer across the
+        // suspend/resume bounce. Without this link the new row is a chain
+        // root and the user-visible uptime resets to 0 every topup —
+        // which is exactly what triggered the "running for days but the
+        // dashboard says 2h" bug. Best-effort: a failure here doesn't
+        // break the resume itself, just degrades the timer.
+        try {
+          await prisma.akashDeployment.update({
+            where: { id: newDeploymentId },
+            data: { resumedFromId: deployment.id },
+          })
+        } catch (linkErr) {
+          log.warn(
+            {
+              err: linkErr instanceof Error ? linkErr.message : linkErr,
+              newDeploymentId,
+              suspendedId: deployment.id,
+            },
+            'Failed to set resumedFromId on resumed Akash deployment — uptime timer will reset for this row',
+          )
+        }
+
         // Preserve policy: create a new policy for the resumed deployment inheriting original constraints
         if (deployment.policyId) {
           const oldPolicy = await prisma.deploymentPolicy.findUnique({
@@ -214,11 +237,19 @@ export async function handleComputeResumeCheck(
         const orchestrator = getPhalaOrchestrator(prisma)
         await orchestrator.startPhalaDeployment(deployment.appId)
 
+        // CRITICAL: do NOT overwrite `activeStartedAt` here. From the user's
+        // perspective the same workload is coming back online — the
+        // "Running for Xh" timer must reflect the original first-active
+        // moment, not "right now". The billing logic uses
+        // `lastBilledAt || activeStartedAt` to compute charge windows, so
+        // updating only `lastBilledAt` is sufficient to make billing pick
+        // up from this resume moment without losing the true uptime.
+        // (This was previously resetting the timer every topup cycle —
+        // see `lib/leaseChain.ts` for the chain-walking counterpart.)
         await prisma.phalaDeployment.update({
           where: { id: deployment.id },
           data: {
             status: 'ACTIVE',
-            activeStartedAt: new Date(),
             lastBilledAt: new Date(),
           },
         })
