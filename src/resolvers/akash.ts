@@ -17,6 +17,7 @@ import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
 import { audit } from '../lib/audit.js'
+import { resolveAkashActiveSince } from '../lib/leaseChain.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
 import { BILLING_CONFIG } from '../config/billing.js'
@@ -842,6 +843,15 @@ export const akashFieldResolvers = {
       return context.prisma.deploymentPolicy.findUnique({
         where: { id: parent.policyId },
       })
+    },
+    activeSince: async (parent: any, _: unknown, context: Context) => {
+      // Walk back through failoverParentId / parentDeploymentId so the
+      // user-visible "Running for Xh" timer doesn't reset when the
+      // sweeper auto-failovers to a new provider or the queue retries
+      // a step. Falls back to this row's deployedAt if the chain has
+      // no earlier ACTIVE timestamp.
+      const earliest = await resolveAkashActiveSince(context.prisma, parent.id)
+      return earliest ?? parent.deployedAt ?? null
     },
   },
 

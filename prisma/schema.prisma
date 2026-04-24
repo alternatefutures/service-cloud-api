@@ -1132,6 +1132,15 @@ model AkashDeployment {
   excludedProviders String[] @default([]) @map("excluded_providers")
   failoverReason    String?  @map("failover_reason")
 
+  // Resume chain — links a fresh redeploy created by `resumeHandler` (after
+  // a SUSPENDED→ACTIVE wallet topup) back to the SUSPENDED row that owned the
+  // continuous user-visible lifecycle. WITHOUT this link the "Running for Xh"
+  // timer resets on every balance-low / topup cycle, even though the user
+  // perceives the same workload running uninterrupted across the bounce.
+  // The lease-chain walker (`resolveAkashActiveSince`) follows this link the
+  // same way it follows `failoverParentId` / `parentDeploymentId`.
+  resumedFromId String? @map("resumed_from_id")
+
   // Cost display (computed at lease creation, includes margin)
   dailyRateCentsRaw     Int? // Raw provider cost per day in cents
   dailyRateCentsCharged Int? // Cost after margin per day in cents
@@ -1153,6 +1162,7 @@ model AkashDeployment {
   @@index([status])
   @@index([dseq])
   @@index([failoverParentId])
+  @@index([resumedFromId])
 }
 
 enum AkashDeploymentStatus {
@@ -1368,6 +1378,15 @@ model PhalaDeployment {
   parentDeploymentId String? // Links retries to original deployment
   qstashMessageId    String? // For cancellation of pending QStash messages
 
+  // Resume chain — Phala's resume path (`resumeHandler`) reuses the SAME row
+  // (it just re-starts the existing CVM via `startPhalaDeployment(appId)`),
+  // so unlike Akash there is no new row to link FROM. We instead preserve
+  // the original `activeStartedAt` across resume bounces so the
+  // user-visible "Running for Xh" timer doesn't reset; `resumedFromId`
+  // here is reserved for a future symmetry with Akash if Phala ever
+  // grows a "destroy + recreate" resume path.
+  resumedFromId String? @map("resumed_from_id")
+
   // Relations
   serviceId String
   service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
@@ -1391,6 +1410,7 @@ model PhalaDeployment {
   @@index([status])
   @@index([appId])
   @@index([orgBillingId])
+  @@index([resumedFromId])
   // Compound index for the per-org concurrency check in
   // `resolvers/launchGuards.ts → assertOrgConcurrency`. PhalaDeployment carries
   // organizationId directly (unlike AkashDeployment which joins through

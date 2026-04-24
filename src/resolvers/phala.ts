@@ -23,6 +23,7 @@ import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
 import { createLogger } from '../lib/logger.js'
 import { audit } from '../lib/audit.js'
+import { resolvePhalaActiveSince } from '../lib/leaseChain.js'
 
 const log = createLogger('resolver-phala')
 
@@ -232,6 +233,14 @@ export const phalaFieldResolvers = {
       return context.prisma.deploymentPolicy.findUnique({
         where: { id: parent.policyId },
       })
+    },
+    activeSince: async (parent: any, _: unknown, context: Context) => {
+      // Phala mirror of AkashDeployment.activeSince — walks the
+      // parentDeploymentId chain so background queue retries don't
+      // reset the user-visible "Running for Xh" timer. Falls back to
+      // this row's own activeStartedAt if no earlier row was ACTIVE.
+      const earliest = await resolvePhalaActiveSince(context.prisma, parent.id)
+      return earliest ?? parent.activeStartedAt ?? null
     },
   },
   Service: {
