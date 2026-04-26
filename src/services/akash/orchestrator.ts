@@ -1147,15 +1147,27 @@ export class AkashOrchestrator {
 
     log.info(`Spawning shell: provider-services ${args.join(' ')}`)
 
-    // node-pty is optional — fall back to spawn without --tty if unavailable
+    // node-pty is REQUIRED — without it we have no PTY for `provider-services`
+    // and the remote shell can't echo keystrokes (looks "stuck" to the user).
+    // Refuse to start the session loudly instead of silently degrading; the
+    // Dockerfile's deps stage installs python3/make/g++ so the linux-x64
+    // native module compiles. If it's missing in prod, the container image
+    // is broken.
     let pty: any
     try {
       const { createRequire } = await import('module')
       const require = createRequire(import.meta.url)
       pty = require('node-pty')
-    } catch {
-      log.warn('node-pty not available, falling back to spawn without --tty')
-      return this.getShellFallback(env, args.filter(a => a !== '--tty'))
+    } catch (err) {
+      log.error(
+        { err: (err as Error)?.message },
+        'node-pty failed to load — interactive shell is unavailable. ' +
+        'Rebuild the cloud-api image with python3/make/g++ in the deps stage so node-pty compiles for linux-x64.'
+      )
+      throw new Error(
+        'Interactive shell is temporarily unavailable on the server (node-pty missing). ' +
+        'A platform fix is being deployed.'
+      )
     }
 
     // Resolve full path — node-pty's posix_spawnp may not search PATH correctly
@@ -1204,39 +1216,6 @@ export class AkashOrchestrator {
     }
 
     return session
-  }
-
-  private getShellFallback(env: Record<string, string>, args: string[]): ShellSession {
-    const child = spawn('provider-services', args, {
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-
-    let killed = false
-
-    return {
-      write(data: Buffer | string) {
-        if (!killed && child.stdin.writable) {
-          child.stdin.write(data)
-        }
-      },
-      onData(callback: (data: Buffer) => void) {
-        child.stdout.on('data', callback)
-        child.stderr.on('data', callback)
-      },
-      onExit(callback: (code: number | null) => void) {
-        child.on('close', (code) => {
-          killed = true
-          callback(code)
-        })
-      },
-      kill() {
-        if (!killed) {
-          killed = true
-          child.kill('SIGTERM')
-        }
-      },
-    }
   }
 
   // ========================================

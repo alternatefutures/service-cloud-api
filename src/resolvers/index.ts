@@ -2114,11 +2114,13 @@ export const resolvers = {
         })
       }
 
-      // Best-effort: delete orphaned Phala CVMs before deleting service
+      // Best-effort: delete stopped/orphaned Phala CVMs before deleting service.
+      // Stopping a Phala CVM does not delete it, so service deletion must clean
+      // up STOPPED rows too.
       const orphanedPhala = await context.prisma.phalaDeployment.findMany({
         where: {
           serviceId: id,
-          status: { in: ['FAILED', 'PERMANENTLY_FAILED'] },
+          status: { in: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] },
         },
         select: { id: true, appId: true },
       })

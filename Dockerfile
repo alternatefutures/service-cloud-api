@@ -5,10 +5,18 @@
 FROM node:22-slim AS deps
 WORKDIR /app/service-cloud-api
 
+# build-essential, python3, and make are required so node-gyp can compile
+# native modules (notably node-pty) for linux-x64 — the npm tarball ships
+# prebuilds only for darwin/win32, so without these tools the install
+# silently leaves linux-x64/pty.node missing and `af ssh` falls back to a
+# no-tty shell that can't echo keystrokes.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openssl \
-    ca-certificates && \
+    ca-certificates \
+    python3 \
+    make \
+    g++ && \
     rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
@@ -17,6 +25,10 @@ COPY service-cloud-api/package.json service-cloud-api/pnpm-lock.yaml ./
 COPY service-cloud-api/prisma ./prisma/
 
 RUN pnpm install --frozen-lockfile
+
+# Verify node-pty's linux prebuild/binary actually built — fail the docker
+# build loudly here rather than silently shipping a broken SSH shell.
+RUN node -e "require('node-pty'); console.log('node-pty loaded OK')"
 
 # Stage 2: Builder
 FROM node:22-slim AS builder
