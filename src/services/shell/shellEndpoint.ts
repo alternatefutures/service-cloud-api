@@ -370,12 +370,6 @@ export class ShellEndpoint {
 
     sendJson(ws, { type: 'ready' })
 
-    // Initialize after the client receives `ready`; otherwise early shell
-    // output can arrive while the CLI is still waiting for JSON and be
-    // discarded. Avoid `clear` here: minimal shells such as Alpine's ash can
-    // leave the terminal looking blank even though the PTY is alive.
-    session.write("cd ~ 2>/dev/null || cd /; export PS1='# '; printf '\\n'\n")
-
     // Replace the message handler: now pipe WebSocket → shell stdin
     ws.removeAllListeners('message')
     ws.on('message', (data, isBinary) => {
