@@ -40,6 +40,57 @@ import type { LogStream } from '../providers/types.js'
 import { audit } from '../../lib/audit.js'
 import { createLogger } from '../../lib/logger.js'
 
+/**
+ * All first-party AF service origins that are permitted to open SSE
+ * log streams.  APP_URL (single override) and CORS_ALLOWED_ORIGINS
+ * (comma-separated list) can extend the set at deploy time without
+ * touching this file.
+ */
+const BASE_ORIGINS = [
+  'https://app.alternatefutures.ai',
+  'https://api.alternatefutures.ai',
+  'https://auth.alternatefutures.ai',
+  'https://docs.alternatefutures.ai',
+  'https://alternatefutures.ai',
+]
+
+export function getAllowedOrigins(): string[] {
+  const origins = new Set<string>(BASE_ORIGINS)
+
+  // Single-origin override (legacy / local dev convenience)
+  const appUrl = process.env.APP_URL
+  if (appUrl) origins.add(appUrl)
+
+  // Comma-separated extra allowlist (e.g. staging URLs)
+  const extra = process.env.CORS_ALLOWED_ORIGINS
+  if (extra) {
+    for (const o of extra.split(',')) {
+      const trimmed = o.trim()
+      if (trimmed) origins.add(trimmed)
+    }
+  }
+
+  return Array.from(origins)
+}
+
+/**
+ * Returns CORS headers to include in SSE and error responses.
+ * Echoes the request Origin only when it matches the allowlist so we never
+ * reflect an arbitrary third-party origin.  Returns an empty object for
+ * non-browser (no Origin header) or disallowed requests.
+ */
+export function getCorsHeaders(req: IncomingMessage): Record<string, string> {
+  const requestOrigin = req.headers['origin'] as string | undefined
+  if (!requestOrigin) return {}
+  if (!getAllowedOrigins().includes(requestOrigin)) return {}
+  return {
+    'Access-Control-Allow-Origin': requestOrigin,
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Methods': 'GET',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  }
+}
+
 const log = createLogger('log-stream-endpoint')
 
 const MAX_STREAMS_PER_USER = 5
@@ -69,7 +120,11 @@ function streamCount(userId: string): number {
   return activeStreams.get(userId)?.size ?? 0
 }
 
-function writeSse(res: ServerResponse, event: string | null, data: string): boolean {
+function writeSse(
+  res: ServerResponse,
+  event: string | null,
+  data: string
+): boolean {
   if (res.writableEnded) return false
   let frame = ''
   if (event) frame += `event: ${event}\n`
@@ -86,19 +141,27 @@ function writeComment(res: ServerResponse, text: string): void {
   res.write(`: ${text}\n\n`)
 }
 
-function endError(res: ServerResponse, status: number, message: string): void {
+function endError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  message: string
+): void {
   if (res.headersSent) {
     writeSse(res, 'error', JSON.stringify({ message }))
     res.end()
     return
   }
-  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    ...getCorsHeaders(req),
+  })
   res.end(JSON.stringify({ error: message }))
 }
 
 async function pickActiveDeployment(
   prisma: PrismaClient,
-  serviceId: string,
+  serviceId: string
 ): Promise<{ deploymentId: string; provider: 'akash' | 'phala' } | null> {
   const akash = await prisma.akashDeployment.findFirst({
     where: { serviceId, status: 'ACTIVE' },
@@ -132,7 +195,11 @@ export class LogStreamEndpoint {
   private jwtSecret: string
   private deps: Required<LogStreamEndpointDeps>
 
-  constructor(prisma: PrismaClient, jwtSecret: string, deps: LogStreamEndpointDeps = {}) {
+  constructor(
+    prisma: PrismaClient,
+    jwtSecret: string,
+    deps: LogStreamEndpointDeps = {}
+  ) {
     this.prisma = prisma
     this.jwtSecret = jwtSecret
     this.deps = {
@@ -150,9 +217,13 @@ export class LogStreamEndpoint {
     return m ? m[1] : null
   }
 
-  async handle(req: IncomingMessage, res: ServerResponse, serviceId: string): Promise<void> {
+  async handle(
+    req: IncomingMessage,
+    res: ServerResponse,
+    serviceId: string
+  ): Promise<void> {
     if (req.method !== 'GET') {
-      endError(res, 405, 'Method not allowed')
+      endError(req, res, 405, 'Method not allowed')
       return
     }
 
@@ -160,25 +231,41 @@ export class LogStreamEndpoint {
     const token = url.searchParams.get('token')
     const sdlServiceOverride = url.searchParams.get('service') || undefined
     const tailParam = url.searchParams.get('tail')
-    const tail = tailParam ? Math.max(0, Math.min(2000, Number(tailParam) || 0)) : 50
+    const tail = tailParam
+      ? Math.max(0, Math.min(2000, Number(tailParam) || 0))
+      : 50
 
     if (!token) {
-      endError(res, 401, 'Missing token query parameter')
+      endError(req, res, 401, 'Missing token query parameter')
       return
     }
 
-    const access = await this.deps.authorize(this.prisma, serviceId, token, this.jwtSecret)
+    const access = await this.deps.authorize(
+      this.prisma,
+      serviceId,
+      token,
+      this.jwtSecret
+    )
     if (!access.ok) {
-      const code = access.status === 'unauthorized' ? 401
-        : access.status === 'forbidden' ? 403
-        : access.status === 'not_found' ? 404
-        : 400
-      endError(res, code, access.message)
+      const code =
+        access.status === 'unauthorized'
+          ? 401
+          : access.status === 'forbidden'
+            ? 403
+            : access.status === 'not_found'
+              ? 404
+              : 400
+      endError(req, res, code, access.message)
       return
     }
 
     if (streamCount(access.userId) >= MAX_STREAMS_PER_USER) {
-      endError(res, 429, `Maximum ${MAX_STREAMS_PER_USER} concurrent log streams reached`)
+      endError(
+        req,
+        res,
+        429,
+        `Maximum ${MAX_STREAMS_PER_USER} concurrent log streams reached`
+      )
       return
     }
 
@@ -190,7 +277,7 @@ export class LogStreamEndpoint {
 
     const target = await pickActiveDeployment(this.prisma, deploymentServiceId)
     if (!target) {
-      endError(res, 404, 'No active deployment found for this service')
+      endError(req, res, 404, 'No active deployment found for this service')
       return
     }
 
@@ -198,9 +285,10 @@ export class LogStreamEndpoint {
     const capabilities = provider.getCapabilities()
     if (!capabilities.supportsLogStreaming || !provider.streamLogs) {
       endError(
+        req,
         res,
         501,
-        `Live log streaming is not supported for ${provider.displayName} deployments yet`,
+        `Live log streaming is not supported for ${provider.displayName} deployments yet`
       )
       return
     }
@@ -214,6 +302,7 @@ export class LogStreamEndpoint {
       // Defeat nginx response buffering — without this, lines arrive in
       // bursts every few seconds even though we flushed them immediately.
       'X-Accel-Buffering': 'no',
+      ...getCorsHeaders(req),
     })
     res.flushHeaders?.()
 
@@ -246,14 +335,25 @@ export class LogStreamEndpoint {
       clearInterval(heartbeat)
       clearInterval(idleTimer)
       clearTimeout(hardTimer)
-      try { stream?.close() } catch (e) {
-        log.warn({ err: e, userId: access.userId, serviceId }, 'stream.close() threw')
+      try {
+        stream?.close()
+      } catch (e) {
+        log.warn(
+          { err: e, userId: access.userId, serviceId },
+          'stream.close() threw'
+        )
       }
       untrackStream(access.userId, res)
       const durationSec = Math.round((Date.now() - startTime) / 1000)
       log.info(
-        { userId: access.userId, serviceId, providerType: target.provider, reason, duration: durationSec },
-        'LOG_STREAM_CLOSE',
+        {
+          userId: access.userId,
+          serviceId,
+          providerType: target.provider,
+          reason,
+          duration: durationSec,
+        },
+        'LOG_STREAM_CLOSE'
       )
       this.deps.emitAudit(this.prisma, {
         category: 'logs',
@@ -266,12 +366,16 @@ export class LogStreamEndpoint {
         durationMs: Date.now() - startTime,
         payload: { reason, provider: target.provider },
       })
-      try { res.end() } catch { /* swallow */ }
+      try {
+        res.end()
+      } catch {
+        /* swallow */
+      }
     }
 
     req.once('close', () => cleanup('client_disconnect'))
     req.once('error', () => cleanup('request_error'))
-    res.once('error', (err) => {
+    res.once('error', err => {
       log.warn({ err, userId: access.userId, serviceId }, 'SSE response error')
       cleanup('response_error')
     })
@@ -283,8 +387,20 @@ export class LogStreamEndpoint {
       })
     } catch (err) {
       const msg = (err as Error).message?.slice(0, 300) ?? 'unknown error'
-      log.error({ err, userId: access.userId, serviceId, deploymentId: target.deploymentId }, 'streamLogs() failed')
-      writeSse(res, 'error', JSON.stringify({ message: `Failed to open log stream: ${msg}` }))
+      log.error(
+        {
+          err,
+          userId: access.userId,
+          serviceId,
+          deploymentId: target.deploymentId,
+        },
+        'streamLogs() failed'
+      )
+      writeSse(
+        res,
+        'error',
+        JSON.stringify({ message: `Failed to open log stream: ${msg}` })
+      )
       cleanup('stream_open_failed')
       return
     }
@@ -293,12 +409,20 @@ export class LogStreamEndpoint {
     writeSse(
       res,
       'ready',
-      JSON.stringify({ deploymentId: target.deploymentId, provider: target.provider }),
+      JSON.stringify({
+        deploymentId: target.deploymentId,
+        provider: target.provider,
+      })
     )
 
     log.info(
-      { userId: access.userId, serviceId, providerType: target.provider, deploymentId: target.deploymentId },
-      'LOG_STREAM_OPEN',
+      {
+        userId: access.userId,
+        serviceId,
+        providerType: target.provider,
+        deploymentId: target.deploymentId,
+      },
+      'LOG_STREAM_OPEN'
     )
     this.deps.emitAudit(this.prisma, {
       category: 'logs',
@@ -308,21 +432,31 @@ export class LogStreamEndpoint {
       orgId: access.organizationId ?? undefined,
       serviceId,
       deploymentId: target.deploymentId,
-      payload: { provider: target.provider, sdlServiceName: logServiceFilter ?? null, tail },
+      payload: {
+        provider: target.provider,
+        sdlServiceName: logServiceFilter ?? null,
+        tail,
+      },
     })
 
-    stream.onLine((line) => {
+    stream.onLine(line => {
       if (cleanedUp) return
       lastDeliveredAt = Date.now()
       writeSse(res, null, line)
     })
 
-    stream.onError((err) => {
+    stream.onError(err => {
       if (cleanedUp) return
-      writeSse(res, 'error', JSON.stringify({ message: err.message?.slice(0, 300) ?? 'stream error' }))
+      writeSse(
+        res,
+        'error',
+        JSON.stringify({
+          message: err.message?.slice(0, 300) ?? 'stream error',
+        })
+      )
     })
 
-    stream.onClose((code) => {
+    stream.onClose(code => {
       if (cleanedUp) return
       writeSse(res, 'close', JSON.stringify({ code }))
       cleanup(`provider_exit(${code})`)
@@ -337,7 +471,11 @@ export class LogStreamEndpoint {
     for (const [userId, set] of activeStreams) {
       for (const res of set) {
         try {
-          writeSse(res, 'error', JSON.stringify({ message: 'Server shutting down' }))
+          writeSse(
+            res,
+            'error',
+            JSON.stringify({ message: 'Server shutting down' })
+          )
           res.end()
         } catch (err) {
           log.warn({ err, userId }, 'Failed to close stream during shutdown')

@@ -29,6 +29,7 @@ import {
   comfyuiServer,
   hyperscapeServer,
   alternateAgent,
+  infisicalServer,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
@@ -49,6 +50,7 @@ const templates: Template[] = [
   postgres,
   redis,
   // DevTools
+  infisicalServer,
   n8nServer,
   giteaServer,
   // Web Servers
@@ -63,9 +65,7 @@ const templates: Template[] = [
   minecraftServer,
 ]
 
-const templateMap = new Map<string, Template>(
-  templates.map(t => [t.id, t])
-)
+const templateMap = new Map<string, Template>(templates.map(t => [t.id, t]))
 
 // ─── Public API ──────────────────────────────────────────────────
 
