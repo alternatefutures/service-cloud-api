@@ -2282,6 +2282,8 @@ export const typeDefs = /* GraphQL */ `
     buildJob(id: ID!): BuildJob
     """List recent BuildJobs for a service, newest first. Logs blob omitted — fetch it via buildJob(id) on demand. Used by the Source-tab build-history list (polled every 3s while a build is in flight)."""
     serviceBuildJobs(serviceId: ID!, limit: Int): [BuildJob!]!
+    """Return the current HEAD SHA of the service's tracked git branch (null for non-git services or when the GitHub App is unavailable). Used by the source-differs banner to compare against lastBuildSha."""
+    serviceGitHead(serviceId: ID!): String
   }
 
   extend type Mutation {

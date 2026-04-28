@@ -329,6 +329,62 @@ export const githubQueries = {
   },
 
   /**
+   * Return the current HEAD SHA of the service's tracked git branch.
+   *
+   * Used by the source-differs banner: the frontend compares this against
+   * `lastBuildSha` to decide whether to show "Source has changed since last
+   * deploy — Redeploy?" on the service Overview panel.
+   *
+   * Returns null for:
+   *   - Non-git services (gitProvider != 'github' or missing install/owner/repo/branch)
+   *   - GitHub App not configured on this server
+   *   - Any GitHub API error (network timeout, 404 if repo/branch deleted, etc.)
+   *
+   * Failing open (null) is intentional: the banner must not block access to the
+   * panel when the API is unreachable. Callers treat null as "unknown".
+   */
+  serviceGitHead: async (
+    _: unknown,
+    args: { serviceId: string },
+    context: Context,
+  ): Promise<string | null> => {
+    requireAuth(context)
+    const service = await context.prisma.service.findUnique({
+      where: { id: args.serviceId },
+      include: { project: true },
+    })
+    if (!service) throw new GraphQLError('service not found')
+    assertProjectAccess(context, service.project)
+    if (
+      service.gitProvider !== 'github' ||
+      !service.gitInstallationId ||
+      !service.gitOwner ||
+      !service.gitRepo ||
+      !service.gitBranch
+    ) {
+      return null
+    }
+    if (!isGithubAppConfigured()) return null
+    const install = await context.prisma.githubInstallation.findUnique({
+      where: { id: service.gitInstallationId },
+      select: { installationId: true },
+    })
+    if (!install) return null
+    try {
+      const commit = await getCommit(
+        install.installationId,
+        service.gitOwner,
+        service.gitRepo,
+        service.gitBranch,
+      )
+      return commit.sha
+    } catch {
+      // GitHub API unreachable, repo deleted, branch deleted, etc.
+      return null
+    }
+  },
+
+  /**
    * Pure DB read — fast (<10ms). The picker mounts on every panel open
    * and we used to live-sync to GitHub here, which on a cold module
    * load (tsx-watch + jsonwebtoken + GitHub TLS + sequential upserts)
