@@ -342,6 +342,7 @@ export const templateMutations = {
           gpu?: { units: number; vendor: string; model?: string } | null
         }
         policy?: DeploymentPolicyInput
+        workflowJson?: unknown
       }
     },
     context: Context
@@ -400,6 +401,7 @@ export const templateMutations = {
         templateId: input.templateId,
         createdByUserId: context.userId ?? null,
         internalHostname: generateInternalHostname(slug, project.slug),
+        workflowJson: input.workflowJson != null ? JSON.parse(JSON.stringify(input.workflowJson)) : null,
       },
     })
 
@@ -417,6 +419,19 @@ export const templateMutations = {
           })
         )
       )
+    }
+
+    // ── Inject workflow import env var for n8n ───────────────
+    if (input.workflowJson && input.templateId === 'n8n') {
+      const b64 = Buffer.from(JSON.stringify(input.workflowJson)).toString('base64')
+      await context.prisma.serviceEnvVar.create({
+        data: {
+          serviceId: service.id,
+          key: 'N8N_IMPORT_WORKFLOW_B64',
+          value: b64,
+          secret: false,
+        },
+      })
     }
     if (template.ports?.length) {
       await context.prisma.$transaction(

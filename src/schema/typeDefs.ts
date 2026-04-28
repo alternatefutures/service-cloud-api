@@ -718,6 +718,10 @@ export const typeDefs = /* GraphQL */ `
     resourceOverrides: ResourceOverrideInput
     # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
     baseImage: String
+    # n8n only: workflow JSON to import at container startup via the n8n CLI.
+    # Stored as N8N_IMPORT_WORKFLOW_B64 ServiceEnvVar and injected into the SDL at deploy time.
+    # Ignored for all other service types.
+    workflowJson: JSON
   }
 
   """
@@ -1800,6 +1804,10 @@ export const typeDefs = /* GraphQL */ `
     envOverrides: [EnvOverrideInput!]
     resourceOverrides: ResourceOverrideInput
     policy: DeploymentPolicyInput
+    # n8n only: workflow JSON to import at container startup via the n8n CLI.
+    # Stored on the Service record and injected as N8N_IMPORT_WORKFLOW_B64 env var.
+    # Ignored for all other templates.
+    workflowJson: JSON
   }
 
   input ComponentTargetInput {

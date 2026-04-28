@@ -261,6 +261,7 @@ model Service {
   flavor           String? // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation. (Phase 39)
   containerPort    Int? // Port the container listens on (default: 80). Used in SDL generation.
   volumes          Json? // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
+  workflowJson     Json? // n8n only: imported workflow definition. Stored for reference; base64-encoded as N8N_IMPORT_WORKFLOW_B64 env var and run via `n8n import:workflow` on first boot.
   healthProbe      Json? // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
   failoverPolicy   Json? // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null. (Phase 43)
   internalHostname String? // Deterministic hostname: {slug}.{project-slug}.internal
