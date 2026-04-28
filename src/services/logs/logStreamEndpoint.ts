@@ -34,6 +34,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
+import { AkashDeploymentStatus, PhalaDeploymentStatus } from '@prisma/client'
 import { authorizeServiceAccess } from '../auth/serviceAccess.js'
 import { getProvider } from '../providers/registry.js'
 import type { LogStream } from '../providers/types.js'
@@ -159,22 +160,22 @@ function endError(
   res.end(JSON.stringify({ error: message }))
 }
 
-const AKASH_LOG_ELIGIBLE_STATUSES = [
-  'ACTIVE',
-  'DEPLOYING',
-  'SENDING_MANIFEST',
-  'CREATING_LEASE',
-  'FAILED',
-  'SUSPENDED',
-  'PERMANENTLY_FAILED',
-] as const
+const AKASH_LOG_ELIGIBLE_STATUSES: AkashDeploymentStatus[] = [
+  AkashDeploymentStatus.ACTIVE,
+  AkashDeploymentStatus.DEPLOYING,
+  AkashDeploymentStatus.SENDING_MANIFEST,
+  AkashDeploymentStatus.CREATING_LEASE,
+  AkashDeploymentStatus.FAILED,
+  AkashDeploymentStatus.SUSPENDED,
+  AkashDeploymentStatus.PERMANENTLY_FAILED,
+]
 
-const PHALA_LOG_ELIGIBLE_STATUSES = [
-  'ACTIVE',
-  'STARTING',
-  'FAILED',
-  'PERMANENTLY_FAILED',
-] as const
+const PHALA_LOG_ELIGIBLE_STATUSES: PhalaDeploymentStatus[] = [
+  PhalaDeploymentStatus.ACTIVE,
+  PhalaDeploymentStatus.STARTING,
+  PhalaDeploymentStatus.FAILED,
+  PhalaDeploymentStatus.PERMANENTLY_FAILED,
+]
 
 async function pickLogEligibleDeployment(
   prisma: PrismaClient,
@@ -199,7 +200,7 @@ async function pickLogEligibleDeployment(
   const akash = await prisma.akashDeployment.findFirst({
     where: {
       serviceId,
-      status: { in: AKASH_LOG_ELIGIBLE_STATUSES as unknown as string[] },
+      status: { in: AKASH_LOG_ELIGIBLE_STATUSES },
     },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
@@ -209,7 +210,7 @@ async function pickLogEligibleDeployment(
   const phala = await prisma.phalaDeployment.findFirst({
     where: {
       serviceId,
-      status: { in: PHALA_LOG_ELIGIBLE_STATUSES as unknown as string[] },
+      status: { in: PHALA_LOG_ELIGIBLE_STATUSES },
     },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
