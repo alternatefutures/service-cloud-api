@@ -71,4 +71,10 @@ export const n8nServer: Template = {
     },
   ],
   pricingUakt: 2000,
+  // Import a user-supplied workflow on first boot.
+  // If N8N_IMPORT_WORKFLOW_B64 is set, decode it to a temp file and run
+  // `n8n import:workflow` before starting the server.  When the env var is
+  // absent the command is a no-op and n8n starts normally — no behaviour
+  // change for existing deployments.
+  startCommand: `[ -n "$N8N_IMPORT_WORKFLOW_B64" ] && (printf '%s' "$N8N_IMPORT_WORKFLOW_B64" | base64 -d > /tmp/wf.json && n8n import:workflow --input=/tmp/wf.json); exec n8n start`,
 }

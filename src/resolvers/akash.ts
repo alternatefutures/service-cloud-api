@@ -290,7 +290,7 @@ export const akashMutations = {
    */
   deployToAkash: async (
     _: unknown,
-    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }; baseImage?: string } },
+    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }; baseImage?: string; workflowJson?: unknown } },
     context: Context
   ) => {
     if (!context.userId) {
@@ -322,6 +322,26 @@ export const akashMutations = {
         data: { sourceCode: input.sourceCode },
       })
       log.info(`Updated function source code for: ${service.afFunction.id}`)
+    }
+
+    // ── Upsert n8n workflow import env var ───────────────────
+    // When workflowJson is provided for an n8n service, store it as
+    // N8N_IMPORT_WORKFLOW_B64.  The existing injectPersistedEnvVars pipeline
+    // picks it up automatically and merges it into the SDL env block.
+    if (input.workflowJson && service.templateId === 'n8n') {
+      const b64 = Buffer.from(JSON.stringify(input.workflowJson)).toString('base64')
+      await context.prisma.serviceEnvVar.upsert({
+        where: {
+          serviceId_key: { serviceId: service.id, key: 'N8N_IMPORT_WORKFLOW_B64' },
+        },
+        update: { value: b64 },
+        create: { serviceId: service.id, key: 'N8N_IMPORT_WORKFLOW_B64', value: b64, secret: false },
+      })
+      await context.prisma.service.update({
+        where: { id: service.id },
+        data: { workflowJson: JSON.parse(JSON.stringify(input.workflowJson)) },
+      })
+      log.info(`Upserted n8n workflow import for service: ${service.id}`)
     }
 
     // ── Validate and create deployment policy ────────────────
