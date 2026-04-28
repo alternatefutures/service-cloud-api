@@ -482,6 +482,41 @@ export function buildGhcrCredentialsBlock(image: string): string {
 }
 
 /**
+ * Build the placement block for a custom-Docker SDL.
+ *
+ * GPU deployments skip the `signedBy` auditor filter because many GPU
+ * providers (especially those offering less-common models like RTX 4060)
+ * are not on the Akash auditor list. Including the filter caused the
+ * following failure mode: the bid probe (which has NO signedBy filter)
+ * recorded the provider and surfaced it in the UI, but the real
+ * deployment SDL silently excluded the same provider — producing the
+ * "1 provider shown, $0.00, No bids received within timeout" bug.
+ *
+ * This mirrors the identical conditional in `generateSDLFromTemplate`
+ * (src/templates/sdl.ts) and must stay in sync with it.
+ *
+ * Exported for unit testing; not part of the public API surface.
+ */
+export function buildCustomDockerPlacementBlock(
+  serviceName: string,
+  hasGpu: boolean,
+  pricingUact: number
+): string {
+  const signedByLines = hasGpu
+    ? ''
+    : `
+      signedBy:
+        anyOf:
+          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63`
+  return `  placement:
+    dcloud:${signedByLines}
+      pricing:
+        ${serviceName}:
+          denom: uact
+          amount: ${pricingUact}`
+}
+
+/**
  * Bounded TTL map so the GHCR_PUSH_TOKEN fallback warning doesn't spam logs
  * AND doesn't grow unbounded across many image refs in long-running
  * processes. Values are timestamps (ms epoch) of the last warn for that key.
@@ -1745,15 +1780,7 @@ profiles:
           size: ${memory}
 ${storageProfile}${gpuBlock}
 
-  placement:
-    dcloud:
-      signedBy:
-        anyOf:
-          - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
-      pricing:
-        ${name}:
-          denom: uact
-          amount: ${resolveSdlPricingUact(!!(gpu && gpu.units > 0))}
+${buildCustomDockerPlacementBlock(name, !!(gpu && gpu.units > 0), resolveSdlPricingUact(!!(gpu && gpu.units > 0)))}
 
 deployment:
   ${name}:
