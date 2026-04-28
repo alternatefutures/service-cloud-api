@@ -291,6 +291,7 @@ model Service {
   lastBuildSha      String? // Most recent built commit SHA
   lastBuildStatus   String? // 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'
   lastBuildAt       DateTime?
+  autoDeploy        Boolean   @default(true) // When false, pushes record lastBuildSha but skip auto-deploy; user deploys manually.
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

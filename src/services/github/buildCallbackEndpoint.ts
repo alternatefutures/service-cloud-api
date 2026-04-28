@@ -230,13 +230,19 @@ export async function handleBuildCallback(
   }
 
   // ── 4. On success, auto-deploy via existing per-deploy provider. ──
+  // Skipped when the service has autoDeploy=false — the build records the
+  // new image and lastBuildSha so the user can deploy manually from the UI.
   if (newStatus === 'SUCCEEDED' && body.imageTag) {
-    try {
-      await autoDeployAfterBuild(prisma, job.serviceId)
-    } catch (err) {
-      log.error({ err, serviceId: job.serviceId }, 'failed to dispatch deploy after build')
-      // We still 200 the callback — the BuildJob row is updated; the user
-      // can hit "Redeploy" from the UI to retry the deploy step.
+    if (job.service.autoDeploy === false) {
+      log.info({ serviceId: job.serviceId }, 'skipping auto-deploy: autoDeploy is disabled for service')
+    } else {
+      try {
+        await autoDeployAfterBuild(prisma, job.serviceId)
+      } catch (err) {
+        log.error({ err, serviceId: job.serviceId }, 'failed to dispatch deploy after build')
+        // We still 200 the callback — the BuildJob row is updated; the user
+        // can hit "Redeploy" from the UI to retry the deploy step.
+      }
     }
   }
 
