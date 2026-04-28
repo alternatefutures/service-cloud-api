@@ -7,7 +7,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { LogStreamEndpoint, getCorsHeaders } from './logStreamEndpoint.js'
+import {
+  LogStreamEndpoint,
+  getCorsHeaders,
+  getAllowedOrigins,
+} from './logStreamEndpoint.js'
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -110,24 +114,90 @@ function makePrisma(hasDeployment = true) {
     : any
 }
 
+// Base AF service origins that are always in the allowlist
+const BASE_AF_ORIGINS = [
+  'https://app.alternatefutures.ai',
+  'https://api.alternatefutures.ai',
+  'https://auth.alternatefutures.ai',
+  'https://docs.alternatefutures.ai',
+  'https://alternatefutures.ai',
+]
+
+// ---------------------------------------------------------------------------
+// Unit tests for getAllowedOrigins()
+// ---------------------------------------------------------------------------
+
+describe('getAllowedOrigins', () => {
+  afterEach(() => {
+    delete process.env.APP_URL
+    delete process.env.CORS_ALLOWED_ORIGINS
+  })
+
+  it('always includes all base AF service origins', () => {
+    const origins = getAllowedOrigins()
+    for (const o of BASE_AF_ORIGINS) {
+      expect(origins).toContain(o)
+    }
+  })
+
+  it('includes APP_URL when set and not already in base list', () => {
+    process.env.APP_URL = 'https://staging.alternatefutures.ai'
+    const origins = getAllowedOrigins()
+    expect(origins).toContain('https://staging.alternatefutures.ai')
+  })
+
+  it('does not duplicate APP_URL when it equals an existing base origin', () => {
+    process.env.APP_URL = 'https://app.alternatefutures.ai'
+    const origins = getAllowedOrigins()
+    expect(origins.filter(o => o === 'https://app.alternatefutures.ai')).toHaveLength(1)
+  })
+
+  it('includes comma-separated CORS_ALLOWED_ORIGINS entries', () => {
+    process.env.CORS_ALLOWED_ORIGINS =
+      'https://preview.alternatefutures.ai, https://beta.alternatefutures.ai'
+    const origins = getAllowedOrigins()
+    expect(origins).toContain('https://preview.alternatefutures.ai')
+    expect(origins).toContain('https://beta.alternatefutures.ai')
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Unit tests for getCorsHeaders()
 // ---------------------------------------------------------------------------
 
 describe('getCorsHeaders', () => {
-  beforeEach(() => {
-    process.env.APP_URL = ALLOWED_ORIGIN
-  })
   afterEach(() => {
     delete process.env.APP_URL
+    delete process.env.CORS_ALLOWED_ORIGINS
   })
 
+  it.each(BASE_AF_ORIGINS)(
+    'returns CORS headers when Origin is base AF origin: %s',
+    origin => {
+      const req = makeReq(origin)
+      const headers = getCorsHeaders(req)
+      expect(headers['Access-Control-Allow-Origin']).toBe(origin)
+      expect(headers['Access-Control-Allow-Credentials']).toBe('true')
+      expect(headers['Access-Control-Allow-Methods']).toBe('GET')
+    }
+  )
+
   it('returns CORS headers when Origin matches APP_URL', () => {
+    process.env.APP_URL = ALLOWED_ORIGIN
     const req = makeReq(ALLOWED_ORIGIN)
     const headers = getCorsHeaders(req)
     expect(headers['Access-Control-Allow-Origin']).toBe(ALLOWED_ORIGIN)
     expect(headers['Access-Control-Allow-Credentials']).toBe('true')
     expect(headers['Access-Control-Allow-Methods']).toBe('GET')
+  })
+
+  it('returns CORS headers when Origin is in CORS_ALLOWED_ORIGINS', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://preview.alternatefutures.ai'
+    const req = makeReq('https://preview.alternatefutures.ai')
+    const headers = getCorsHeaders(req)
+    expect(headers['Access-Control-Allow-Origin']).toBe(
+      'https://preview.alternatefutures.ai'
+    )
   })
 
   it('returns empty object when Origin header is absent (non-browser curl)', () => {
@@ -140,16 +210,12 @@ describe('getCorsHeaders', () => {
     expect(getCorsHeaders(req)).toEqual({})
   })
 
-  it('uses production fallback when APP_URL is not set', () => {
-    delete process.env.APP_URL
-    const saved = process.env.NODE_ENV
-    process.env.NODE_ENV = 'production'
-    const req = makeReq('https://alternatefutures.ai')
+  it('echoes the exact request origin back (not a hardcoded value)', () => {
+    const req = makeReq('https://app.alternatefutures.ai')
     const headers = getCorsHeaders(req)
     expect(headers['Access-Control-Allow-Origin']).toBe(
-      'https://alternatefutures.ai'
+      'https://app.alternatefutures.ai'
     )
-    process.env.NODE_ENV = saved
   })
 })
 
@@ -319,6 +385,69 @@ describe('LogStreamEndpoint — CORS headers on 200 SSE response', () => {
     )
 
     const req = makeReq(undefined)
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers?.['Access-Control-Allow-Origin']).toBeUndefined()
+  })
+
+  it('includes CORS headers for base AF app origin without APP_URL set', async () => {
+    delete process.env.APP_URL
+    const stream = makeStream()
+    const mockProvider = {
+      displayName: 'Akash',
+      getCapabilities: () => ({ supportsLogStreaming: true }),
+      streamLogs: vi.fn().mockResolvedValue(stream),
+    }
+
+    const endpoint = new LogStreamEndpoint(
+      makePrisma(true) as any,
+      'test-secret',
+      {
+        authorize: vi.fn().mockResolvedValue(makeSuccessAccess()),
+        resolveProvider: vi.fn().mockReturnValue(mockProvider),
+        emitAudit: vi.fn(),
+      }
+    )
+
+    const req = makeReq('https://app.alternatefutures.ai')
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(200)
+    expect(res.headers?.['Access-Control-Allow-Origin']).toBe(
+      'https://app.alternatefutures.ai'
+    )
+  })
+
+  it('omits CORS headers in the 200 writeHead when Origin is not in allowlist', async () => {
+    const stream = makeStream()
+    const mockProvider = {
+      displayName: 'Akash',
+      getCapabilities: () => ({ supportsLogStreaming: true }),
+      streamLogs: vi.fn().mockResolvedValue(stream),
+    }
+
+    const endpoint = new LogStreamEndpoint(
+      makePrisma(true) as any,
+      'test-secret',
+      {
+        authorize: vi.fn().mockResolvedValue(makeSuccessAccess()),
+        resolveProvider: vi.fn().mockReturnValue(mockProvider),
+        emitAudit: vi.fn(),
+      }
+    )
+
+    const req = makeReq('https://attacker.example.com')
     const res = makeRes()
     await endpoint.handle(
       req as IncomingMessage,

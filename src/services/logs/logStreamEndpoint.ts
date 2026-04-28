@@ -41,17 +41,36 @@ import { audit } from '../../lib/audit.js'
 import { createLogger } from '../../lib/logger.js'
 
 /**
- * Mirror the single-origin allowlist used by the GraphQL Yoga CORS config in
- * src/index.ts.  Both read APP_URL so a single env-var controls CORS across
- * the entire API — no separate SSE-specific config.
+ * All first-party AF service origins that are permitted to open SSE
+ * log streams.  APP_URL (single override) and CORS_ALLOWED_ORIGINS
+ * (comma-separated list) can extend the set at deploy time without
+ * touching this file.
  */
-function getAllowedOrigin(): string {
-  return (
-    process.env.APP_URL ||
-    (process.env.NODE_ENV === 'production'
-      ? 'https://alternatefutures.ai'
-      : 'http://localhost:3000')
-  )
+const BASE_ORIGINS = [
+  'https://app.alternatefutures.ai',
+  'https://api.alternatefutures.ai',
+  'https://auth.alternatefutures.ai',
+  'https://docs.alternatefutures.ai',
+  'https://alternatefutures.ai',
+]
+
+export function getAllowedOrigins(): string[] {
+  const origins = new Set<string>(BASE_ORIGINS)
+
+  // Single-origin override (legacy / local dev convenience)
+  const appUrl = process.env.APP_URL
+  if (appUrl) origins.add(appUrl)
+
+  // Comma-separated extra allowlist (e.g. staging URLs)
+  const extra = process.env.CORS_ALLOWED_ORIGINS
+  if (extra) {
+    for (const o of extra.split(',')) {
+      const trimmed = o.trim()
+      if (trimmed) origins.add(trimmed)
+    }
+  }
+
+  return Array.from(origins)
 }
 
 /**
@@ -63,7 +82,7 @@ function getAllowedOrigin(): string {
 export function getCorsHeaders(req: IncomingMessage): Record<string, string> {
   const requestOrigin = req.headers['origin'] as string | undefined
   if (!requestOrigin) return {}
-  if (requestOrigin !== getAllowedOrigin()) return {}
+  if (!getAllowedOrigins().includes(requestOrigin)) return {}
   return {
     'Access-Control-Allow-Origin': requestOrigin,
     'Access-Control-Allow-Credentials': 'true',
