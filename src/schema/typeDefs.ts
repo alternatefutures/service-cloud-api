@@ -2178,6 +2178,7 @@ export const typeDefs = /* GraphQL */ `
 
   type GithubInstallation {
     id: ID!
+    """Legacy/original AF owner. Access control also uses github_installation_access."""
     organizationId: ID!
     """GitHub-side numeric installation id (returned as String to avoid Int32 overflow)."""
     installationId: String!
@@ -2284,8 +2285,9 @@ export const typeDefs = /* GraphQL */ `
   }
 
   extend type Mutation {
+    """Create a canonical GitHub install row or grant this AF org access to an existing install after GitHub redirects with installation_id."""
     syncGithubInstallation(installationId: String!, orgId: ID): GithubInstallation!
-    """Live-pull all App installations from GitHub into the local DB and return them.
+    """Live-pull all accessible App installations from GitHub into the local DB and return them.
     Slow path — UI uses this only on explicit Refresh / post-install."""
     refreshGithubInstallations(orgId: ID): [GithubInstallation!]!
     createGithubService(input: CreateGithubServiceInput!): Service!

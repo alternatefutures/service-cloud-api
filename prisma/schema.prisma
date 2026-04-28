@@ -226,10 +226,11 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members             OrganizationMember[]
-  projects            Project[]
-  domains             Domain[]
-  githubInstallations GithubInstallation[]
+  members                    OrganizationMember[]
+  projects                   Project[]
+  domains                    Domain[]
+  githubInstallations        GithubInstallation[]
+  githubInstallationAccesses GithubInstallationAccess[]
 
   @@index([slug])
 }
@@ -1754,13 +1755,33 @@ model GithubInstallation {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  installedBy  User?        @relation("GithubInstallationInstaller", fields: [installedByUserId], references: [id], onDelete: SetNull)
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  installedBy  User?                      @relation("GithubInstallationInstaller", fields: [installedByUserId], references: [id], onDelete: SetNull)
   services     Service[]
+  accesses     GithubInstallationAccess[]
 
   @@index([organizationId])
   @@index([accountLogin])
   @@map("github_installation")
+}
+
+model GithubInstallationAccess {
+  id              String  @id @default(cuid())
+  installationId  String  @map("installation_id")
+  organizationId  String  @map("organization_id")
+  grantedByUserId String? @map("granted_by_user_id")
+  source          String  @default("setup_url")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  installation GithubInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([installationId, organizationId])
+  @@index([organizationId])
+  @@index([grantedByUserId])
+  @@map("github_installation_access")
 }
 
 model BuildJob {
