@@ -129,12 +129,12 @@ function normalizeShellCommand(
 }
 
 /**
- * Throws unless the caller is a member of the AF org that owns the
+ * Throws unless the caller is a member of an AF org that has access to the
  * given GitHub installation.
  *
  * Use this on every read/mutation that derives data from (or attaches
- * downstream resources to) a `GithubInstallation` row. The row's
- * `organizationId` is the only authoritative tenant boundary —
+ * downstream resources to) a `GithubInstallation` row. The access table is
+ * the primary tenant boundary; `organizationId` is the legacy original owner —
  * `context.organizationId` (header-derived) cannot be trusted for
  * GitHub-related authz because:
  *
@@ -148,24 +148,92 @@ function normalizeShellCommand(
  *      membership, giving an attacker the cuid needed to call
  *      `githubInstallationRepos`.
  *
- * Combining (1) and (2) gave a fully-closed exploit chain. This helper
- * shuts both halves: every GitHub resolver derives the required org
- * from the install row itself and verifies membership against
- * `OrganizationMember` directly, ignoring the request header.
+ * Combining (1) and (2) gave a fully-closed exploit chain. This helper keeps
+ * that closed while allowing normal GitHub team behavior: one GitHub org
+ * installation can be granted to multiple AF orgs after GitHub redirects back
+ * with the real installation_id.
  */
 async function assertInstallationAccess(
   context: Context,
-  install: { organizationId: string },
+  install: { id: string; organizationId: string },
 ): Promise<void> {
   const userId = requireAuth(context)
   const member = await context.prisma.organizationMember.findFirst({
-    where: { organizationId: install.organizationId, userId },
+    where: {
+      userId,
+      OR: [
+        { organizationId: install.organizationId },
+        {
+          organization: {
+            githubInstallationAccesses: {
+              some: { installationId: install.id },
+            },
+          },
+        },
+      ],
+    },
     select: { id: true },
   })
   if (!member) {
     throw new GraphQLError('not authorized for this GitHub installation', {
       extensions: { code: 'FORBIDDEN' },
     })
+  }
+}
+
+async function grantInstallationAccess(
+  context: Context,
+  install: { id: string },
+  orgId: string,
+  userId: string,
+  source = 'setup_url',
+): Promise<void> {
+  await context.prisma.githubInstallationAccess.upsert({
+    where: {
+      installationId_organizationId: {
+        installationId: install.id,
+        organizationId: orgId,
+      },
+    },
+    create: {
+      installationId: install.id,
+      organizationId: orgId,
+      grantedByUserId: userId,
+      source,
+    },
+    update: {
+      grantedByUserId: userId,
+      source,
+    },
+  })
+}
+
+async function assertInstallationAccessToOrg(
+  context: Context,
+  install: { id: string; organizationId: string },
+  orgId: string | null,
+): Promise<void> {
+  if (!orgId) {
+    throw new GraphQLError('GitHub services must belong to an organization-scoped project', {
+      extensions: { code: 'INSTALL_ORG_MISMATCH' },
+    })
+  }
+  await assertOrgMembership(context, orgId)
+  if (install.organizationId === orgId) return
+  const access = await context.prisma.githubInstallationAccess.findUnique({
+    where: {
+      installationId_organizationId: {
+        installationId: install.id,
+        organizationId: orgId,
+      },
+    },
+    select: { id: true },
+  })
+  if (!access) {
+    throw new GraphQLError(
+      'GitHub installation is not connected to this AlternateFutures organization',
+      { extensions: { code: 'INSTALL_ORG_MISMATCH' } },
+    )
   }
 }
 
@@ -284,7 +352,12 @@ export const githubQueries = {
     // (including the local cuid used as input to githubInstallationRepos).
     await assertOrgMembership(context, orgId)
     return context.prisma.githubInstallation.findMany({
-      where: { organizationId: orgId },
+      where: {
+        OR: [
+          { organizationId: orgId },
+          { accesses: { some: { organizationId: orgId } } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
     })
   },
@@ -496,55 +569,43 @@ export const githubMutations = {
 
     const installIdNum = BigInt(args.installationId)
 
-    // Tenant-ownership check: if a row already exists for this
-    // installationId, it can only be (re-)synced by its owning org.
-    // The previous upsert-by-installationId would silently run the
-    // `update` branch and return the row to the caller — exposing
-    // the install's account metadata even though downstream
-    // resolvers (githubInstallationRepos etc.) would 403. We now
-    // fail loud instead.
+    // GitHub owns installations at the account/org level. If a second AF org
+    // reaches this endpoint, GitHub has redirected them with the real
+    // installation_id after an install/configure action, so grant this AF org
+    // access to the canonical install instead of treating the first AF org as
+    // the exclusive owner.
     const existing = await context.prisma.githubInstallation.findUnique({
       where: { installationId: installIdNum },
       select: { id: true, organizationId: true },
     })
-    if (existing && existing.organizationId !== orgId) {
-      log.warn(
-        {
-          installationId: args.installationId,
-          callingOrgId: orgId,
-          ownedByOrgId: existing.organizationId,
-          userId,
-        },
-        'syncGithubInstallation refused: install already owned by another tenant',
-      )
-      throw new GraphQLError(
-        'this GitHub installation is already connected to a different AlternateFutures organization',
-        { extensions: { code: 'INSTALL_OWNED_BY_OTHER_ORG' } },
-      )
-    }
-
     const meta = await getInstallation(installIdNum)
 
-    return context.prisma.githubInstallation.upsert({
-      where: { installationId: installIdNum },
-      create: {
-        organizationId: orgId,
-        installationId: installIdNum,
-        accountLogin: meta.account.login,
-        accountId: BigInt(meta.account.id),
-        accountType: meta.account.type,
-        targetType: meta.repository_selection,
-        installedByUserId: userId,
-        suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
-      },
-      update: {
-        accountLogin: meta.account.login,
-        accountId: BigInt(meta.account.id),
-        accountType: meta.account.type,
-        targetType: meta.repository_selection,
-        suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
-      },
-    })
+    const install = existing
+      ? await context.prisma.githubInstallation.update({
+          where: { id: existing.id },
+          data: {
+            accountLogin: meta.account.login,
+            accountId: BigInt(meta.account.id),
+            accountType: meta.account.type,
+            targetType: meta.repository_selection,
+            suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
+          },
+        })
+      : await context.prisma.githubInstallation.create({
+          data: {
+            organizationId: orgId,
+            installationId: installIdNum,
+            accountLogin: meta.account.login,
+            accountId: BigInt(meta.account.id),
+            accountType: meta.account.type,
+            targetType: meta.repository_selection,
+            installedByUserId: userId,
+            suspendedAt: meta.suspended_at ? new Date(meta.suspended_at) : null,
+          },
+        })
+
+    await grantInstallationAccess(context, install, orgId, userId)
+    return install
   },
 
   /**
@@ -559,15 +620,15 @@ export const githubMutations = {
    * 2026-04-22.
    *
    * Fixed shape:
-   *  1. Read the caller org's existing installations from the DB.
+   *  1. Read the caller org's accessible installations from the DB.
    *  2. For each, hit `GET /app/installations/{id}` to refresh metadata
    *     (suspended_at, repository_selection, account rename, etc.).
    *  3. Never create a new row here. New installs are claimed exactly
    *     once, by `syncGithubInstallation`, which is called from the
    *     post-install setup_url hook with the exact install_id GitHub
    *     redirected with. That path verifies org membership and uses
-   *     `installationId` as the unique key, so an installation can
-   *     only be claimed by one AF tenant for its lifetime.
+   *     `installationId` as the unique key. A GitHub org install can then be
+   *     shared to additional AF orgs when GitHub redirects those users back.
    *
    * If you need to re-discover installs that are known to GitHub but
    * missing locally (e.g. webhook delivery failed), the intended UX is
@@ -585,8 +646,15 @@ export const githubMutations = {
     const orgId = args.orgId || context.organizationId
     if (!orgId) throw new GraphQLError('orgId required')
 
+    await assertOrgMembership(context, orgId)
+
     const owned = await context.prisma.githubInstallation.findMany({
-      where: { organizationId: orgId },
+      where: {
+        OR: [
+          { organizationId: orgId },
+          { accesses: { some: { organizationId: orgId } } },
+        ],
+      },
       select: { id: true, installationId: true },
     })
 
@@ -620,7 +688,12 @@ export const githubMutations = {
     )
 
     return context.prisma.githubInstallation.findMany({
-      where: { organizationId: orgId },
+      where: {
+        OR: [
+          { organizationId: orgId },
+          { accesses: { some: { organizationId: orgId } } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
     })
   },
@@ -676,12 +749,7 @@ export const githubMutations = {
     // the install token. Require the install's org match the
     // project's org (and the caller be a member of that org).
     await assertInstallationAccess(context, install)
-    if (install.organizationId !== project.organizationId) {
-      throw new GraphQLError(
-        'GitHub installation belongs to a different organization than this project',
-        { extensions: { code: 'INSTALL_ORG_MISMATCH' } },
-      )
-    }
+    await assertInstallationAccessToOrg(context, install, project.organizationId)
     if (install.suspendedAt) throw new GraphQLError('installation is suspended on GitHub')
 
     // Confirm the repo + branch are real (live API call)
@@ -804,12 +872,7 @@ export const githubMutations = {
     // check doesn't authorize the install. Require both: caller is a
     // member of install's org AND that org owns the project.
     await assertInstallationAccess(context, install)
-    if (install.organizationId !== service.project.organizationId) {
-      throw new GraphQLError(
-        'GitHub installation belongs to a different organization than this service',
-        { extensions: { code: 'INSTALL_ORG_MISMATCH' } },
-      )
-    }
+    await assertInstallationAccessToOrg(context, install, service.project.organizationId)
     if (install.suspendedAt) throw new GraphQLError('installation is suspended on GitHub')
 
     const repo = await getRepo(install.installationId, input.owner, input.repo)
