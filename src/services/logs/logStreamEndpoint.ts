@@ -159,23 +159,63 @@ function endError(
   res.end(JSON.stringify({ error: message }))
 }
 
-async function pickActiveDeployment(
+const AKASH_LOG_ELIGIBLE_STATUSES = [
+  'ACTIVE',
+  'DEPLOYING',
+  'SENDING_MANIFEST',
+  'CREATING_LEASE',
+  'FAILED',
+  'SUSPENDED',
+  'PERMANENTLY_FAILED',
+] as const
+
+const PHALA_LOG_ELIGIBLE_STATUSES = [
+  'ACTIVE',
+  'STARTING',
+  'FAILED',
+  'PERMANENTLY_FAILED',
+] as const
+
+async function pickLogEligibleDeployment(
   prisma: PrismaClient,
   serviceId: string
 ): Promise<{ deploymentId: string; provider: 'akash' | 'phala' } | null> {
-  const akash = await prisma.akashDeployment.findFirst({
+  // Pass 1: prefer ACTIVE deployments (tiebreaker — healthy beats stale/failed)
+  const akashActive = await prisma.akashDeployment.findFirst({
     where: { serviceId, status: 'ACTIVE' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+  if (akashActive) return { deploymentId: akashActive.id, provider: 'akash' }
+
+  const phalaActive = await prisma.phalaDeployment.findFirst({
+    where: { serviceId, status: 'ACTIVE' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+  if (phalaActive) return { deploymentId: phalaActive.id, provider: 'phala' }
+
+  // Pass 2: fall back to any log-eligible deployment (has a lease, can be tailed)
+  const akash = await prisma.akashDeployment.findFirst({
+    where: {
+      serviceId,
+      status: { in: AKASH_LOG_ELIGIBLE_STATUSES as unknown as string[] },
+    },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
   })
   if (akash) return { deploymentId: akash.id, provider: 'akash' }
 
   const phala = await prisma.phalaDeployment.findFirst({
-    where: { serviceId, status: 'ACTIVE' },
+    where: {
+      serviceId,
+      status: { in: PHALA_LOG_ELIGIBLE_STATUSES as unknown as string[] },
+    },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
   })
   if (phala) return { deploymentId: phala.id, provider: 'phala' }
+
   return null
 }
 
@@ -275,9 +315,9 @@ export class LogStreamEndpoint {
     const logServiceFilter =
       sdlServiceOverride || access.service.sdlServiceName || undefined
 
-    const target = await pickActiveDeployment(this.prisma, deploymentServiceId)
+    const target = await pickLogEligibleDeployment(this.prisma, deploymentServiceId)
     if (!target) {
-      endError(req, res, 404, 'No active deployment found for this service')
+      endError(req, res, 404, 'No log-eligible deployment found for this service')
       return
     }
 
