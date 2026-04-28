@@ -486,6 +486,13 @@ export const typeDefs = /* GraphQL */ `
     failover event.
     """
     failoverPolicy: JSON
+    """
+    When false, a git push builds the image and records lastBuildSha but
+    does NOT auto-deploy. The user triggers the deploy manually. Default
+    is true (auto-deploy on every successful build). Ignored for non-git
+    services.
+    """
+    autoDeploy: Boolean
   }
 
   """
@@ -2318,5 +2325,7 @@ export const typeDefs = /* GraphQL */ `
     """One of 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED' or null."""
     lastBuildStatus: String
     lastBuildAt: Date
+    """When false, successful builds do NOT auto-deploy; user deploys manually. Defaults to true."""
+    autoDeploy: Boolean!
   }
 `

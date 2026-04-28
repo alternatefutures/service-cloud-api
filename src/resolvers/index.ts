@@ -1610,6 +1610,7 @@ export const resolvers = {
             maxAttempts?: number
             windowHours?: number
           } | null
+          autoDeploy?: boolean | null
         }
       },
       context: Context
@@ -1656,6 +1657,7 @@ export const resolvers = {
         volumes?: any
         healthProbe?: any
         failoverPolicy?: any
+        autoDeploy?: boolean
       } = {}
 
       if (Object.prototype.hasOwnProperty.call(input, 'dockerImage')) {
@@ -1841,6 +1843,13 @@ export const resolvers = {
         } else {
           throw new GraphQLError('failoverPolicy must be an object with at least { enabled }, or null to clear.')
         }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(input, 'autoDeploy')) {
+        if (typeof input.autoDeploy !== 'boolean') {
+          throw new GraphQLError('autoDeploy must be a boolean.')
+        }
+        data.autoDeploy = input.autoDeploy
       }
 
       if (Object.keys(data).length === 0) {
