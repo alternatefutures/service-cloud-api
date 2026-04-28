@@ -28,6 +28,7 @@ import { createLogger } from '../lib/logger.js'
 import { getGithubAppConfig, isGithubAppConfigured } from '../services/github/config.js'
 import {
   getInstallation,
+  listAllInstallations,
   listInstallationRepos,
   listRepoBranches,
   getRepo,
@@ -609,39 +610,33 @@ export const githubMutations = {
   },
 
   /**
-   * Re-sync **the caller's own** installations' metadata from GitHub.
+   * Re-sync the caller's installations' metadata from GitHub, and
+   * discover any new installation_ids for accounts already linked to
+   * this org (e.g. user re-installed the App, or the setup_url
+   * redirect was interrupted and syncGithubInstallation never ran).
    *
-   * History: this mutation used to call `listAllInstallations()` (which
-   * returns every install of the App across ALL of GitHub, via the App
-   * JWT) and then upsert every row with `organizationId = caller's org`.
-   * That made the **first AF tenant to hit Refresh** silently claim
-   * every installation in the world into their tenant — a critical
-   * multi-tenant data leak the moment the App went public on
-   * 2026-04-22.
+   * Safety constraints that prevent the 2026-04-22 cross-tenant
+   * claim bug from being reintroduced:
    *
-   * Fixed shape:
-   *  1. Read the caller org's accessible installations from the DB.
-   *  2. For each, hit `GET /app/installations/{id}` to refresh metadata
-   *     (suspended_at, repository_selection, account rename, etc.).
-   *  3. Never create a new row here. New installs are claimed exactly
-   *     once, by `syncGithubInstallation`, which is called from the
-   *     post-install setup_url hook with the exact install_id GitHub
-   *     redirected with. That path verifies org membership and uses
-   *     `installationId` as the unique key. A GitHub org install can then be
-   *     shared to additional AF orgs when GitHub redirects those users back.
+   *  1. New installations are only auto-claimed if their
+   *     `account.login` exactly matches a GitHub account already
+   *     recorded under THIS org. We never claim installs for
+   *     accounts we haven't seen before.
    *
-   * If you need to re-discover installs that are known to GitHub but
-   * missing locally (e.g. webhook delivery failed), the intended UX is
-   * to have the user click "Install" again — GitHub routes them to the
-   * configure page, which triggers a fresh setup_url redirect and
-   * therefore a fresh `syncGithubInstallation` call.
+   *  2. If an installation_id is already owned by any org in our DB
+   *     (checked via unique lookup), we skip it — we don't steal
+   *     another tenant's installation.
+   *
+   *  3. `listAllInstallations()` is called once per Refresh, not on
+   *     every load. The (cheaper) fast path used by the UI on mount
+   *     and on tab-return is `githubInstallations` query (DB only).
    */
   refreshGithubInstallations: async (
     _: unknown,
     args: { orgId?: string },
     context: Context,
   ) => {
-    requireAuth(context)
+    const userId = requireAuth(context)
     assertGithubConfigured()
     const orgId = args.orgId || context.organizationId
     if (!orgId) throw new GraphQLError('orgId required')
@@ -655,9 +650,10 @@ export const githubMutations = {
           { accesses: { some: { organizationId: orgId } } },
         ],
       },
-      select: { id: true, installationId: true },
+      select: { id: true, installationId: true, accountLogin: true },
     })
 
+    // Phase 1: refresh metadata for already-known installations.
     await Promise.all(
       owned.map(async (row) => {
         try {
@@ -686,6 +682,65 @@ export const githubMutations = {
         }
       }),
     )
+
+    // Phase 2: discover new installation_ids for accounts already
+    // linked to this org. Catches re-installs and interrupted
+    // setup_url redirects where syncGithubInstallation never ran.
+    try {
+      const allGhInstalls = await listAllInstallations()
+      const knownInstallIds = new Set(owned.map((r) => r.installationId))
+      const knownAccountLogins = new Set(
+        owned.map((r) => r.accountLogin.toLowerCase()),
+      )
+
+      for (const ghInst of allGhInstalls) {
+        const ghInstIdBig = BigInt(ghInst.id)
+        if (knownInstallIds.has(ghInstIdBig)) continue // already in this org's DB view
+        if (!knownAccountLogins.has(ghInst.account.login.toLowerCase())) continue // unknown account
+
+        // Verify this installation_id isn't already owned by another org.
+        const alreadyOwned = await context.prisma.githubInstallation.findUnique({
+          where: { installationId: ghInstIdBig },
+          select: { id: true },
+        })
+        if (alreadyOwned) continue
+
+        try {
+          const newInst = await context.prisma.githubInstallation.create({
+            data: {
+              organizationId: orgId,
+              installationId: ghInstIdBig,
+              accountLogin: ghInst.account.login,
+              accountId: BigInt(ghInst.account.id),
+              accountType: ghInst.account.type,
+              targetType: ghInst.repository_selection,
+              installedByUserId: userId,
+              suspendedAt: ghInst.suspended_at ? new Date(ghInst.suspended_at) : null,
+            },
+          })
+          await grantInstallationAccess(context, newInst, orgId, userId, 'refresh')
+          log.info(
+            { installationId: ghInst.id, accountLogin: ghInst.account.login, orgId },
+            'refreshGithubInstallations: auto-claimed new installation for known account',
+          )
+        } catch (err) {
+          log.warn(
+            {
+              installationId: ghInst.id,
+              err: err instanceof Error ? err.message : String(err),
+            },
+            'refreshGithubInstallations: failed to auto-claim new installation',
+          )
+        }
+      }
+    } catch (err) {
+      // listAllInstallations failed (GitHub API down, bad JWT, etc.).
+      // Non-fatal: Phase 1 already refreshed existing records.
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'refreshGithubInstallations: listAllInstallations failed; skipping new-install discovery',
+      )
+    }
 
     return context.prisma.githubInstallation.findMany({
       where: {
