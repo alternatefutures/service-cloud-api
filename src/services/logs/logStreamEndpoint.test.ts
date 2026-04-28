@@ -459,3 +459,162 @@ describe('LogStreamEndpoint — CORS headers on 200 SSE response', () => {
     expect(res.headers?.['Access-Control-Allow-Origin']).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// pickLogEligibleDeployment — issue #230
+// ---------------------------------------------------------------------------
+
+/**
+ * A Prisma stub where each findFirst call pops from a pre-seeded queue.
+ * This lets tests control the two-pass query sequence precisely:
+ *   call 1 → ACTIVE-only query
+ *   call 2 → broader log-eligible query
+ */
+function makePrismaQueued(
+  akashResults: (null | { id: string })[],
+  phalaResults: (null | { id: string })[] = []
+): any {
+  const akashQueue = [...akashResults]
+  const phalaQueue = [...phalaResults]
+  return {
+    akashDeployment: {
+      findFirst: vi.fn(() => Promise.resolve(akashQueue.shift() ?? null)),
+    },
+    phalaDeployment: {
+      findFirst: vi.fn(() => Promise.resolve(phalaQueue.shift() ?? null)),
+    },
+  }
+}
+
+describe('LogStreamEndpoint — pickLogEligibleDeployment (issue #230)', () => {
+  afterEach(() => {
+    delete process.env.APP_URL
+  })
+
+  // Each test uses a unique userId so module-level activeStreams from earlier
+  // CORS tests (also userId 'user-1') don't push us over MAX_STREAMS_PER_USER.
+
+  it('(a) streams successfully for a FAILED Akash deployment', async () => {
+    // Pass 1 (ACTIVE query) → null; Pass 2 (broader) → FAILED deployment
+    const prisma = makePrismaQueued([null, { id: 'depl-failed' }])
+    const stream = makeStream()
+    const mockProvider = {
+      displayName: 'Akash',
+      getCapabilities: () => ({ supportsLogStreaming: true }),
+      streamLogs: vi.fn().mockResolvedValue(stream),
+    }
+    const access = { ...makeSuccessAccess(), userId: 'user-230a' }
+
+    const endpoint = new LogStreamEndpoint(prisma, 'test-secret', {
+      authorize: vi.fn().mockResolvedValue(access),
+      resolveProvider: vi.fn().mockReturnValue(mockProvider),
+      emitAudit: vi.fn(),
+    })
+
+    const req = makeReq()
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(200)
+    const written = (res.write as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => c[0] as string)
+      .join('')
+    expect(written).toContain('event: ready')
+    expect(written).toContain('depl-failed')
+  })
+
+  it('(b) streams successfully for a DEPLOYING Akash deployment', async () => {
+    // Pass 1 → null; Pass 2 → DEPLOYING deployment
+    const prisma = makePrismaQueued([null, { id: 'depl-deploying' }])
+    const stream = makeStream()
+    const mockProvider = {
+      displayName: 'Akash',
+      getCapabilities: () => ({ supportsLogStreaming: true }),
+      streamLogs: vi.fn().mockResolvedValue(stream),
+    }
+    const access = { ...makeSuccessAccess(), userId: 'user-230b' }
+
+    const endpoint = new LogStreamEndpoint(prisma, 'test-secret', {
+      authorize: vi.fn().mockResolvedValue(access),
+      resolveProvider: vi.fn().mockReturnValue(mockProvider),
+      emitAudit: vi.fn(),
+    })
+
+    const req = makeReq()
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(200)
+    const written = (res.write as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => c[0] as string)
+      .join('')
+    expect(written).toContain('event: ready')
+    expect(written).toContain('depl-deploying')
+  })
+
+  it('(c) ACTIVE deployment wins over a more-recent FAILED (tiebreaker)', async () => {
+    // Pass 1 returns ACTIVE immediately — Pass 2 is never reached
+    const prisma = makePrismaQueued([{ id: 'depl-active' }])
+    const stream = makeStream()
+    const mockProvider = {
+      displayName: 'Akash',
+      getCapabilities: () => ({ supportsLogStreaming: true }),
+      streamLogs: vi.fn().mockResolvedValue(stream),
+    }
+    const access = { ...makeSuccessAccess(), userId: 'user-230c' }
+
+    const endpoint = new LogStreamEndpoint(prisma, 'test-secret', {
+      authorize: vi.fn().mockResolvedValue(access),
+      resolveProvider: vi.fn().mockReturnValue(mockProvider),
+      emitAudit: vi.fn(),
+    })
+
+    const req = makeReq()
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(200)
+    const written = (res.write as ReturnType<typeof vi.fn>).mock.calls
+      .map(c => c[0] as string)
+      .join('')
+    expect(written).toContain('depl-active')
+    expect(written).not.toContain('depl-failed')
+    // Only one Akash findFirst call was needed (ACTIVE found on Pass 1)
+    expect(prisma.akashDeployment.findFirst).toHaveBeenCalledTimes(1)
+  })
+
+  it('(d) CLOSED/DELETED deployment returns 404 with updated message', async () => {
+    // Both passes return null for both providers — no log-eligible deployment
+    const prisma = makePrismaQueued([null, null], [null, null])
+    const access = { ...makeSuccessAccess(), userId: 'user-230d' }
+
+    const endpoint = new LogStreamEndpoint(prisma, 'test-secret', {
+      authorize: vi.fn().mockResolvedValue(access),
+      resolveProvider: vi.fn(),
+      emitAudit: vi.fn(),
+    })
+
+    const req = makeReq()
+    const res = makeRes()
+    await endpoint.handle(
+      req as IncomingMessage,
+      res as unknown as ServerResponse,
+      'svc-123'
+    )
+
+    expect(res.statusCode).toBe(404)
+    expect(res.body).toContain('No log-eligible deployment found for this service')
+  })
+})
