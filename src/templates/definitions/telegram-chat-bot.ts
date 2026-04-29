@@ -84,7 +84,7 @@ export const telegramChatBot: Template = {
   ],
   resources: {
     cpu: 0.5,
-    memory: '768Mi',
+    memory: '1Gi',
     storage: '4Gi',
   },
   ports: [{ port: 3000, as: 80, global: true }],
