@@ -248,7 +248,7 @@ async function handleCallback(query) {
 }
 
 async function poll() {
-  console.log(`[boot] polling for community messages as @${botUsername}.`)
+  console.log('[boot] polling for community messages.')
 
   while (!stopped) {
     try {
