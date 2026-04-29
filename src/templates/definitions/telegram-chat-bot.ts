@@ -1,7 +1,7 @@
 import type { Template } from '../schema.js'
 
 export const telegramChatBot: Template = {
-  id: 'telegram-chat-bot',
+  id: 'telegram-community-bot-runner',
   name: 'Telegram Community Bot Runner',
   description:
     'One-click Telegram bot runner for project communities. Add a bot token, project context, links, and guardrails; it runs 24/7 without webhooks.',
