@@ -1454,12 +1454,19 @@ export class AkashOrchestrator {
           { templateId: service.templateId, hasResourceOverrides: !!resourceOverrides },
           `Generating SDL from template '${service.templateId}' for service '${service.slug}'`
         )
+        const persistedEnvVars = await this.prisma.serviceEnvVar.findMany({
+          where: { serviceId: service.id },
+        })
+        const envOverrides = Object.fromEntries(
+          persistedEnvVars.map(envVar => [envVar.key, envVar.value])
+        )
         // SDL ceiling for GPU deploys is unconditional (see
         // `templates/sdl.ts:GPU_SDL_PRICING_CEILING_UACT`). No
         // dynamic-pricing lookup needed — providers bid, the bid-
         // selection layer picks the cheapest preferred bid.
         return generateSDLFromTemplate(template, {
           serviceName: service.slug,
+          envOverrides,
           resourceOverrides: resourceOverrides
             ? {
                 cpu: resourceOverrides.cpu,

@@ -1266,7 +1266,7 @@ function resolveComponent(
   if (comp.primary) {
     const env: Record<string, string> = {}
     for (const v of parentTemplate.envVars) {
-      if (v.default !== null) env[v.key] = v.default
+      env[v.key] = v.default ?? ''
     }
     if (parentTemplate.akash) {
       const a = parentTemplate.akash
@@ -1305,7 +1305,7 @@ function resolveComponent(
 
     const env: Record<string, string> = {}
     for (const v of ref.envVars) {
-      if (v.default !== null) env[v.key] = v.default
+      env[v.key] = v.default ?? ''
     }
     if (comp.envDefaults) {
       for (const [k, v] of Object.entries(comp.envDefaults)) env[k] = v
@@ -1347,7 +1347,7 @@ function resolveComponent(
   if (comp.inline) {
     const env: Record<string, string> = {}
     for (const v of comp.inline.envVars ?? []) {
-      if (v.default !== null) env[v.key] = v.default
+      env[v.key] = v.default ?? ''
     }
     if (comp.envDefaults) {
       for (const [k, v] of Object.entries(comp.envDefaults)) env[k] = v
