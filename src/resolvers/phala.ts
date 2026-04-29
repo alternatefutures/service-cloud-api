@@ -355,7 +355,7 @@ export const phalaMutations = {
       envKeys = getEnvKeysFromTemplate(template, envOverrides)
 
       for (const v of template.envVars) {
-        if (v.default !== null) mergedEnv[v.key] = v.default
+        mergedEnv[v.key] = v.default ?? ''
       }
       Object.assign(mergedEnv, envOverrides)
     } else {
