@@ -64,6 +64,10 @@ function genPassword(len = 32): string {
   return randomBytes(len).toString('base64url').slice(0, len)
 }
 
+function defaultServiceNameForTemplate(template: Template): string {
+  return `${generateSlug(template.name)}-${Date.now().toString(36)}`
+}
+
 type ResourceOverrideInput = {
   cpu?: number
   memory?: string
@@ -375,7 +379,7 @@ export const templateMutations = {
     assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
     const serviceName =
-      input.serviceName || `${template.id}-${Date.now().toString(36)}`
+      input.serviceName || defaultServiceNameForTemplate(template)
     const slug = generateSlug(serviceName)
 
     // ── Resolve env vars before persisting/deploying ─────────
@@ -552,7 +556,7 @@ export const templateMutations = {
     assertProjectAccess(context, project, 'Not authorized to deploy to this project')
 
     const serviceName =
-      input.serviceName || `${template.id}-${Date.now().toString(36)}`
+      input.serviceName || defaultServiceNameForTemplate(template)
     const slug = generateSlug(serviceName)
 
     const envOverrides: Record<string, string> = {}
@@ -866,7 +870,7 @@ export const templateMutations = {
     const baseName =
       input.serviceName ||
       existingPrimaryService?.name ||
-      `${template.id}-${Date.now().toString(36)}`
+      defaultServiceNameForTemplate(template)
     const generatedPrimarySlug = generateSlug(baseName)
 
     // ── Auto-inject platform env vars (AF_ORG_ID, AF_API_KEY) ─
