@@ -136,7 +136,11 @@ export class ShellEndpoint {
   constructor(prisma: PrismaClient, jwtSecret: string) {
     this.prisma = prisma
     this.jwtSecret = jwtSecret
-    this.wss = new WebSocketServer({ noServer: true })
+    // perMessageDeflate adds a buffering layer that hurts more than it helps
+    // for interactive TTY traffic — single-byte frames sit in the deflate
+    // engine waiting for a payoff that never comes. CLI side mirrors this in
+    // package-cloud-cli/src/commands/ssh/openShell.ts.
+    this.wss = new WebSocketServer({ noServer: true, perMessageDeflate: false })
 
     this.wss.on('connection', (ws, request) => {
       this.handleConnection(ws, request)
@@ -144,6 +148,12 @@ export class ShellEndpoint {
   }
 
   handleUpgrade(request: IncomingMessage, socket: any, head: Buffer): void {
+    // Belt-and-braces: the upgrade socket usually inherits TCP_NODELAY from
+    // the http server, but terminal latency budgets are tight enough that an
+    // accidental ~40ms Nagle batch is visible. Explicitly disable.
+    if (typeof socket?.setNoDelay === 'function') {
+      socket.setNoDelay(true)
+    }
     this.wss.handleUpgrade(request, socket, head, (ws) => {
       this.wss.emit('connection', ws, request)
     })
