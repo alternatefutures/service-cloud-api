@@ -30,6 +30,7 @@ import {
   hyperscapeServer,
   alternateAgent,
   infisicalServer,
+  telegramChatBot,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ const templates: Template[] = [
   infisicalServer,
   n8nServer,
   giteaServer,
+  telegramChatBot,
   // Web Servers
   nextjsServer,
   reactVite,
