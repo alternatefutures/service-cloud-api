@@ -9,7 +9,7 @@
  */
 
 import { execSync, execFileSync, spawn } from 'child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readdirSync, statSync } from 'fs'
 import { randomBytes } from 'crypto'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -1170,18 +1170,77 @@ export class AkashOrchestrator {
       )
     }
 
-    // Resolve full path — node-pty's posix_spawnp may not search PATH correctly
-    let binPath = 'provider-services'
-    try {
-      binPath = execFileSync('which', ['provider-services'], { encoding: 'utf-8' }).trim()
-    } catch { /* fall through with bare name */ }
+    // Resolve the provider-services binary path. node-pty's posix_spawnp
+    // doesn't reliably search PATH in every environment — notably on dev
+    // machines where the binary lives in `~/.local/bin` and the cloud-api
+    // process inherits a stripped PATH from whatever shell launched it.
+    // Resolution order:
+    //   1. `PROVIDER_SERVICES_PATH` env override (set this in .env / .env.local
+    //      for local dev when `which` from the daemon's PATH won't find it).
+    //   2. `which provider-services` against the daemon's inherited PATH.
+    //   3. Common install locations (`~/.local/bin`, `/usr/local/bin`, brew
+    //      Apple Silicon `/opt/homebrew/bin`).
+    //   4. Bare name — let posix_spawnp try its luck.
+    let binPath = process.env.PROVIDER_SERVICES_PATH
+    if (!binPath) {
+      try {
+        binPath = execFileSync('which', ['provider-services'], { encoding: 'utf-8' }).trim()
+      } catch { /* fall through */ }
+    }
+    if (!binPath || !existsSync(binPath)) {
+      const candidates = [
+        process.env.HOME ? `${process.env.HOME}/.local/bin/provider-services` : null,
+        '/usr/local/bin/provider-services',
+        '/opt/homebrew/bin/provider-services',
+      ].filter((p): p is string => Boolean(p))
+      binPath = candidates.find((p) => existsSync(p)) || 'provider-services'
+    }
+    log.info({ binPath }, 'Resolved provider-services binary for shell spawn')
 
-    const ptyProcess = pty.spawn(binPath, args, {
-      name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
-      env,
-    })
+    let ptyProcess: any
+    try {
+      ptyProcess = pty.spawn(binPath, args, {
+        name: 'xterm-256color',
+        cols: 80,
+        rows: 24,
+        env,
+      })
+    } catch (err) {
+      // node-pty's "posix_spawnp failed." message is uselessly generic — it
+      // doesn't include the errno, and the most-frequent local cause we hit on
+      // macOS isn't a missing binary at all. pnpm's content-addressed store
+      // sometimes drops the execute bit on node-pty's prebuilt `spawn-helper`
+      // during install. We've burned hours diagnosing this as a PATH issue
+      // when the real fix was `chmod +x node_modules/node-pty/prebuilds/<arch>/spawn-helper`.
+      // Do the check here so the next person sees the actionable hint instead.
+      const msg = (err as Error)?.message ?? ''
+      if (msg.includes('posix_spawnp failed')) {
+        let hint = ''
+        try {
+          // Walk every prebuilt platform we can find and report any spawn-helper
+          // missing the execute bit. Best-effort — never throw from the diagnostic.
+          const candidates = [
+            'node_modules/node-pty/prebuilds',
+            ...readdirSync('node_modules/.pnpm', { withFileTypes: true })
+              .filter((d) => d.isDirectory() && d.name.startsWith('node-pty@'))
+              .map((d) => `node_modules/.pnpm/${d.name}/node_modules/node-pty/prebuilds`),
+          ]
+          for (const dir of candidates) {
+            if (!existsSync(dir)) continue
+            for (const platform of readdirSync(dir)) {
+              const sh = `${dir}/${platform}/spawn-helper`
+              if (existsSync(sh) && !(statSync(sh).mode & 0o111)) {
+                hint = ` Likely cause: ${sh} is missing execute bit. Fix: chmod +x ${sh}`
+                break
+              }
+            }
+            if (hint) break
+          }
+        } catch { /* best-effort diagnostic only */ }
+        throw new Error(`pty.spawn failed for ${binPath} (${msg}).${hint}`)
+      }
+      throw err
+    }
 
     let killed = false
 
