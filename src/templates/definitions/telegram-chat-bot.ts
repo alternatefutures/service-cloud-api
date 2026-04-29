@@ -2,15 +2,15 @@ import type { Template } from '../schema.js'
 
 export const telegramChatBot: Template = {
   id: 'telegram-chat-bot',
-  name: 'Telegram Chat Bot (Standalone)',
+  name: 'Telegram Community Bot Runner',
   description:
-    'Standalone polling Telegram bot. Runs without Next.js or webhooks and only needs a Telegram bot token.',
+    'One-click Telegram bot runner for project communities. Add a bot token, project context, links, and guardrails; it runs 24/7 without webhooks.',
   featured: false,
   category: 'DEVTOOLS',
-  tags: ['telegram', 'bot', 'chat-sdk', 'polling', 'nodejs'],
+  tags: ['telegram', 'community', 'bot', 'faq', 'support'],
   icon: '✈️',
   repoUrl: '',
-  dockerImage: 'ghcr.io/alternatefutures/telegram-chat-bot:v1',
+  dockerImage: 'ghcr.io/alternatefutures/telegram-community-bot:v2',
   serviceType: 'VM',
   envVars: [
     {
@@ -24,6 +24,55 @@ export const telegramChatBot: Template = {
       key: 'TELEGRAM_BOT_USERNAME',
       default: 'telegramchatdemobot',
       description: 'Telegram bot username (without @)',
+      required: false,
+    },
+    {
+      key: 'PROJECT_NAME',
+      default: 'My Project',
+      description: 'Project or community name the bot represents',
+      required: true,
+    },
+    {
+      key: 'PROJECT_CONTEXT',
+      default: 'Describe what your project does and who it is for.',
+      description: 'Source-of-truth project explanation used in bot replies',
+      required: true,
+    },
+    {
+      key: 'PROJECT_STATUS',
+      default: 'Early community stage.',
+      description: 'Current status, launch stage, or availability note',
+      required: false,
+    },
+    {
+      key: 'PRIMARY_LINK',
+      default: '',
+      description: 'Main link to share with the community',
+      required: false,
+    },
+    {
+      key: 'SECONDARY_LINK',
+      default: '',
+      description: 'Optional secondary link such as docs, app, repo, or leaderboard',
+      required: false,
+    },
+    {
+      key: 'COMMUNITY_GOAL',
+      default: '',
+      description: 'What the community should do next or understand',
+      required: false,
+    },
+    {
+      key: 'BOT_PERSONA',
+      default: 'Be concise, friendly, and factual.',
+      description: 'Tone and style for bot responses',
+      required: false,
+    },
+    {
+      key: 'GUARDRAILS',
+      default:
+        'Do not claim a token has launched unless the project context explicitly says so. Do not give financial advice.',
+      description: 'Claims the bot must avoid or constraints it must follow',
       required: false,
     },
     {
