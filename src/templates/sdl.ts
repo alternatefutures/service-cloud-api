@@ -88,7 +88,11 @@ export function buildPlacementAttributesBlock(
   region: string | null | undefined
 ): string {
   if (!region) return ''
-  if (process.env.AF_REGIONS_SDL === '0') return ''
+  // Do not emit our curated region IDs into the Akash SDL by default.
+  // Provider on-chain attributes are not normalized to our taxonomy
+  // (`eu`, `us-east`, etc.); selected-region enforcement happens in
+  // `handleCheckBids` by filtering bidders against `compute_provider.region`.
+  if (process.env.AF_REGIONS_SDL !== '1') return ''
   // 6-space indent matches `signedBy:` / `pricing:` siblings in the
   // existing `placement.dcloud:` block. The trailing newline is required
   // — callers concatenate this directly before the next sibling key.

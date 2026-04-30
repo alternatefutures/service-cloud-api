@@ -30,26 +30,27 @@ describe('buildPlacementAttributesBlock', () => {
     expect(buildPlacementAttributesBlock('')).toBe('')
   })
 
-  it('emits the attributes YAML chunk when region is set', () => {
+  it('does not emit the attributes YAML chunk by default', () => {
     const block = buildPlacementAttributesBlock('us-east')
-    expect(block).toContain('attributes:')
-    expect(block).toContain('region: us-east')
-    expect(block.endsWith('\n')).toBe(true)
+    expect(block).toBe('')
   })
 
-  it('respects AF_REGIONS_SDL=0 kill switch', () => {
+  it('stays disabled when AF_REGIONS_SDL=0', () => {
     process.env.AF_REGIONS_SDL = '0'
     expect(buildPlacementAttributesBlock('us-east')).toBe('')
   })
 
-  it('emits when AF_REGIONS_SDL is unset (default ON)', () => {
+  it('stays disabled when AF_REGIONS_SDL is unset', () => {
     delete process.env.AF_REGIONS_SDL
-    expect(buildPlacementAttributesBlock('eu')).toContain('region: eu')
+    expect(buildPlacementAttributesBlock('eu')).toBe('')
   })
 
   it('emits when AF_REGIONS_SDL=1 (explicit ON)', () => {
     process.env.AF_REGIONS_SDL = '1'
-    expect(buildPlacementAttributesBlock('asia')).toContain('region: asia')
+    const block = buildPlacementAttributesBlock('asia')
+    expect(block).toContain('attributes:')
+    expect(block).toContain('region: asia')
+    expect(block.endsWith('\n')).toBe(true)
   })
 
   afterEach(() => {
@@ -68,7 +69,17 @@ describe('generateSDLFromTemplate — region emission', () => {
     expect(sdl).not.toMatch(/region:\s+/)
   })
 
-  it('emits attributes block under placement.dcloud when region is set', () => {
+  it('does not emit attributes block by default when region is set', () => {
+    const sdl = generateSDLFromTemplate(baseTemplate, {
+      serviceName: 'svc',
+      region: 'us-west',
+    })
+    expect(sdl).not.toContain('attributes:')
+    expect(sdl).not.toContain('region: us-west')
+  })
+
+  it('emits attributes block under placement.dcloud when explicitly enabled', () => {
+    process.env.AF_REGIONS_SDL = '1'
     const sdl = generateSDLFromTemplate(baseTemplate, {
       serviceName: 'svc',
       region: 'us-west',
@@ -84,7 +95,8 @@ describe('generateSDLFromTemplate — region emission', () => {
     expect(attrIdx).toBeLessThan(pricingIdx)
   })
 
-  it('preserves SDL validity (correct indentation under dcloud)', () => {
+  it('preserves SDL validity (correct indentation under dcloud) when enabled', () => {
+    process.env.AF_REGIONS_SDL = '1'
     const sdl = generateSDLFromTemplate(baseTemplate, {
       serviceName: 'svc',
       region: 'eu',
@@ -93,7 +105,8 @@ describe('generateSDLFromTemplate — region emission', () => {
     expect(sdl).toMatch(/\n {6}attributes:\n {8}region: eu\n/)
   })
 
-  it('emits region with GPU template (placement block has no signedBy)', () => {
+  it('emits region with GPU template when enabled (placement block has no signedBy)', () => {
+    process.env.AF_REGIONS_SDL = '1'
     const gpuTemplate: Template = {
       ...baseTemplate,
       resources: {
