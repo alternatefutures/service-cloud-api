@@ -393,6 +393,55 @@ export class EscrowHealthMonitor {
    *
    * Returns the number of leases we successfully closed (orphans + leaks).
    */
+  /**
+   * Phase 47 emergency guard — never let a non-prod process close chain
+   * leases. The only requirement to close on-chain is signing with the
+   * deployer key; if a developer's `.env.local` carries the production
+   * mnemonic (very common — same wallet for testing), the local DB sees
+   * zero rows for prod's chain leases, marks every one as `no_db_row`,
+   * and the sweeper closes them one by one. That's the incident that
+   * triggered this guard.
+   *
+   * Two layers, fail-closed:
+   *  1. Env gate: `AKASH_ALLOW_CHAIN_ORPHAN_SWEEP=1` is required to run
+   *     the destructive close path. Production deploy scripts set it
+   *     explicitly. Default off — local dev / staging / CI never touch
+   *     prod's chain leases even if the wallet leaks.
+   *  2. DB-coverage sanity check: if the chain reports N active leases
+   *     but the local DB knows about <50% of them, refuse the sweep and
+   *     alert. Catches any case where the env gate is mis-set against a
+   *     stale or empty DB.
+   */
+  private chainOrphanSweepEnabled(
+    chainEscrowCount: number,
+    knownDbCount: number,
+  ): { ok: boolean; reason?: string } {
+    if (process.env.AKASH_ALLOW_CHAIN_ORPHAN_SWEEP !== '1') {
+      return {
+        ok: false,
+        reason:
+          'AKASH_ALLOW_CHAIN_ORPHAN_SWEEP is not set to "1" — destructive ' +
+          'chain-orphan close path is disabled by default. Production should ' +
+          'set this in the deploy environment; dev/staging should leave it ' +
+          'unset. See escrowHealthMonitor.ts for the rationale.',
+      }
+    }
+    // Sanity: we expect prod's local DB to know about most chain leases.
+    // If chain says 50 and DB says 0-2, we're probably running against an
+    // incomplete / non-prod DB with the prod wallet — refuse.
+    if (chainEscrowCount >= 5 && knownDbCount * 2 < chainEscrowCount) {
+      return {
+        ok: false,
+        reason:
+          `DB-coverage sanity check failed: chain has ${chainEscrowCount} ` +
+          `active escrow accounts but local DB only knows about ${knownDbCount}. ` +
+          `Closing orphans now would likely close real production leases. ` +
+          `Investigate DB drift before re-enabling.`,
+      }
+    }
+    return { ok: true }
+  }
+
   private async sweepChainOrphans(
     allKnownRows: Array<{ dseq: bigint; status: string; id: string }>,
     chainEscrows: Map<string, ChainEscrowEntry>,
@@ -402,6 +451,48 @@ export class EscrowHealthMonitor {
     const dbByDseq = new Map<string, { status: string; id: string }>()
     for (const r of allKnownRows) {
       dbByDseq.set(r.dseq.toString(), { status: r.status, id: r.id })
+    }
+
+    // Phase 47 emergency guard — see chainOrphanSweepEnabled docs above.
+    // Never let a non-prod process close chain leases. The only thing
+    // standing between a dev box with the prod mnemonic and a global
+    // close-everything event was leader election + owner check; both
+    // pass when the dev wallet IS the prod wallet. This guard adds an
+    // env gate plus a DB-coverage ratio check that fails closed.
+    const gate = this.chainOrphanSweepEnabled(chainEscrows.size, allKnownRows.length)
+    if (!gate.ok) {
+      log.warn(
+        { reason: gate.reason, chainEscrowCount: chainEscrows.size, knownDbCount: allKnownRows.length },
+        'chain-orphan sweep skipped — destructive close path gated',
+      )
+      // Loud opsAlert when the ratio check trips so a real prod incident
+      // (not "operator forgot to set the env") gets a human looking at it.
+      if (
+        process.env.AKASH_ALLOW_CHAIN_ORPHAN_SWEEP === '1' &&
+        chainEscrows.size >= 5 &&
+        allKnownRows.length * 2 < chainEscrows.size
+      ) {
+        try {
+          await opsAlert({
+            key: 'chain-orphan-sweep-ratio-skip',
+            severity: 'critical',
+            title: 'Chain-orphan sweep refused — DB coverage too low',
+            message:
+              `Chain reports ${chainEscrows.size} active escrow accounts on the deployer ` +
+              `wallet, but the local DB only knows about ${allKnownRows.length}. ` +
+              `Refusing to sweep to avoid closing real production leases. Investigate ` +
+              `DB drift / replication state immediately.`,
+            context: {
+              chainEscrowCount: chainEscrows.size,
+              knownDbCount: allKnownRows.length,
+            },
+            suppressMs: 30 * 60 * 1000,
+          })
+        } catch {
+          // best-effort
+        }
+      }
+      return 0
     }
 
     // Statuses where the row is mid-flight on chain — closing races the
