@@ -292,6 +292,17 @@ model Service {
   lastBuildStatus   String? // 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'
   lastBuildAt       DateTime?
 
+  // ── Phase 46 — region selection defaults ──────────────────────────
+  // `preferredRegion` is the user-set default applied to new deployments
+  // of this service when the deploy form/CLI doesn't override it. One of
+  // the curated buckets ("us-east" | "us-west" | "eu" | "asia") or null
+  // for "Any (cheapest globally)". Failovers do NOT mutate this field —
+  // they only mutate `AkashDeployment.region` when relaxing.
+  // `preferredProvider` is null today (CLI hardcodes Akash); reserved so
+  // the picker UX can flip Akash↔Phala without a schema change.
+  preferredRegion   String? @map("preferred_region")
+  preferredProvider String? @map("preferred_provider") // "akash" | "phala" | null
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1133,6 +1144,17 @@ model AkashDeployment {
   excludedProviders String[] @default([]) @map("excluded_providers")
   failoverReason    String?  @map("failover_reason")
 
+  // Phase 46 — region selection.
+  // `region` is the user's intent at deploy time: one of the curated
+  // buckets ("us-east" | "us-west" | "eu" | "asia") or null for "Any
+  // (cheapest globally)" — today's default behavior.
+  // `resolvedRegion` is the actual region of the provider that won the
+  // bid (populated post-lease by `resolveProviderRegion(provider)`).
+  // The pair lets the admin board show "deploy intended us-east, ended
+  // up in us-west" when failover relaxes the region constraint.
+  region         String? @map("region")
+  resolvedRegion String? @map("resolved_region")
+
   // Resume chain — links a fresh redeploy created by `resumeHandler` (after
   // a SUSPENDED→ACTIVE wallet topup) back to the SUSPENDED row that owned the
   // continuous user-visible lifecycle. WITHOUT this link the "Running for Xh"
@@ -1164,6 +1186,8 @@ model AkashDeployment {
   @@index([dseq])
   @@index([failoverParentId])
   @@index([resumedFromId])
+  @@index([region])
+  @@index([resolvedRegion])
 }
 
 enum AkashDeploymentStatus {
@@ -1179,6 +1203,7 @@ enum AkashDeploymentStatus {
   SUSPENDED // Paused due to low balance (will auto-resume on topup)
   PERMANENTLY_FAILED // Failed after all retries exhausted
   CLOSE_FAILED // Local close attempt failed on-chain (RPC down, wallet empty, etc.) — needs operator/sweeper retry
+  AWAITING_REGION_RESPONSE // Phase 46 — strict region selected, no bids in initial 30s window. UI/CLI surface alternatives; sweeper auto-cancels after 5min.
 }
 
 // ============================================
@@ -1388,6 +1413,13 @@ model PhalaDeployment {
   // grows a "destroy + recreate" resume path.
   resumedFromId String? @map("resumed_from_id")
 
+  // Phase 46 — region selection.
+  // Accepted in API for forward compatibility; ALWAYS null in production
+  // until Phala Cloud exposes region/cluster selection in its CLI. The
+  // entire UI/CLI region picker is replaced with an explicit
+  // "Phala Cloud is single-region" message when provider = phala.
+  region String? @map("region")
+
   // Relations
   serviceId String
   service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
@@ -1453,6 +1485,14 @@ model DeploymentPolicy {
   // remainder refunded on stop/expiry.
   reservedCents Int @default(0) @map("reserved_cents")
 
+  // Phase 46 — region constraints (curated buckets only).
+  // `allowedRegions` is hard: the deploy is rejected if the user picks a
+  // region not in this list (empty = any region permitted).
+  // `preferredRegions` is soft: scoring/preference at bid time, used by the
+  // tiered failover to relax to the next option in the list.
+  allowedRegions   String[] @default([]) @map("allowed_regions")
+  preferredRegions String[] @default([]) @map("preferred_regions")
+
   // Enforcement state
   stopReason    PolicyStopReason? @map("stop_reason")
   stoppedAt     DateTime?         @map("stopped_at")
@@ -1514,6 +1554,17 @@ model ComputeProvider {
   // Raw provider attributes from chain/API
   attributes Json?
 
+  // Phase 46 — region selection.
+  // `region` is the resolved curated bucket ("us-east" | "us-west" | "eu" |
+  // "asia"). Populated by `resolveProviderRegion()` during the 5-min cache
+  // refresh — see `services/regions/resolve.ts`. Null = unknown / unresolved
+  // (provider stays selectable for "Any" but is invisible to region-filtered
+  // queries). `country` is the ISO 3166-1 alpha-2 (lowercase) — pulled from
+  // the same source for admin reporting and for the country-fallback branch
+  // of the resolver.
+  region  String? @map("region")
+  country String? @map("country")
+
   // Test metadata
   lastTestedAt DateTime? @map("last_tested_at")
 
@@ -1525,7 +1576,27 @@ model ComputeProvider {
   @@index([providerType])
   @@index([verified])
   @@index([isOnline])
+  @@index([region])
   @@map("compute_provider")
+}
+
+// Phase 46 — manual override for `ComputeProvider.region`. The resolution
+// pipeline (Akashlytics lat/lon → chain alias → country fallback) is correct
+// for the bulk of providers but mistags edge cases (operators who advertise
+// "us" without a region tag, multi-DC providers, etc.). This table is the
+// admin escape hatch: an operator drops in a row and the next refresh
+// respects it. Keyed on provider address so history persists across
+// online/offline transitions.
+model ComputeProviderRegionOverride {
+  providerAddress String   @id @map("provider_address")
+  // null = "force unknown" — useful to hide a noisy auto-resolved tag.
+  region          String?
+  reason          String?
+  setBy           String?  @map("set_by") // admin user id
+  setAt           DateTime @default(now()) @map("set_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("compute_provider_region_override")
 }
 
 model ProviderTemplateResult {
@@ -1581,8 +1652,16 @@ model GpuBidObservation {
   dseq       BigInt
   observedAt DateTime @default(now()) @map("observed_at")
 
+  /// Phase 46 — provider's resolved region at observation time. Null if the
+  /// provider couldn't be resolved (Akashlytics gap, missing chain attrs,
+  /// etc.). Captured here rather than joined at query time because providers
+  /// change region tags occasionally and we want price history fixed to the
+  /// region that bid the price.
+  providerRegion String? @map("provider_region")
+
   @@index([gpuModel, observedAt])
   @@index([probeRunId])
+  @@index([providerRegion, gpuModel, observedAt])
   @@map("gpu_bid_observation")
 }
 

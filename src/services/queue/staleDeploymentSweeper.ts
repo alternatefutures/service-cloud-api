@@ -36,6 +36,14 @@ const STALE_THRESHOLD_MIN = STALE_THRESHOLD_MS / 60_000
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000   // 5 minutes
 const LIVENESS_MIN_AGE_MS = 10 * 60 * 1000 // only check deployments ACTIVE for >10 min
 
+// Phase 46 — AWAITING_REGION_RESPONSE rows are the user-visible "no bids in
+// region X" pause state. The UI/CLI surface alternative regions and a retry
+// option; if the user does nothing, the sweeper auto-cancels after 5 min so
+// the deployment doesn't linger as a half-state forever. Shorter than
+// STALE_THRESHOLD_MS because the row hasn't actually allocated chain or
+// escrow resources yet — just a temp dseq + DB row, both cheap to drop.
+const REGION_AWAIT_THRESHOLD_MS = 5 * 60 * 1000
+
 const AKASH_INTERMEDIATE_STATES = [
   'CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING',
 ] as const
@@ -499,9 +507,108 @@ async function reconcileOrphanedEscrows(prisma: PrismaClient): Promise<void> {
   }
 }
 
+/**
+ * Phase 46 — auto-cancel deployments stuck in AWAITING_REGION_RESPONSE
+ * for >REGION_AWAIT_THRESHOLD_MS. The state is the user-visible "no bids
+ * in region X" pause; if the user walks away without picking an
+ * alternative, we don't want a half-state deployment row sitting around
+ * forever. Marks FAILED with a self-explanatory errorMessage. No on-chain
+ * close needed — the row never reached a real dseq (still has the
+ * negative-timestamp temp dseq from `deployService`).
+ *
+ * Runs in the existing sweep cycle alongside `sweepStaleDeployments` so
+ * we don't pay for a separate scheduler.
+ */
+async function sweepAwaitingRegionResponse(prisma: PrismaClient): Promise<void> {
+  const cutoff = new Date(Date.now() - REGION_AWAIT_THRESHOLD_MS)
+
+  let stale: Array<{
+    id: string
+    region: string | null
+    updatedAt: Date
+    dseq: bigint | null
+  }> = []
+  try {
+    stale = await prisma.akashDeployment.findMany({
+      where: {
+        status: 'AWAITING_REGION_RESPONSE',
+        updatedAt: { lt: cutoff },
+      },
+      select: { id: true, region: true, updatedAt: true, dseq: true },
+    })
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : err }, 'AWAITING_REGION_RESPONSE scan failed')
+    return
+  }
+
+  if (stale.length === 0) return
+
+  for (const dep of stale) {
+    // If a real dseq was assigned (positive — temp dseqs are negative),
+    // the deployment exists on-chain with a locked deposit. We MUST close
+    // it to prevent escrow leak until chain-side expiry. Mirrors the
+    // close behavior in sweepStaleDeployments.
+    let closeStatus: 'CLOSED' | 'ALREADY_CLOSED' | 'FAILED' | 'NO_DSEQ' = 'NO_DSEQ'
+    let closeError: string | undefined
+    if (dep.dseq && Number(dep.dseq) > 0) {
+      try {
+        const orchestrator = getAkashOrchestrator(prisma)
+        const result = await orchestrator.closeDeployment(Number(dep.dseq))
+        closeStatus = result.chainStatus
+        if (result.chainStatus === 'CLOSED' || result.chainStatus === 'ALREADY_CLOSED') {
+          log.info(
+            { deploymentId: dep.id, dseq: String(dep.dseq), chainStatus: result.chainStatus },
+            'Closed on-chain deployment for AWAITING_REGION_RESPONSE auto-cancel',
+          )
+        } else {
+          closeError = result.error
+          log.warn(
+            { deploymentId: dep.id, dseq: String(dep.dseq), chainStatus: result.chainStatus, error: closeError },
+            'On-chain close FAILED during AWAITING_REGION_RESPONSE auto-cancel — marking CLOSE_FAILED for retry',
+          )
+        }
+      } catch (err) {
+        closeError = err instanceof Error ? err.message : String(err)
+        closeStatus = 'FAILED'
+        log.warn(
+          { deploymentId: dep.id, err: closeError },
+          'orchestrator.closeDeployment threw during AWAITING_REGION_RESPONSE auto-cancel',
+        )
+      }
+    }
+
+    const finalStatus = closeStatus === 'FAILED' ? 'CLOSE_FAILED' : 'FAILED'
+    const reasonSuffix = closeStatus === 'FAILED'
+      ? ` Chain close failed (${closeError ?? 'unknown'}); marked CLOSE_FAILED for sweeper retry.`
+      : ''
+
+    try {
+      await prisma.akashDeployment.update({
+        where: { id: dep.id },
+        data: {
+          status: finalStatus,
+          errorMessage:
+            `No bids in region "${dep.region ?? 'unknown'}" — cancelled after ${Math.round(REGION_AWAIT_THRESHOLD_MS / 60_000)} min with no user retry.${reasonSuffix}`,
+          closedAt: new Date(),
+        },
+      })
+      log.info(
+        { deploymentId: dep.id, region: dep.region, finalStatus },
+        'Cancelled AWAITING_REGION_RESPONSE deployment past threshold'
+      )
+    } catch (err) {
+      log.warn(
+        { deploymentId: dep.id, err: err instanceof Error ? err.message : err },
+        'Failed to mark AWAITING_REGION_RESPONSE deployment final status — will retry next sweep'
+      )
+    }
+  }
+}
+
 function runSweep(prisma: PrismaClient): void {
   const sweep = (async () => {
     await sweepStaleDeployments(prisma)
+    await sweepAwaitingRegionResponse(prisma)
     await reconcileActiveDeployments(prisma)
     await reconcileOrphanedEscrows(prisma)
   })()

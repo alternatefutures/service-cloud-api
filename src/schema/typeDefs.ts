@@ -594,6 +594,16 @@ export const typeDefs = /* GraphQL */ `
     the hood but should not reset the user-visible uptime.
     """
     activeSince: Date
+    """
+    Phase 46 — curated region the user picked at deploy time
+    (one of: us-east, us-west, eu, asia) or null for "Any (cheapest globally)".
+    """
+    region: String
+    """
+    Phase 46 — actual region of the provider that won the bid (post-lease).
+    Diverges from "region" only when failover relaxed the constraint.
+    """
+    resolvedRegion: String
   }
 
   enum AkashDeploymentStatus {
@@ -608,6 +618,12 @@ export const typeDefs = /* GraphQL */ `
     PERMANENTLY_FAILED
     SUSPENDED
     CLOSED
+    """
+    Phase 46 — strict region selected, no bids in the polling window.
+    Soft-fail state, NOT a failure. UI surfaces alternatives + retry.
+    Sweeper auto-cancels rows stuck here >5 min.
+    """
+    AWAITING_REGION_RESPONSE
   }
 
   # ============================================
@@ -654,6 +670,13 @@ export const typeDefs = /* GraphQL */ `
     "Running for Xh" timer without being reset by background retries.
     """
     activeSince: Date
+    """
+    Phase 46 — schema-level forward compatibility for region selection.
+    Always null in production until Phala Cloud exposes region/cluster
+    selection in its CLI. Surfaced so client code that fragments on
+    AkashDeployment + PhalaDeployment can use a uniform shape.
+    """
+    region: String
   }
 
   enum PhalaDeploymentStatus {
@@ -718,6 +741,12 @@ export const typeDefs = /* GraphQL */ `
     resourceOverrides: ResourceOverrideInput
     # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
     baseImage: String
+    # Phase 46 — optional curated region bucket: "us-east" | "us-west" | "eu" | "asia".
+    # Null/omitted = "Any (cheapest globally)" — today's default behavior.
+    # Strict: only providers publishing the matching region attribute will bid.
+    # If no bids arrive, the deployment goes to AWAITING_REGION_RESPONSE
+    # (not FAILED) so the UI/CLI can surface alternatives without losing the row.
+    region: String
   }
 
   """
@@ -735,6 +764,11 @@ export const typeDefs = /* GraphQL */ `
     resourceOverrides: ResourceOverrideInput
     # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
     baseImage: String
+    # Phase 46 — accepted for forward compatibility; currently ignored because
+    # Phala Cloud is single-region. Servers persist NULL on PhalaDeployment.region
+    # regardless of input, and the picker UI swaps to a "single-region" message
+    # when provider = phala. Will become live when upstream adds region support.
+    region: String
   }
 
   """
@@ -2282,6 +2316,69 @@ export const typeDefs = /* GraphQL */ `
     buildJob(id: ID!): BuildJob
     """List recent BuildJobs for a service, newest first. Logs blob omitted — fetch it via buildJob(id) on demand. Used by the Source-tab build-history list (polled every 3s while a build is in flight)."""
     serviceBuildJobs(serviceId: ID!, limit: Int): [BuildJob!]!
+  }
+
+  # ============================================
+  # REGIONS (Phase 46)
+  # ============================================
+
+  """Compute provider type, used for picker queries that branch by provider."""
+  enum ComputeProviderType {
+    AKASH
+    PHALA
+  }
+
+  """Coarse confidence indicator for a region — drives UI dot color."""
+  enum RegionConfidence {
+    GREEN
+    YELLOW
+    RED
+  }
+
+  """
+  Median USD/hr price by GPU model within a region. Computed from the
+  last 24h of GpuBidObservation rows scoped to providers in this region.
+  Null = no recent bid for that model in this region (UI shows "—").
+  cpu1Core is the median CPU bid (no-GPU probe SDLs) for a tdx.small-equivalent.
+  """
+  type RegionMedianPrices {
+    cpu1Core: Float
+    h100: Float
+    h200: Float
+    rtx4090: Float
+    a100: Float
+  }
+
+  """
+  A curated region bucket as exposed to the picker UX.
+  Phala returns a single sentinel row with id=phala-single-region — the
+  client detects this and renders the explicit single-region message
+  rather than the picker.
+  """
+  type Region {
+    """Stable id: us-east | us-west | eu | asia | phala-single-region (sentinel)."""
+    id: String!
+    """Human label, e.g. "US East" or "Phala Cloud (single-region)"."""
+    label: String!
+    """Strict gate: true iff verifiedCount ≥ 1 AND recentBidCount ≥ 1."""
+    available: Boolean!
+    verifiedCount: Int!
+    onlineCount: Int!
+    """Bid observations from this region in the last 24h."""
+    recentBidCount: Int!
+    medianPrices: RegionMedianPrices!
+    confidence: RegionConfidence!
+  }
+
+  extend type Query {
+    """
+    Return curated region buckets with live availability + pricing for the picker.
+    Defaults to AKASH when provider is omitted. PHALA returns a single sentinel
+    row signaling single-region — see AF_IMPLEMENTATION_PHALA.md for the UX.
+    The gpuModelHint argument is reserved for future per-model price emphasis;
+    ignored today.
+    """
+    regions(provider: ComputeProviderType, gpuModelHint: String): [Region!]!
   }
 
   extend type Mutation {

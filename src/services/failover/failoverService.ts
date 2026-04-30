@@ -284,6 +284,14 @@ export async function executeFailover(
 
   // 3. Spawn the new deployment row. Negative dseq is the same temporary
   // marker the orchestrator uses pre-SUBMIT_TX (avoids the unique constraint).
+  //
+  // Phase 46/47 — carry `region` forward so the user's intent survives
+  // failover. Without this, the failover row has region=NULL, the
+  // server-side bid filter (akashSteps.handleCheckBids) doesn't fire,
+  // and the deployment lands wherever's cheapest globally — often a
+  // different region than the user picked. The "Failover policy: tiered"
+  // design (M4) will eventually relax this to soft-region after N
+  // exclusions; for now the user's region choice is honored every time.
   const newDeployment = await prisma.akashDeployment.create({
     data: {
       owner: deployment.owner,
@@ -300,6 +308,7 @@ export async function executeFailover(
       excludedProviders: context.excludedProviders,
       failoverReason: context.reason,
       policyId: retryPolicyId,
+      region: deployment.region,
     } as Prisma.AkashDeploymentUncheckedCreateInput,
   })
 

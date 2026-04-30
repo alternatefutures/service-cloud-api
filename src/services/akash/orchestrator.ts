@@ -24,7 +24,7 @@ import { getBillingApiClient } from '../billing/billingApiClient.js'
 import { createLogger } from '../../lib/logger.js'
 import { withWalletLock, isWalletTx } from './walletMutex.js'
 import type { TemplateGpu } from '../../templates/index.js'
-import { resolveSdlPricingUact } from '../../templates/sdl.js'
+import { resolveSdlPricingUact, buildPlacementAttributesBlock } from '../../templates/sdl.js'
 
 const log = createLogger('akash-orchestrator')
 
@@ -1305,6 +1305,14 @@ export class AkashOrchestrator {
         gpu?: { units: number; vendor: string; model?: string } | null
       }
       baseImage?: string
+      /**
+       * Phase 46 — optional curated region bucket ("us-east" | "us-west" |
+       * "eu" | "asia"). When set, the SDL emits `placement.attributes.region`
+       * and only providers publishing that attribute will bid. Empty bids
+       * route through `AWAITING_REGION_RESPONSE` instead of failing. Null/
+       * undefined = "Any (cheapest globally)" — today's default behavior.
+       */
+      region?: string | null
     } = {}
   ): Promise<string> {
     const deposit = options.deposit || DEFAULT_DEPOSIT_UACT
@@ -1358,9 +1366,19 @@ export class AkashOrchestrator {
       }
     }
 
-    // Prepare SDL content
+    // Prepare SDL content. Phase 46: pass region through so the SDL
+    // generator can emit `placement.attributes.region` when applicable.
+    // The flag `AF_REGIONS_SDL` (default ON) gates emission so an
+    // incident can disable region-attribute filtering without a redeploy
+    // — the deploy still happens, just without the placement attribute.
     let sdlContent =
-      options.sdlContent || (await this.generateSDLForService(service, options.resourceOverrides, options.baseImage))
+      options.sdlContent ||
+      (await this.generateSDLForService(
+        service,
+        options.resourceOverrides,
+        options.baseImage,
+        options.region ?? null
+      ))
     if (!options.skipEnvInjection) {
       sdlContent = await this.injectPersistedEnvVars(
         service.id,
@@ -1386,6 +1404,10 @@ export class AkashOrchestrator {
         depositUakt: BigInt(deposit),
         status: 'CREATING',
         retryCount: 0,
+        // Phase 46 — persist user intent. resolvedRegion is filled in
+        // post-lease by the lease creation handler from the winning
+        // provider's `ComputeProvider.region`.
+        region: options.region ?? null,
       },
     })
 
@@ -1462,7 +1484,7 @@ export class AkashOrchestrator {
     memory?: string
     storage?: string
     gpu?: { units: number; vendor: string; model?: string } | null
-  }, baseImage?: string): Promise<string> {
+  }, baseImage?: string, region?: string | null): Promise<string> {
     if (service.type === 'FUNCTION') {
       if (!service.afFunction?.sourceCode) {
         throw new Error('Function has no source code')
@@ -1538,6 +1560,7 @@ export class AkashOrchestrator {
                     : undefined,
               }
             : undefined,
+          region,
         })
       }
       log.warn(
@@ -1576,6 +1599,7 @@ export class AkashOrchestrator {
         port,
         resourceOverrides,
         parsedVolumes,
+        region,
       )
     }
 
@@ -1590,7 +1614,7 @@ export class AkashOrchestrator {
     if (fallbackTemplateId) {
       const template = getTemplateById(fallbackTemplateId)
       if (template) {
-        return generateSDLFromTemplate(template, { serviceName: service.slug })
+        return generateSDLFromTemplate(template, { serviceName: service.slug, region })
       }
     }
 
@@ -1717,6 +1741,7 @@ export class AkashOrchestrator {
       gpu?: { units: number; vendor: string; model?: string } | null
     },
     volumes: ServiceVolume[] = [],
+    region?: string | null,
   ): string {
     const needsKeepAlive = /^(ubuntu|debian|alpine|centos|fedora|busybox|amazonlinux|rockylinux|almalinux)(:|$)/i.test(image)
 
@@ -1813,7 +1838,7 @@ ${storageProfile}${gpuBlock}
 
   placement:
     dcloud:
-      signedBy:
+${buildPlacementAttributesBlock(region)}      signedBy:
         anyOf:
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
