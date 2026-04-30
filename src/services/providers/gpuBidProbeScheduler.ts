@@ -58,6 +58,16 @@ export class GpuBidProbeScheduler {
       return
     }
 
+    // The probe submits `tx deployment create` (with a deposit) every 6h
+    // and then closes. Require an explicit env flag so non-prod processes
+    // that share the deployer wallet don't spend from it.
+    if (process.env.AKASH_ENABLE_BACKGROUND_WALLET_OPS !== '1') {
+      log.warn(
+        'AKASH_ENABLE_BACKGROUND_WALLET_OPS not set — gpu bid probe scheduler disabled (production-only)'
+      )
+      return
+    }
+
     // Sweep any probe-run rows left in `running` by a previous, dead
     // process so the admin dashboard's third card doesn't lie. Best-
     // effort: a DB hiccup here mustn't block scheduler startup.

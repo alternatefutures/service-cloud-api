@@ -394,23 +394,12 @@ export class EscrowHealthMonitor {
    * Returns the number of leases we successfully closed (orphans + leaks).
    */
   /**
-   * Phase 47 emergency guard — never let a non-prod process close chain
-   * leases. The only requirement to close on-chain is signing with the
-   * deployer key; if a developer's `.env.local` carries the production
-   * mnemonic (very common — same wallet for testing), the local DB sees
-   * zero rows for prod's chain leases, marks every one as `no_db_row`,
-   * and the sweeper closes them one by one. That's the incident that
-   * triggered this guard.
-   *
-   * Two layers, fail-closed:
-   *  1. Env gate: `AKASH_ALLOW_CHAIN_ORPHAN_SWEEP=1` is required to run
-   *     the destructive close path. Production deploy scripts set it
-   *     explicitly. Default off — local dev / staging / CI never touch
-   *     prod's chain leases even if the wallet leaks.
-   *  2. DB-coverage sanity check: if the chain reports N active leases
-   *     but the local DB knows about <50% of them, refuse the sweep and
-   *     alert. Catches any case where the env gate is mis-set against a
-   *     stale or empty DB.
+   * Gate the destructive chain-orphan close path so only production
+   * processes run it. Two fail-closed layers:
+   *  1. Env: `AKASH_ALLOW_CHAIN_ORPHAN_SWEEP=1` must be set.
+   *  2. Coverage: refuse if chain has ≥5 active escrows but local DB
+   *     knows about fewer than half — protects against running against
+   *     a stale or empty DB with the prod wallet.
    */
   private chainOrphanSweepEnabled(
     chainEscrowCount: number,
@@ -419,24 +408,16 @@ export class EscrowHealthMonitor {
     if (process.env.AKASH_ALLOW_CHAIN_ORPHAN_SWEEP !== '1') {
       return {
         ok: false,
-        reason:
-          'AKASH_ALLOW_CHAIN_ORPHAN_SWEEP is not set to "1" — destructive ' +
-          'chain-orphan close path is disabled by default. Production should ' +
-          'set this in the deploy environment; dev/staging should leave it ' +
-          'unset. See escrowHealthMonitor.ts for the rationale.',
+        reason: 'AKASH_ALLOW_CHAIN_ORPHAN_SWEEP not set — production-only',
       }
     }
-    // Sanity: we expect prod's local DB to know about most chain leases.
-    // If chain says 50 and DB says 0-2, we're probably running against an
-    // incomplete / non-prod DB with the prod wallet — refuse.
+    // Refuse if local DB knows about <50% of chain's active escrows —
+    // catches running against a stale/empty DB with the prod wallet.
     if (chainEscrowCount >= 5 && knownDbCount * 2 < chainEscrowCount) {
       return {
         ok: false,
         reason:
-          `DB-coverage sanity check failed: chain has ${chainEscrowCount} ` +
-          `active escrow accounts but local DB only knows about ${knownDbCount}. ` +
-          `Closing orphans now would likely close real production leases. ` +
-          `Investigate DB drift before re-enabling.`,
+          `coverage check failed: chain ${chainEscrowCount} active escrows, DB knows ${knownDbCount}`,
       }
     }
     return { ok: true }
@@ -453,12 +434,7 @@ export class EscrowHealthMonitor {
       dbByDseq.set(r.dseq.toString(), { status: r.status, id: r.id })
     }
 
-    // Phase 47 emergency guard — see chainOrphanSweepEnabled docs above.
-    // Never let a non-prod process close chain leases. The only thing
-    // standing between a dev box with the prod mnemonic and a global
-    // close-everything event was leader election + owner check; both
-    // pass when the dev wallet IS the prod wallet. This guard adds an
-    // env gate plus a DB-coverage ratio check that fails closed.
+    // Gate the destructive close path — see chainOrphanSweepEnabled.
     const gate = this.chainOrphanSweepEnabled(chainEscrows.size, allKnownRows.length)
     if (!gate.ok) {
       log.warn(
