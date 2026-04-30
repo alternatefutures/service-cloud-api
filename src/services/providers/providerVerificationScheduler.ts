@@ -57,6 +57,16 @@ export class ProviderVerificationScheduler {
       return
     }
 
+    // Verification creates real on-chain deployments (deposits AKT) and
+    // closes them. Require an explicit env flag so non-prod processes
+    // that share the deployer wallet don't spend from it.
+    if (process.env.AKASH_ENABLE_BACKGROUND_WALLET_OPS !== '1') {
+      log.warn(
+        'AKASH_ENABLE_BACKGROUND_WALLET_OPS not set — provider verification scheduler disabled (production-only)'
+      )
+      return
+    }
+
     // Sweep any rows left in `running` by a previous, dead process
     // (OOM, deploy SIGKILL, laptop sleep, etc.) so the admin dashboard
     // doesn't keep showing a misleading "Running" badge for hours.

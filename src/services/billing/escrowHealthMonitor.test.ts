@@ -62,6 +62,10 @@ vi.mock('../../config/akash.js', () => ({
 
 import { EscrowHealthMonitor } from './escrowHealthMonitor.js'
 
+function enableChainOrphanSweep() {
+  process.env.AKASH_ALLOW_CHAIN_ORPHAN_SWEEP = '1'
+}
+
 interface FakeAkashDeployment {
   id: string
   dseq: bigint
@@ -194,6 +198,7 @@ function installAkashCli(overrides: {
 describe('EscrowHealthMonitor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    delete process.env.AKASH_ALLOW_CHAIN_ORPHAN_SWEEP
     closeDeploymentMock.mockResolvedValue({ chainStatus: 'CLOSED', txhash: 'mock-tx' })
     refundEscrowMock.mockResolvedValue(undefined)
     settleAkashEscrowToTimeMock.mockResolvedValue(undefined)
@@ -469,7 +474,27 @@ describe('EscrowHealthMonitor', () => {
   })
 
   describe('chain-orphan sweep', () => {
+    it('SAFETY: skips destructive orphan sweep by default', async () => {
+      const prisma = buildPrisma([])
+      installAkashCli({
+        blockHeight: 1_000_700,
+        listDeployments: [
+          { dseq: '999', fundsUact: 1_000_000, transferredUact: 0, settledAt: 1_000_000 },
+        ],
+      })
+
+      const monitor = new EscrowHealthMonitor(prisma)
+      await monitor.checkAndRefill()
+
+      expect(closeDeploymentMock).not.toHaveBeenCalled()
+      const orphanAlert = opsAlertMock.mock.calls.find(
+        c => (c[0]?.key ?? '').startsWith('chain-orphan-closed:'),
+      )
+      expect(orphanAlert).toBeUndefined()
+    })
+
     it('closes a chain deployment that has no DB row and is older than the age threshold', async () => {
+      enableChainOrphanSweep()
       // DB has dseq 100 ACTIVE; chain has 100 + 999. 999 is the orphan.
       // settledAt = 1_000_000, blockHeight = 1_000_700 → ageBlocks = 700 > 600 threshold.
       const prisma = buildPrisma([
@@ -505,6 +530,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('skips chain deployments younger than the age threshold (race protection)', async () => {
+      enableChainOrphanSweep()
       // settledAt = 1_000_500, blockHeight = 1_000_700 → ageBlocks = 200 < 600.
       // This is the case where a deployment was just created and the queue
       // worker hasn't written the DB row yet (or a probe-bid is mid-flight).
@@ -530,6 +556,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('skips chain entries that are already closed on-chain', async () => {
+      enableChainOrphanSweep()
       // Orphan that's already `closed: true` on chain — nothing to do, the
       // escrow is already being settled by the chain itself.
       const prisma = buildPrisma([
@@ -556,6 +583,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('runs the sweep even when DB has zero ACTIVE rows (orphan-only case)', async () => {
+      enableChainOrphanSweep()
       // This is the bug from the screenshot: production cloud-api had no
       // ACTIVE deployments in the DB but a chain orphan still existed.
       // The previous early-return-on-empty meant we never even queried chain.
@@ -574,6 +602,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('does not close anything when chain matches DB exactly', async () => {
+      enableChainOrphanSweep()
       const prisma = buildPrisma([
         { id: 'a1', dseq: 100n, pricePerBlock: '1000', owner: 'akash1owner' },
         { id: 'a2', dseq: 200n, pricePerBlock: '1000', owner: 'akash1owner' },
@@ -628,6 +657,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('SAFETY: protects chain dseqs whose DB row is mid-flight (CREATING/WAITING_BIDS/…/DEPLOYING)', async () => {
+      enableChainOrphanSweep()
       // The sweep MUST never close a row that's mid-flow on chain — closing
       // races the queue worker and would destroy a real user workload that
       // hasn't reached ACTIVE yet.
@@ -668,6 +698,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('LEAK FIX: closes chain leases whose DB row is SUSPENDED (suspendOrgHandler chain-close failure)', async () => {
+      enableChainOrphanSweep()
       // Reproduces the silent escrow burner: suspendOrgHandler tried to
       // close on-chain at suspend time, the chain close didn't take, but
       // the DB row was marked SUSPENDED anyway. Pre-fix the sweep skipped
@@ -704,6 +735,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('LEAK FIX: closes chain leases whose DB row is CLOSE_FAILED (close-tx retry)', async () => {
+      enableChainOrphanSweep()
       const prisma = buildPrisma(
         [],
         [{ id: 'r1', dseq: 154n, status: 'CLOSE_FAILED' }],
@@ -725,6 +757,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('LEAK FIX: closes chain leases whose DB row is CLOSED but chain still open', async () => {
+      enableChainOrphanSweep()
       // Pure mismatch: DB committed CLOSED but chain didn't receive / accept
       // the close. Pre-fix this leaked forever.
       const prisma = buildPrisma(
@@ -748,6 +781,7 @@ describe('EscrowHealthMonitor', () => {
     })
 
     it('does not alert when on-chain close fails (will retry next cycle)', async () => {
+      enableChainOrphanSweep()
       const prisma = buildPrisma([])
       installAkashCli({
         blockHeight: 1_000_700,
