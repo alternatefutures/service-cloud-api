@@ -178,18 +178,51 @@ async function handleInstallationEvent(
   }
 
   if (payload.action === 'created') {
-    // We can't infer the org without prior context. The install came from a
-    // user clicking "Install" on github.com directly (not the in-app flow).
-    // Best-effort: try to match a `User.githubId` to set installedByUserId,
-    // and require the user to call `syncGithubInstallation` from the in-app
-    // setup_url to pick which org owns this install.
+    // The install came from a user clicking "Install" on github.com (or
+    // through our in-app "Install App" CTA which opens the same page).
     //
-    // For now: log only. The frontend will call `syncGithubInstallation`
-    // when the user lands on /projects after the install redirect, and that
-    // mutation does the upsert with the correct organizationId.
-    log.info(
-      { installationId: inst.id, account: inst.account.login },
-      'install created (awaiting in-app sync)',
+    // We log at WARN if the in-app sync hasn't completed within a few
+    // seconds — but we DO NOT auto-create the row here. Materializing
+    // requires a known-good (installation, AF org) pair, and the only
+    // signals we have at webhook time are GitHub-side identifiers
+    // (installation id, sender's GitHub account id, sender's GitHub
+    // login). Mapping any of those to an AF Organization without an
+    // explicit user action is exactly the cross-tenant claim shape that
+    // Phase 47 (2026-04-27) closed.
+    //
+    // To make the auto-claim safe we'd need:
+    //   - `User.githubId` (or `User.githubLogin`) populated via GitHub
+    //     OAuth on signup — schema change to service-cloud-api, plus
+    //     a backfill from service-auth's `auth_methods` rows where
+    //     `provider='github'`.
+    //   - A deterministic rule for which of the matched user's AF orgs
+    //     to claim into (e.g. the org whose project they were viewing
+    //     when they kicked off the install — but the webhook has no
+    //     correlation token to recover that).
+    //
+    // Until then, the canonical claim path is the setup_url redirect:
+    //   GithubSourceSection.handleInstallApp → ?state=<afOrgId>
+    //   → app/projects/page.tsx → syncGithubInstallation
+    // With `setup_on_update: true` (manifest), even "App was already
+    // installed → configure → save" cycles re-fire setup_url, so the
+    // window where this WARN matters is genuinely the popup-blocked /
+    // tab-closed-mid-redirect case.
+    //
+    // TODO(github-claim-fallback): add a `claimGithubInstallation`
+    // mutation gated on the user being able to list this install via
+    // GET /user/installations (using their GitHub OAuth access token in
+    // service-auth's `auth_methods.oauth_access_token`). That gives a
+    // user-driven recovery path without inventing a webhook-side guess.
+    log.warn(
+      {
+        installationId: inst.id,
+        account: inst.account.login,
+        accountType: inst.account.type,
+        senderId: payload.sender.id,
+        senderLogin: payload.sender.login,
+        repositorySelection: inst.repository_selection,
+      },
+      'install created — awaiting in-app sync via setup_url redirect (no auto-claim; see TODO github-claim-fallback)',
     )
     return
   }
