@@ -271,4 +271,12 @@ export interface TemplateDeployConfig {
   }
   /** Akash deposit in uakt */
   depositUakt?: number
+  /**
+   * Phase 46 — curated region bucket ("us-east" | "us-west" | "eu" | "asia").
+   * When set and `AF_REGIONS_SDL` is not "0", the generator emits
+   * `placement.attributes.region` so only matching providers bid. Caller is
+   * responsible for validation against `isRegionId()` from
+   * `services/regions/mapping.ts`. Null/undefined = "Any" (no constraint).
+   */
+  region?: string | null
 }

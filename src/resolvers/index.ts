@@ -33,6 +33,7 @@ import {
   templateFieldResolvers,
 } from './templates.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
+import { regionsQueries } from './regions.js'
 import { githubQueries, githubMutations, githubFieldResolvers } from './github.js'
 import {
   serviceConnectivityQueries,
@@ -1081,6 +1082,9 @@ export const resolvers = {
     // Akash deployment queries
     ...akashQueries,
     ...phalaQueries,
+
+    // Phase 46 — region picker query (provider-agnostic; PHALA returns sentinel)
+    ...regionsQueries,
 
     // GitHub-source deploy queries
     ...githubQueries,

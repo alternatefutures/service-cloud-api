@@ -472,6 +472,9 @@ export async function handleCheckBids(
       retryCount: true,
       status: true,
       excludedProviders: true,
+      // Phase 46 — used to route empty-bids to AWAITING_REGION_RESPONSE
+      // when the user explicitly picked a region. Null = "Any", legacy path.
+      region: true,
     },
   })
   if (!deployment || AKASH_TERMINAL_STATES.has(deployment.status)) return
@@ -514,6 +517,30 @@ export async function handleCheckBids(
 
     if (rawBids.length === 0) {
       if (attempt >= BID_POLL_MAX_ATTEMPTS) {
+        // Phase 46 — when the user explicitly picked a region and no bids
+        // arrived, this is *not* a deploy failure. Move to a soft-fail
+        // state so the UI/CLI can surface alternative regions and the
+        // user can one-click retry without losing the deployment row.
+        // The stale-deployment sweeper auto-cancels rows stuck here for
+        // >5 min to prevent orphans.
+        if (deployment.region) {
+          await prisma.akashDeployment.update({
+            where: { id: deploymentId },
+            data: {
+              status: 'AWAITING_REGION_RESPONSE',
+              errorMessage: `No bids received from region "${deployment.region}" within timeout. Pick another region or retry.`,
+            },
+          })
+          emitProgress(
+            deploymentId,
+            'CHECK_BIDS',
+            AKASH_STEP_NUMBERS.CHECK_BIDS,
+            deployment.retryCount,
+            `No bids in region "${deployment.region}" — awaiting user choice.`
+          )
+          return
+        }
+
         await enqueueNext('/queue/akash/step', {
           step: 'HANDLE_FAILURE',
           deploymentId,
@@ -576,6 +603,72 @@ export async function handleCheckBids(
         errorMessage: errMsg,
       } satisfies AkashHandleFailurePayload)
       return
+    }
+
+    // ── Phase 46 / Phase 47 — app-side region filter ───────────────
+    // The SDL doesn't pin region anymore (because Akash chain attributes
+    // don't match our curated taxonomy and we'd need every operator to
+    // re-tag). Instead: cast the bid net wide, then filter here using
+    // compute_provider.region (our resolved taxonomy).
+    //
+    // Always-on. The original AF_REGIONS_SDL flag continues to gate SDL
+    // emission separately — leave it at "0" in production for now.
+    if (deployment.region) {
+      const requestedRegion = deployment.region
+      const inRegion = await prisma.computeProvider.findMany({
+        where: {
+          providerType: 'AKASH',
+          region: requestedRegion,
+          address: { in: safeBids.map((b) => b.bidId.provider) },
+        },
+        select: { address: true },
+      })
+      const inRegionSet = new Set(inRegion.map((p) => p.address))
+      const beforeCount = safeBids.length
+      safeBids = safeBids.filter((b) => inRegionSet.has(b.bidId.provider))
+      log.info(
+        `Region filter (${requestedRegion}): kept ${safeBids.length} of ${beforeCount} safe bids`,
+      )
+
+      if (safeBids.length === 0) {
+        // No verified+online providers in the requested region bid this
+        // round. Continue polling within the existing window — providers
+        // sometimes take 30-60s to respond — then fall through to the
+        // soft-fail interstitial via the normal empty-bids branch.
+        if (attempt < BID_POLL_MAX_ATTEMPTS) {
+          log.info(
+            `0 bids matched region "${requestedRegion}" — waiting for more (attempt ${attempt}/${BID_POLL_MAX_ATTEMPTS})`,
+          )
+          await enqueueNext(
+            '/queue/akash/step',
+            {
+              step: 'CHECK_BIDS',
+              deploymentId,
+              attempt: attempt + 1,
+            } satisfies AkashCheckBidsPayload,
+            5,
+          )
+          return
+        }
+        // Polling exhausted with bids on the chain but none from the
+        // requested region — soft-fail (NOT a deploy failure) so the UI/
+        // CLI can surface alternatives + retry.
+        await prisma.akashDeployment.update({
+          where: { id: deploymentId },
+          data: {
+            status: 'AWAITING_REGION_RESPONSE',
+            errorMessage: `Bids received, but none from providers in region "${requestedRegion}". Pick another region or retry.`,
+          },
+        })
+        emitProgress(
+          deploymentId,
+          'CHECK_BIDS',
+          AKASH_STEP_NUMBERS.CHECK_BIDS,
+          deployment.retryCount,
+          `No bids in region "${requestedRegion}" — awaiting user choice.`,
+        )
+        return
+      }
     }
 
     // ── Policy GPU filtering: filter bids by acceptable GPU models ──
@@ -1548,6 +1641,11 @@ export async function handleFailure(
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,
         policyId: retryPolicyId,
         excludedProviders: [...excluded],
+        // Phase 46/47 — carry the user's region intent forward across
+        // queue-step retries. Without this the retry row has region=NULL,
+        // the bid filter in handleCheckBids no-ops, and the deploy lands
+        // wherever's cheapest globally — ignoring the user's pick.
+        region: deployment.region,
       },
     })
 

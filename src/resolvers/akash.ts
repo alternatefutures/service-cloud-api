@@ -290,7 +290,7 @@ export const akashMutations = {
    */
   deployToAkash: async (
     _: unknown,
-    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }; baseImage?: string } },
+    { input }: { input: { serviceId: string; depositUakt?: number; sdlContent?: string; sourceCode?: string; policy?: DeploymentPolicyInput; resourceOverrides?: { cpu?: number; memory?: string; storage?: string; gpu?: { units: number; vendor: string; model?: string } | null }; baseImage?: string; region?: string | null } },
     context: Context
   ) => {
     if (!context.userId) {
@@ -429,6 +429,20 @@ export const akashMutations = {
       },
     })
 
+    // Phase 46 — validate the optional region against the curated set so we
+    // fail fast at the API surface instead of letting a typo silently bake
+    // a useless `attributes:` block into the SDL. Null/undefined = "Any".
+    const { isRegionId } = await import('../services/regions/mapping.js')
+    let regionForDeploy: string | null = null
+    if (input.region !== undefined && input.region !== null) {
+      if (!isRegionId(input.region)) {
+        throw new GraphQLError(
+          `Invalid region "${input.region}". Allowed: us-east, us-west, eu, asia.`
+        )
+      }
+      regionForDeploy = input.region
+    }
+
     try {
       const orchestrator = getAkashOrchestrator(context.prisma)
 
@@ -437,6 +451,7 @@ export const akashMutations = {
         sdlContent: input.sdlContent,
         resourceOverrides: input.resourceOverrides ?? undefined,
         baseImage: input.baseImage,
+        region: regionForDeploy,
       })
 
       if (policyId) {

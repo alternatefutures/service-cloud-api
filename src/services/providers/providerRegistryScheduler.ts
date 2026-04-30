@@ -13,6 +13,7 @@
 import * as cron from 'node-cron'
 import type { PrismaClient, ComputeProviderType } from '@prisma/client'
 import { createLogger } from '../../lib/logger.js'
+import { refreshProviderRegions } from '../regions/refresh.js'
 
 const log = createLogger('provider-registry')
 
@@ -234,6 +235,23 @@ export class ProviderRegistryScheduler {
       { upserted, errors, durationMs },
       `Scan complete — ${upserted} provider(s) upserted in ${durationMs}ms`
     )
+
+    // Phase 46 — region resolution piggybacks on the hourly scan. The
+    // chain `attributes` we just upserted are the second-best region signal
+    // (after Akashlytics lat/lon), so refreshing immediately after means
+    // every newly-onboarded provider gets a region within an hour. Fail-open
+    // by design: a region-refresh failure does not affect the registry scan
+    // result, since region is purely additive metadata.
+    if (process.env.AF_REGIONS_INGEST !== '0') {
+      try {
+        await refreshProviderRegions(this.prisma)
+      } catch (err) {
+        log.warn(
+          { err: err instanceof Error ? err.message : err },
+          'Region refresh failed during hourly scan — region data may be stale'
+        )
+      }
+    }
 
     return { upserted, errors }
   }

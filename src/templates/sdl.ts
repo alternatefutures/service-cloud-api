@@ -61,6 +61,43 @@ export const GPU_SDL_PRICING_CEILING_UACT = 1_000_000
 export const NON_GPU_SDL_PRICING_CEILING_UACT = 1_000
 
 /**
+ * Phase 46 — emit the `placement.attributes` block when a curated region is
+ * selected. Returns either an empty string (no constraint) or a YAML chunk
+ * with the right indentation to slot in *before* `signedBy:` and `pricing:`
+ * inside the `placement.dcloud:` block:
+ *
+ *     placement:
+ *       dcloud:
+ *         attributes:
+ *           region: us-east       ← this block
+ *         signedBy: ...
+ *         pricing: ...
+ *
+ * Gated by `AF_REGIONS_SDL` env (default ON). Setting it to "0" disables
+ * region-attribute emission without a redeploy — the deployment still
+ * happens, just without the placement filter, so an incident that breaks
+ * region tagging on the chain side doesn't lock all region-tagged users
+ * out of deployments.
+ *
+ * The function trusts the caller has already validated `region` against
+ * the curated set (`isRegionId` from `services/regions/mapping.ts`) at
+ * the GraphQL surface — emitting a malformed value here would just
+ * produce a useless filter that no provider matches.
+ */
+export function buildPlacementAttributesBlock(
+  region: string | null | undefined
+): string {
+  if (!region) return ''
+  if (process.env.AF_REGIONS_SDL === '0') return ''
+  // 6-space indent matches `signedBy:` / `pricing:` siblings in the
+  // existing `placement.dcloud:` block. The trailing newline is required
+  // — callers concatenate this directly before the next sibling key.
+  return `      attributes:
+        region: ${region}
+`
+}
+
+/**
  * Resolve the SDL `pricing.amount` for a deployment. GPU deploys get
  * the unconditional `GPU_SDL_PRICING_CEILING_UACT`; non-GPU deploys
  * fall through to the template's intent (or 1000).
@@ -145,17 +182,22 @@ export function generateSDLFromTemplate(
   // ── GPU resource block ────────────────────────────────────────
   const gpuBlock = gpu ? buildGpuProfileBlock(gpu) : ''
 
+  // Phase 46 — optional `attributes.region` slot. Empty string when no
+  // region was selected, so the YAML output is identical to the
+  // pre-Phase-46 behavior for the default "Any" path.
+  const attributesBlock = buildPlacementAttributesBlock(config?.region)
+
   // GPU providers may not be in the auditor list — skip signedBy for GPU deploys
   const placementBlock = gpu
     ? `  placement:
     dcloud:
-      pricing:
+${attributesBlock}      pricing:
         ${serviceName}:
           denom: uact
           amount: ${pricingUakt}`
     : `  placement:
     dcloud:
-      signedBy:
+${attributesBlock}      signedBy:
         anyOf:
           - akash1365yvmc4s7awdyj3n2sav7xfx76adc6dnmlx63
       pricing:
