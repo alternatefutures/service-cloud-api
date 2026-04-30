@@ -47,7 +47,7 @@ vi.mock('../policy/runtimeScheduler.js', () => ({
 }))
 
 import { handleCheckBids } from './akashSteps.js'
-import { BID_POLL_MAX_ATTEMPTS } from '../../config/akash.js'
+import { BID_POLL_MAX_ATTEMPTS } from './types.js'
 
 function buildPrisma(deployment: any) {
   const update = vi.fn(async ({ data }: any) => ({ ...deployment, ...data }))
