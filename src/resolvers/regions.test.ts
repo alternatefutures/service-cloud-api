@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock pricing helpers BEFORE importing the resolver so the in-memory
 // caches inside `config/pricing` don't try to fetch the real Akash API.
+// AKT_USD_PRICE_FALLBACK is also re-exported because the resolver imports
+// it for the withTimeout fallback — without this, CI runs would see
+// `undefined` if the mocked getAktUsdPrice() ever lost the timeout race.
 vi.mock('../config/pricing.js', () => ({
   getAkashChainGeometry: vi.fn(async () => ({
     secondsPerBlock: 6.117,
@@ -11,6 +14,7 @@ vi.mock('../config/pricing.js', () => ({
     sampledAt: Date.now(),
   })),
   getAktUsdPrice: vi.fn(async () => 1.5),
+  AKT_USD_PRICE_FALLBACK: 0.5,
 }))
 
 import { regionsQueries } from './regions.js'
