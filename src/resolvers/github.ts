@@ -33,6 +33,7 @@ import {
   getRepo,
   getCommit,
 } from '../services/github/client.js'
+import { uninstallApp } from '../services/github/app.js'
 import { spawnBuildJob } from '../services/github/buildSpawner.js'
 
 const log = createLogger('resolvers.github')
@@ -696,6 +697,67 @@ export const githubMutations = {
       },
       orderBy: { createdAt: 'desc' },
     })
+  },
+
+  /**
+   * Uninstall the AlternateFutures GitHub App from the account/org backing
+   * the given local installation row. Equivalent to the user clicking
+   * "Uninstall" on github.com — only revokes our App's access to the
+   * installation's repos. Does not touch repo contents, settings,
+   * collaborators, or any other GitHub-side resource.
+   *
+   * Flow:
+   *   1. Auth: caller must be a member of an AF org with access to the
+   *      install (same boundary as `githubInstallationRepos`).
+   *   2. Call DELETE /app/installations/{installationId} with a fresh App JWT.
+   *      GitHub returns 204 (or 404 if already gone — treated as success).
+   *   3. Clean up locally: null `gitInstallationId` on every Service that
+   *      points at this row, then delete the install row itself. This
+   *      mirrors the `installation.deleted` webhook handler — we run it
+   *      inline so the UI sees the new state immediately on the next
+   *      refetch instead of waiting for GitHub's async webhook delivery.
+   *      (The webhook handler is idempotent; if it fires after we've
+   *      already cleaned up, the second pass is a no-op.)
+   *
+   * Returns `true` on success. Throws if the GitHub API rejects the
+   * delete; in that case the local row is preserved so the user can retry.
+   */
+  uninstallGithubInstallation: async (
+    _: unknown,
+    args: { installationId: string },
+    context: Context,
+  ) => {
+    requireAuth(context)
+    assertGithubConfigured()
+    const install = await context.prisma.githubInstallation.findUnique({
+      where: { id: args.installationId },
+    })
+    if (!install) {
+      // Already gone locally — nothing to do; idempotent.
+      return true
+    }
+    await assertInstallationAccess(context, install)
+
+    // Uninstall on GitHub first. If this fails, we DON'T touch local state
+    // so the user can retry without ending up in a half-removed limbo
+    // where AF thinks the install is gone but GitHub still has it.
+    await uninstallApp(install.installationId)
+
+    // Local cleanup mirrors webhookEndpoint.ts handleInstallationEvent
+    // ('deleted' branch). Cascade on GithubInstallationAccess takes care
+    // of the access rows; we still need to manually null the FK on
+    // Service rows so existing services don't break with a dangling FK.
+    await context.prisma.service.updateMany({
+      where: { gitInstallationId: install.id },
+      data: { gitInstallationId: null },
+    })
+    await context.prisma.githubInstallation.delete({ where: { id: install.id } })
+
+    log.info(
+      { installationId: String(install.installationId), localId: install.id },
+      'uninstalled GitHub App + cleaned up local rows',
+    )
+    return true
   },
 
   /**

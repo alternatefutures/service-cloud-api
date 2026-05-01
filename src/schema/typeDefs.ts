@@ -2387,6 +2387,11 @@ export const typeDefs = /* GraphQL */ `
     """Live-pull all accessible App installations from GitHub into the local DB and return them.
     Slow path — UI uses this only on explicit Refresh / post-install."""
     refreshGithubInstallations(orgId: ID): [GithubInstallation!]!
+    """Uninstall the AlternateFutures GitHub App from the account/org backing this installation.
+    Calls DELETE /app/installations/{id} on GitHub with the App JWT, then cleans up the local row
+    and nulls gitInstallationId on linked services. Caller must be a member of an AF org with
+    access to the installation. Returns true on success."""
+    uninstallGithubInstallation(installationId: ID!): Boolean!
     createGithubService(input: CreateGithubServiceInput!): Service!
     connectGithubRepo(input: ConnectGithubRepoInput!): Service!
     """Trigger a new build. With no sha, builds the tip of the tracked branch (default behaviour, used by top-level Rebuild). With a sha (7-40 char hex commit SHA), rebuilds that exact commit — used by the per-row rebuild button in build history."""
