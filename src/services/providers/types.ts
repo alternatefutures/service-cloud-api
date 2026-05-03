@@ -155,7 +155,16 @@ export type OverallHealth =
   | 'healthy'
   | 'starting'
   | 'degraded'
+  // Container is reachable but reporting failure (probe failed, all replicas
+  // crash-looping, etc.). NOT a sweeper-close signal — the lease still
+  // exists on-chain and the user needs it alive to inspect logs and
+  // redeploy. Surfaced in the UI and audit log; opt-in failoverPolicy may
+  // act on it, otherwise we leave the lease alone.
   | 'unhealthy'
+  // Lease no longer exists at the provider (confirmed via 404 / "not
+  // found" on lease-status). The actual on-chain lease is gone — closing
+  // our DB row is just bookkeeping. THIS is the sweeper's close signal.
+  | 'gone'
   | 'unknown'
 
 export interface DeploymentHealthResult {
