@@ -2177,6 +2177,14 @@ export const typeDefs = /* GraphQL */ `
     setServiceEnvVar(serviceId: ID!, key: String!, value: String!, secret: Boolean): ServiceEnvVar!
     deleteServiceEnvVar(serviceId: ID!, key: String!): Boolean!
     bulkSetServiceEnvVars(serviceId: ID!, vars: [EnvVarInput!]!): [ServiceEnvVar!]!
+    # Returns the plaintext value of a single env var (including secrets).
+    # Audit-logged; gated by the same project-access check as the rest of
+    # the Service mutations. The Service.envVars field resolver always
+    # returns masked dots for secret vars; this mutation is the explicit
+    # opt-in path the UI uses to reveal a value when the user clicks the
+    # eye icon. Returns just the plaintext string — never echo the value
+    # back via cache or polling, the client should fetch on-demand only.
+    revealServiceEnvVar(serviceId: ID!, key: String!): String!
 
     # Service Port Configuration
     setServicePort(serviceId: ID!, containerPort: Int!, publicPort: Int, protocol: String): ServicePort!

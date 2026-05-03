@@ -6,6 +6,7 @@ import {
   resolveConnectionStrings,
   getConnectionStringsForTemplate,
 } from '../utils/connectionStrings.js'
+import { audit } from '../lib/audit.js'
 
 // ── Field Resolvers ──────────────────────────────────────────────────
 
@@ -142,6 +143,47 @@ export const serviceConnectivityMutations = {
       where: { serviceId_key: { serviceId, key } },
     })
     return true
+  },
+
+  /**
+   * Reveal the plaintext value of a single env var. The Service.envVars
+   * field resolver always returns `••••••••` for `secret=true` rows so a
+   * page render or polling never leaks credentials. This mutation is the
+   * deliberate opt-in path used when the user clicks the eye icon — it
+   * returns the real value once and is audit-logged so an org admin can
+   * see who revealed what and when.
+   */
+  revealServiceEnvVar: async (
+    _: unknown,
+    { serviceId, key }: { serviceId: string; key: string },
+    context: Context
+  ) => {
+    if (!context.userId) throw new GraphQLError('Not authenticated')
+    const service = await verifyServiceOwnership(
+      context.prisma,
+      serviceId,
+      context.userId
+    )
+
+    const envVar = await context.prisma.serviceEnvVar.findUnique({
+      where: { serviceId_key: { serviceId, key } },
+    })
+    if (!envVar) {
+      throw new GraphQLError(`Env var "${key}" not found on service`)
+    }
+
+    audit(context.prisma, {
+      category: 'deployment',
+      action: 'service.env.revealed',
+      status: 'ok',
+      userId: context.userId,
+      orgId: service.project.organizationId ?? null,
+      projectId: service.projectId,
+      serviceId: service.id,
+      payload: { key, secret: envVar.secret },
+    })
+
+    return envVar.value
   },
 
   bulkSetServiceEnvVars: async (
