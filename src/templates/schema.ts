@@ -9,6 +9,7 @@ export type TemplateCategory =
   | 'GAME_SERVER'
   | 'WEB_SERVER'
   | 'DATABASE'
+  | 'STORAGE'
   | 'AI_ML'
   | 'DEVTOOLS'
   | 'CUSTOM'
@@ -28,11 +29,21 @@ export interface TemplateEnvVar {
   secret?: boolean
   /**
    * When set, the deploy pipeline auto-injects this value.
-   * The deploy UI pre-fills these fields (visible but auto-populated).
-   *   'orgId'  — injects the deploying user's organization ID
-   *   'apiKey' — generates a scoped PAT via service-auth
+   * The deploy UI pre-fills these fields (visible but auto-populated)
+   * and skips required-field validation for them.
+   *   'orgId'           — injects the deploying user's organization ID
+   *   'apiKey'          — generates a scoped PAT via service-auth
+   *   'generatedAccessKey' — random 20-char uppercase alphanumeric
+   *                          (S3-style access key ID, e.g. for buckets)
+   *   'generatedSecret' — random 40-char base64url
+   *                       (S3-style secret access key, or any other
+   *                       opaque shared secret the image needs at boot)
    */
-  platformInjected?: 'orgId' | 'apiKey'
+  platformInjected?:
+    | 'orgId'
+    | 'apiKey'
+    | 'generatedAccessKey'
+    | 'generatedSecret'
 }
 
 export interface TemplateGpu {

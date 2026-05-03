@@ -21,6 +21,7 @@ import { getAvailableProviders } from '../providers/registry.js'
 import { decrementOrgConcurrency } from '../concurrency/concurrencyService.js'
 import { createLogger } from '../../lib/logger.js'
 import { audit } from '../../lib/audit.js'
+import { opsAlert } from '../../lib/opsAlert.js'
 import { randomUUID } from 'node:crypto'
 import {
   evaluateFailoverEligibility,
@@ -187,11 +188,30 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
  * Because provider.close() settles all billing (interface contract), no
  * provider-specific billing logic is needed here.
  */
-// 404 from provider = definitively dead, close immediately (1 check).
-// Transient errors (unknown) get more chances before closing.
-const UNHEALTHY_THRESHOLD = 1
-const UNKNOWN_THRESHOLD = 3
+// Thresholds tuned 2026-05-03 after forensics (see handoff
+// 2026-05-03_*_alternate-bucket-v2-akash-aware-and-sweeper-finding.md and
+// the lease-close postmortem for the 7-deployment mass-kill on
+// 2026-04-29 22:00-22:04 UTC).
+//
+// - UNHEALTHY: was 1 — a single transient `unhealthy` verdict killed leases
+//   in 1 sweep tick. Now requires 3 consecutive observations (≈15 min)
+//   before closing, matching the UNKNOWN cadence.
+// - UNKNOWN: was 3 — the 4-min mass-kill all reached failures=3. Bumped
+//   to 5 so a sustained provider-side outage gets ~25 min to recover.
+// - EXCEPTION: keep at 3; CLI throws are very rarely transient long enough
+//   to clear over 15 min, but we still want consecutive confirmation.
+const UNHEALTHY_THRESHOLD = 3
+const UNKNOWN_THRESHOLD = 5
 const EXCEPTION_THRESHOLD = 3
+
+// Mass-event guard. If a single sweep pass would close ≥ MASS_EVENT_RATIO
+// of all ACTIVE deployments AND the population is at least
+// MASS_EVENT_MIN_TOTAL, abort the close path entirely — that's a
+// provider-wide outage / RPC blip, not real death. Counters are reset so
+// the next pass starts fresh once the underlying issue clears.
+const MASS_EVENT_MIN_TOTAL = 5
+const MASS_EVENT_RATIO = 0.5
+
 const failureCounters = new Map<string, number>()
 
 function isDefinitelyDead(health: { overall: string }): boolean {
@@ -325,6 +345,17 @@ async function closeOrFailover(
   }
 }
 
+/**
+ * Per-deployment verdict from the probe phase. The reconciler collects all
+ * verdicts before deciding to close any of them — this lets the
+ * mass-event guard (`MASS_EVENT_RATIO`) abort the close path entirely
+ * when a provider-wide blip would otherwise nuke half the fleet.
+ */
+type ReconcileVerdict =
+  | { id: string; kind: 'close'; reason: 'unhealthy' | 'unknown_health' | 'probe_exception'; failures: number; healthOverall?: string; probeError?: string }
+  | { id: string; kind: 'tracking'; reason: 'unhealthy' | 'unknown_health' | 'probe_exception'; failures: number }
+  | { id: string; kind: 'healthy' }
+
 async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   const providers = getAvailableProviders()
   let totalReconciled = 0
@@ -339,6 +370,8 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
 
       log.debug({ provider: provider.name, count: activeIds.length }, 'Reconciling active deployments')
 
+      // ─── Phase 1: probe every deployment, collect verdicts (no closes yet) ───
+      const verdicts: ReconcileVerdict[] = []
       for (const id of activeIds) {
         const counterKey = `${provider.name}:${id}`
 
@@ -348,44 +381,22 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           if (!health || isDefinitelyDead(health)) {
             const count = (failureCounters.get(counterKey) ?? 0) + 1
             failureCounters.set(counterKey, count)
-
-            if (count >= UNHEALTHY_THRESHOLD) {
-              log.warn(
-                { provider: provider.name, deploymentId: id, failures: count, health: health?.overall },
-                'Deployment confirmed dead (unhealthy/404) — closing or failing over'
-              )
-              const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
-                reason: 'unhealthy',
-                overall: health?.overall ?? '404',
-                failures: count,
-              })
-              if (ok) totalReconciled++
-              failureCounters.delete(counterKey)
-            } else {
-              log.debug(
-                { provider: provider.name, deploymentId: id, failures: count, threshold: UNHEALTHY_THRESHOLD },
-                'Deployment unhealthy — tracking consecutive failures'
-              )
-            }
+            verdicts.push(
+              count >= UNHEALTHY_THRESHOLD
+                ? { id, kind: 'close', reason: 'unhealthy', failures: count, healthOverall: health?.overall ?? '404' }
+                : { id, kind: 'tracking', reason: 'unhealthy', failures: count }
+            )
           } else if (health.overall === 'unknown') {
             const count = (failureCounters.get(counterKey) ?? 0) + 1
             failureCounters.set(counterKey, count)
-
-            if (count >= UNKNOWN_THRESHOLD) {
-              log.warn(
-                { provider: provider.name, deploymentId: id, failures: count },
-                'Deployment returned unknown health for too many consecutive checks — closing or failing over'
-              )
-              const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
-                reason: 'unknown_health',
-                overall: 'unknown',
-                failures: count,
-              })
-              if (ok) totalReconciled++
-              failureCounters.delete(counterKey)
-            }
+            verdicts.push(
+              count >= UNKNOWN_THRESHOLD
+                ? { id, kind: 'close', reason: 'unknown_health', failures: count, healthOverall: 'unknown' }
+                : { id, kind: 'tracking', reason: 'unknown_health', failures: count }
+            )
           } else {
             failureCounters.delete(counterKey)
+            verdicts.push({ id, kind: 'healthy' })
           }
         } catch (err) {
           const count = (failureCounters.get(counterKey) ?? 0) + 1
@@ -394,21 +405,84 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
             { provider: provider.name, deploymentId: id, err, failures: count },
             'Health check threw — counting as failure'
           )
-
-          if (count >= EXCEPTION_THRESHOLD) {
-            log.warn(
-              { provider: provider.name, deploymentId: id, failures: count },
-              'Health check exceptions exceeded threshold — closing or failing over'
-            )
-            const ok = await closeOrFailover(prisma, provider, id, sweepTraceId, {
-              reason: 'probe_exception',
-              failures: count,
-              probeError: err instanceof Error ? err.message : String(err),
-            })
-            if (ok) totalReconciled++
-            failureCounters.delete(counterKey)
-          }
+          verdicts.push(
+            count >= EXCEPTION_THRESHOLD
+              ? { id, kind: 'close', reason: 'probe_exception', failures: count, probeError: err instanceof Error ? err.message : String(err) }
+              : { id, kind: 'tracking', reason: 'probe_exception', failures: count }
+          )
         }
+      }
+
+      // ─── Phase 2: mass-event guard ───
+      const closures = verdicts.filter((v): v is Extract<ReconcileVerdict, { kind: 'close' }> => v.kind === 'close')
+      if (closures.length > 0 && verdicts.length >= MASS_EVENT_MIN_TOTAL) {
+        const ratio = closures.length / verdicts.length
+        if (ratio >= MASS_EVENT_RATIO) {
+          log.error(
+            {
+              provider: provider.name,
+              total: verdicts.length,
+              wouldClose: closures.length,
+              ratio: +ratio.toFixed(2),
+              reasons: countReasons(closures),
+            },
+            'Mass-close event detected — refusing to close any deployments this pass (likely provider-wide outage)'
+          )
+          await opsAlert({
+            key: `mass-close-event:${provider.name}`,
+            severity: 'critical',
+            title: `Sweeper aborted mass-close (${provider.name})`,
+            message:
+              `Sweeper would have closed ${closures.length}/${verdicts.length} ` +
+              `${provider.name} deployments in a single pass (ratio ${(ratio * 100).toFixed(0)}%). ` +
+              `Aborted to avoid nuking the fleet on a provider-wide outage. ` +
+              `Investigate provider/RPC health; counters were reset so next pass starts fresh.`,
+            context: {
+              provider: provider.name,
+              total: String(verdicts.length),
+              wouldClose: String(closures.length),
+              ratio: ratio.toFixed(2),
+              reasons: JSON.stringify(countReasons(closures)),
+              sweepTraceId,
+            },
+            suppressMs: 30 * 60 * 1000,
+          }).catch((err) =>
+            log.warn({ err }, 'opsAlert failed during mass-close abort'),
+          )
+          // Reset close-bound counters so the same deployments don't tip
+          // over the threshold again on the very next pass while the
+          // outage is still ongoing.
+          for (const v of closures) failureCounters.delete(`${provider.name}:${v.id}`)
+          continue
+        }
+      }
+
+      // ─── Phase 3: execute closes (or the failover branch) ───
+      for (const v of verdicts) {
+        if (v.kind !== 'close') {
+          if (v.kind === 'tracking') {
+            log.debug(
+              { provider: provider.name, deploymentId: v.id, failures: v.failures, reason: v.reason },
+              'Deployment unhealthy/unknown/exception — tracking consecutive failures'
+            )
+          }
+          continue
+        }
+
+        log.warn(
+          { provider: provider.name, deploymentId: v.id, failures: v.failures, reason: v.reason, health: v.healthOverall },
+          'Deployment confirmed dead — closing or failing over'
+        )
+        const closeAuditExtra: Record<string, unknown> = {
+          reason: v.reason,
+          failures: v.failures,
+        }
+        if (v.healthOverall) closeAuditExtra.overall = v.healthOverall
+        if (v.probeError) closeAuditExtra.probeError = v.probeError
+
+        const ok = await closeOrFailover(prisma, provider, v.id, sweepTraceId, closeAuditExtra)
+        if (ok) totalReconciled++
+        failureCounters.delete(`${provider.name}:${v.id}`)
       }
     } catch (err) {
       log.error({ provider: provider.name, err }, 'Failed to reconcile provider')
@@ -418,6 +492,12 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   if (totalReconciled > 0) {
     log.info({ reconciled: totalReconciled }, 'Reconciled dead deployments across all providers')
   }
+}
+
+function countReasons(closures: Array<{ reason: string }>): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const c of closures) out[c.reason] = (out[c.reason] ?? 0) + 1
+  return out
 }
 
 /**
