@@ -105,6 +105,22 @@ describe('rustfs template', () => {
       expect(sdl).toContain('as: 9000')
     })
 
+    it('emits an `accept:` block for the proxied console port so AWS sigv4 Host validation works through the AF subdomain proxy', () => {
+      // Default deploy domain when PROXY_BASE_DOMAIN is unset.
+      const baseDomain = process.env.PROXY_BASE_DOMAIN || 'alternatefutures.ai'
+      expect(sdl).toContain('accept:')
+      expect(sdl).toContain(`- rustfs-app.${baseDomain}`)
+      expect(sdl).toContain(`- rustfs-agent.${baseDomain}`)
+    })
+
+    it('does NOT emit `accept:` on the direct-port S3 endpoint (port 9000 → as: 9000) because it bypasses the subdomain proxy and sigv4 Host already matches the lease IP', () => {
+      // We can't trivially split the SDL into per-port chunks, so verify
+      // the only `accept:` emitted is for the proxied console port — by
+      // counting `accept:` occurrences (1 = console only).
+      const matches = sdl.match(/accept:/g) ?? []
+      expect(matches.length).toBe(1)
+    })
+
     it('declares the persistent volume mounted at /data', () => {
       expect(sdl).toContain('- name: data')
       expect(sdl).toContain('persistent: true')

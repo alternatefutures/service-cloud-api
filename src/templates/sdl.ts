@@ -153,13 +153,15 @@ export function generateSDLFromTemplate(
   const pricingUakt = resolveSdlPricingUact(!!gpu, template.pricingUakt)
 
   // ── Ports / expose ──────────────────────────────────────────
+  // Globally-proxied ports (as: 80 or 443) MUST emit an `accept:` block
+  // listing the AF subdomain hostnames that the provider's ingress should
+  // route to this pod. Otherwise the upstream sees the upstream's own
+  // hostname in the Host header (because our SubdomainProxy preserves the
+  // browser's original Host on the way out — required for AWS sigv4 to
+  // validate, e.g. RustFS console login). Without `accept:` the provider
+  // wouldn't know how to map our subdomain → this pod and would 404.
   const exposeBlock = template.ports
-    .map(
-      p => `      - port: ${p.port}
-        as: ${p.as}
-        to:
-          - global: ${p.global}`
-    )
+    .map(p => buildPortExpose(p, serviceName))
     .join('\n')
 
   // ── Persistent storage (if any) ─────────────────────────────
@@ -276,6 +278,36 @@ function buildEnvLines(
 
   const lines = entries.map(([k, v]) => `      - ${k}=${v}`).join('\n')
   return `    env:\n${lines}\n`
+}
+
+/**
+ * Render one entry of the SDL `expose:` array. Globally-proxied ports
+ * (`as: 80` / `as: 443` with `global: true`) get an `accept:` block so the
+ * Akash provider's ingress maps `<slug>-app.<deploy-domain>` (and the
+ * `-agent` variant, which the proxy also serves) to this pod. Without
+ * `accept:` the provider's L7 router would 404 anything that doesn't
+ * match its own generated hostname, and AWS sigv4 backends like RustFS
+ * would 403 because the Host header in the signed canonical request
+ * would not survive the upstream rewrite.
+ */
+function buildPortExpose(
+  p: { port: number; as: number; global: boolean },
+  serviceName: string
+): string {
+  const base = `      - port: ${p.port}
+        as: ${p.as}
+        to:
+          - global: ${p.global}`
+  if (!p.global || (p.as !== 80 && p.as !== 443)) return base
+  const baseDomain = process.env.PROXY_BASE_DOMAIN || 'alternatefutures.ai'
+  const accepted = [
+    `${serviceName}-app.${baseDomain}`,
+    `${serviceName}-agent.${baseDomain}`,
+  ]
+  const acceptLines = accepted.map(h => `          - ${h}`).join('\n')
+  return `${base}
+        accept:
+${acceptLines}`
 }
 
 function buildGpuProfileBlock(gpu: TemplateGpu): string {
@@ -529,10 +561,10 @@ export function generateCompositeSDL(components: ResolvedComponent[]): string {
         to:
 ${toLines}`
           }
-          return `      - port: ${p.port}
-        as: ${p.as}
-        to:
-          - global: true`
+          return buildPortExpose(
+            { port: p.port, as: p.as, global: true },
+            comp.sdlServiceName
+          )
         })
         .join('\n')
 
