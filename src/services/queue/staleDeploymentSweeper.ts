@@ -188,20 +188,8 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
  * Because provider.close() settles all billing (interface contract), no
  * provider-specific billing logic is needed here.
  */
-// Thresholds tuned 2026-05-03 after forensics (see handoff
-// 2026-05-03_*_alternate-bucket-v2-akash-aware-and-sweeper-finding.md and
-// the lease-close postmortem for the 7-deployment mass-kill on
-// 2026-04-29 22:00-22:04 UTC).
-//
-// - UNHEALTHY: was 1 — a single transient `unhealthy` verdict killed leases
-//   in 1 sweep tick. Now requires 3 consecutive observations (≈15 min)
-//   before closing, matching the UNKNOWN cadence.
-// - UNKNOWN: was 3 — the 4-min mass-kill all reached failures=3. Bumped
-//   to 5 so a sustained provider-side outage gets ~25 min to recover.
-// - EXCEPTION: keep at 3; CLI throws are very rarely transient long enough
-//   to clear over 15 min, but we still want consecutive confirmation.
 // Sweeper philosophy (2026-05-03 — explicit redesign after rustfs-p1td
-// incident):
+// incident, refined in Phase 49b after the loophole audit):
 //
 //   The sweeper closes leases that are GENUINELY GONE on-chain. It does
 //   NOT close leases just because a container is unhealthy.
@@ -217,9 +205,9 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
 // What still triggers a sweeper close:
 //   • `overall === 'gone'`  — provider returned 404 / "not found" on
 //     lease-status, OR our DB has the deployment in a terminal failure
-//     state. The chain-side lease is dead; we're just syncing bookkeeping.
-//   • Repeated probe exceptions where the LATEST exception is a
-//     provider-side 404 (folded into the 'gone' verdict above).
+//     state, OR (Phase 49b) Phala's CVM existence probe says the appId
+//     no longer exists at the provider. The chain-side / provider-side
+//     resource is dead; we're just syncing bookkeeping.
 //
 // What does NOT trigger close:
 //   • `overall === 'unhealthy'`         (container down, lease alive)
@@ -237,11 +225,32 @@ const UNHEALTHY_THRESHOLD = 3   // failover trigger only (if policy enabled)
 // MASS_EVENT_MIN_TOTAL, abort the close path entirely — that's a
 // provider-wide outage / RPC blip, not real death. Counters are reset so
 // the next pass starts fresh once the underlying issue clears.
+//
+// 2026-05-03 (Phase 49b) — the same guard is now applied to failover_check
+// verdicts. Previously only `close_gone` was counted, so a provider-wide
+// outage that flipped many opted-in services to `'unhealthy'` could trigger
+// fleet-wide auto-failover (each calling provider.close on its old lease)
+// without ever tripping the abort. Now both close paths are protected.
 const MASS_EVENT_MIN_TOTAL = 5
 const MASS_EVENT_RATIO = 0.5
 
-const failureCounters = new Map<string, number>()
+// Per-verdict-kind streak counters. Phase 49 introduced the verdict
+// taxonomy; Phase 49b separates the buckets so streaks of one kind don't
+// inflate the threshold for another. Previously `unhealthyCounters` was
+// shared across `'unhealthy'`, `'unknown'`, and probe-exception streaks,
+// which meant an alternating `unhealthy → unknown → unhealthy` sequence
+// could fire failover at the second `'unhealthy'` instead of the third.
+//
+// Now:
+//  • goneCounters         — strictly `'gone'` streak; drives close_gone.
+//  • unhealthyCounters    — strictly `'unhealthy'` streak; drives
+//                           failover_check.
+//  • observabilityCounters — `'unknown'` and probe-exception streaks; never
+//                           drives a close, only used to fire the first-tick
+//                           audit + recovery audit.
+const goneCounters = new Map<string, number>()
 const unhealthyCounters = new Map<string, number>()
+const observabilityCounters = new Map<string, number>()
 
 /**
  * Per-deployment verdict from the probe phase. The reconciler collects all
@@ -308,6 +317,17 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
       for (const id of activeIds) {
         const goneKey = `${provider.name}:gone:${id}`
         const unhealthyKey = `${provider.name}:unhealthy:${id}`
+        const observabilityKey = `${provider.name}:observability:${id}`
+
+        // Helper closure: when we transition into a new verdict bucket we
+        // reset the buckets we're leaving so streaks of one kind don't
+        // pollute the threshold for another. Each bucket is strictly
+        // single-purpose post-Phase 49b — see counter declarations above.
+        const resetOthers = (keep: 'gone' | 'unhealthy' | 'observability') => {
+          if (keep !== 'gone') goneCounters.delete(goneKey)
+          if (keep !== 'unhealthy') unhealthyCounters.delete(unhealthyKey)
+          if (keep !== 'observability') observabilityCounters.delete(observabilityKey)
+        }
 
         try {
           const health = await provider.getHealth(id)
@@ -315,8 +335,9 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           if (!health) {
             // No DB row for this deployment — orphan at our end. Treat as
             // 'gone' since we can't manage what we can't find.
-            const count = (failureCounters.get(goneKey) ?? 0) + 1
-            failureCounters.set(goneKey, count)
+            const count = (goneCounters.get(goneKey) ?? 0) + 1
+            goneCounters.set(goneKey, count)
+            resetOthers('gone')
             verdicts.push(
               count >= GONE_THRESHOLD
                 ? { id, kind: 'close_gone', reason: 'gone', failures: count, healthOverall: 'no_record' }
@@ -325,9 +346,9 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           } else if (health.overall === 'gone') {
             // Lease genuinely gone on-chain (provider 404 or our DB has a
             // terminal failure status). Sweeper close path.
-            const count = (failureCounters.get(goneKey) ?? 0) + 1
-            failureCounters.set(goneKey, count)
-            unhealthyCounters.delete(unhealthyKey)
+            const count = (goneCounters.get(goneKey) ?? 0) + 1
+            goneCounters.set(goneKey, count)
+            resetOthers('gone')
             verdicts.push(
               count >= GONE_THRESHOLD
                 ? { id, kind: 'close_gone', reason: 'gone', failures: count, healthOverall: 'gone' }
@@ -336,20 +357,24 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           } else if (health.overall === 'unhealthy') {
             // Container down, lease still alive. NEVER close from here —
             // the user needs the lease to debug. Only run the opt-in
-            // failover branch; if no policy, audit-only.
+            // failover branch; if no policy, audit-only. Strict counter:
+            // ONLY consecutive `'unhealthy'` ticks count toward the
+            // failover threshold (Phase 49b). Any `'unknown'` /
+            // probe-exception in between resets the streak.
             const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
             unhealthyCounters.set(unhealthyKey, count)
-            failureCounters.delete(goneKey)
+            resetOthers('unhealthy')
             verdicts.push(
               count >= UNHEALTHY_THRESHOLD
                 ? { id, kind: 'failover_check', reason: 'unhealthy', failures: count, healthOverall: 'unhealthy' }
                 : { id, kind: 'visible_only', reason: 'unhealthy', failures: count, healthOverall: 'unhealthy' }
             )
           } else if (health.overall === 'unknown') {
-            // Can't tell. Never closes. Audit-only on transition.
-            const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
-            unhealthyCounters.set(unhealthyKey, count)
-            failureCounters.delete(goneKey)
+            // Can't tell. Never closes. Tracked in its own bucket so it
+            // doesn't inflate the unhealthy/gone thresholds.
+            const count = (observabilityCounters.get(observabilityKey) ?? 0) + 1
+            observabilityCounters.set(observabilityKey, count)
+            resetOthers('observability')
             verdicts.push({
               id,
               kind: 'visible_only',
@@ -360,13 +385,20 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           } else {
             // healthy / starting / degraded — nothing to do, reset counters.
             const wasUnhealthy = (unhealthyCounters.get(unhealthyKey) ?? 0) > 0
-            const wasGone = (failureCounters.get(goneKey) ?? 0) > 0
-            failureCounters.delete(goneKey)
+            const wasGone = (goneCounters.get(goneKey) ?? 0) > 0
+            const wasObservability = (observabilityCounters.get(observabilityKey) ?? 0) > 0
+            goneCounters.delete(goneKey)
             unhealthyCounters.delete(unhealthyKey)
-            if (wasUnhealthy || wasGone) {
+            observabilityCounters.delete(observabilityKey)
+            if (wasUnhealthy || wasGone || wasObservability) {
+              const previousState = wasGone
+                ? 'gone'
+                : wasUnhealthy
+                  ? 'unhealthy'
+                  : 'observability'
               auditHealthRecovered(prisma, sweepTraceId, provider.name, id, {
                 overall: health.overall,
-                previousState: wasGone ? 'gone' : 'unhealthy',
+                previousState,
               })
             }
             verdicts.push({ id, kind: 'healthy' })
@@ -374,10 +406,13 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
         } catch (err) {
           // Probe threw. Could be RPC timeout, CLI death, network blip.
           // We never close on raw exceptions — the provider 404 path is
-          // already mapped to 'gone' inside getHealth(). Audit + track only.
+          // already mapped to 'gone' inside getHealth(). Tracked in the
+          // observability bucket (Phase 49b) so a transient probe blip
+          // doesn't burn a tick of the unhealthy/failover counter.
           const errMsg = err instanceof Error ? err.message : String(err)
-          const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
-          unhealthyCounters.set(unhealthyKey, count)
+          const count = (observabilityCounters.get(observabilityKey) ?? 0) + 1
+          observabilityCounters.set(observabilityKey, count)
+          resetOthers('observability')
           log.warn(
             { provider: provider.name, deploymentId: id, err, failures: count },
             'Health check threw — recording probe exception (will NOT close)'
@@ -393,47 +428,65 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
       }
 
       // ─── Phase 2: mass-event guard ───
-      // Only count verdicts that would actually drive a close (close_gone).
-      // failover_check is a per-service opt-in, not a fleet-wide signal,
-      // so it's excluded here.
+      // Trips on EITHER `close_gone` OR `failover_check` saturation. Phase 49b:
+      // previously only `close_gone` counted, so a provider-wide outage that
+      // flipped many opted-in services to `'unhealthy'` could fan out
+      // fleet-wide auto-failover (each calling provider.close on its old
+      // lease) without ever tripping the abort. We now treat both as
+      // close-driving signals at the fleet level — any single pass with
+      // ≥ MASS_EVENT_RATIO of total verdicts pointing at a close-shaped
+      // action aborts ALL of them.
       const closures = verdicts.filter(
         (v): v is Extract<ReconcileVerdict, { kind: 'close_gone' }> => v.kind === 'close_gone'
       )
-      if (closures.length > 0 && verdicts.length >= MASS_EVENT_MIN_TOTAL) {
-        const ratio = closures.length / verdicts.length
+      const failovers = verdicts.filter(
+        (v): v is Extract<ReconcileVerdict, { kind: 'failover_check' }> => v.kind === 'failover_check'
+      )
+      const closeShapedTotal = closures.length + failovers.length
+      if (closeShapedTotal > 0 && verdicts.length >= MASS_EVENT_MIN_TOTAL) {
+        const ratio = closeShapedTotal / verdicts.length
         if (ratio >= MASS_EVENT_RATIO) {
+          const reasonBreakdown = {
+            ...countReasons(closures),
+            ...countReasons(failovers.map((f) => ({ reason: `failover:${f.reason}` }))),
+          }
           log.error(
             {
               provider: provider.name,
               total: verdicts.length,
               wouldClose: closures.length,
+              wouldFailover: failovers.length,
               ratio: +ratio.toFixed(2),
-              reasons: countReasons(closures),
+              reasons: reasonBreakdown,
             },
-            'Mass-close event detected — refusing to close any deployments this pass (likely provider-wide outage)'
+            'Mass close-shaped event detected — aborting close + failover this pass (likely provider-wide outage)'
           )
           await opsAlert({
             key: `mass-close-event:${provider.name}`,
             severity: 'critical',
-            title: `Sweeper aborted mass-close (${provider.name})`,
+            title: `Sweeper aborted mass close+failover (${provider.name})`,
             message:
-              `Sweeper would have closed ${closures.length}/${verdicts.length} ` +
-              `${provider.name} deployments in a single pass (ratio ${(ratio * 100).toFixed(0)}%). ` +
+              `Sweeper would have closed ${closures.length} and failed-over ${failovers.length} ` +
+              `${provider.name} deployments in a single pass ` +
+              `(${closeShapedTotal}/${verdicts.length}, ratio ${(ratio * 100).toFixed(0)}%). ` +
               `Aborted to avoid nuking the fleet on a provider-wide outage. ` +
               `Investigate provider/RPC health; counters were reset so next pass starts fresh.`,
             context: {
               provider: provider.name,
               total: String(verdicts.length),
               wouldClose: String(closures.length),
+              wouldFailover: String(failovers.length),
               ratio: ratio.toFixed(2),
-              reasons: JSON.stringify(countReasons(closures)),
+              reasons: JSON.stringify(reasonBreakdown),
               sweepTraceId,
             },
             suppressMs: 30 * 60 * 1000,
           }).catch((err) =>
             log.warn({ err }, 'opsAlert failed during mass-close abort'),
           )
-          for (const v of closures) failureCounters.delete(`${provider.name}:gone:${v.id}`)
+          // Reset both buckets so the next pass starts fresh.
+          for (const v of closures) goneCounters.delete(`${provider.name}:gone:${v.id}`)
+          for (const v of failovers) unhealthyCounters.delete(`${provider.name}:unhealthy:${v.id}`)
           continue
         }
       }
@@ -502,8 +555,9 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
             'Failed to close gone-lease deployment'
           )
         }
-        failureCounters.delete(`${provider.name}:gone:${v.id}`)
+        goneCounters.delete(`${provider.name}:gone:${v.id}`)
         unhealthyCounters.delete(`${provider.name}:unhealthy:${v.id}`)
+        observabilityCounters.delete(`${provider.name}:observability:${v.id}`)
       }
     } catch (err) {
       log.error({ provider: provider.name, err }, 'Failed to reconcile provider')

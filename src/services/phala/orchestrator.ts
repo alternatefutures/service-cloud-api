@@ -230,6 +230,40 @@ export class PhalaOrchestrator {
     }
   }
 
+  /**
+   * Probe CVM existence at the provider. Used by the sweeper's reconciler to
+   * distinguish "CVM is genuinely gone (deleted out-of-band on Phala's side
+   * or never existed)" from "CLI threw a transient error" — the former is a
+   * sweeper-close signal ('gone' verdict), the latter must NOT close the row.
+   *
+   * Returns:
+   *   - 'exists'  : phala cvms get succeeded → the CVM is registered with the
+   *                 provider (even if it's currently unhealthy/crashed).
+   *   - 'gone'    : phala cvms get failed with a "not found" / "404" error —
+   *                 the provider has no record of this appId. The DB row is
+   *                 an orphan and Phala billing should be settled.
+   *   - 'unknown' : transient error (timeout, network blip, CLI crash). The
+   *                 sweeper treats this as visible_only and never closes.
+   */
+  async probeCvmExistence(appId: string): Promise<'exists' | 'gone' | 'unknown'> {
+    try {
+      await runPhalaAsync(['cvms', 'get', appId, '--json'], 15_000)
+      return 'exists'
+    } catch (err) {
+      const msg = (err instanceof Error ? err.message : String(err)).toLowerCase()
+      // Phala CLI surfaces "not found" / "no such" / "404" in stderr when
+      // the appId doesn't exist. Anything else (timeout, ECONNRESET, JSON
+      // parse error, generic non-zero exit) stays 'unknown' so we don't
+      // close on transient failures.
+      const isGone =
+        msg.includes('not found') ||
+        msg.includes('no such') ||
+        msg.includes('404') ||
+        msg.includes('does not exist')
+      return isGone ? 'gone' : 'unknown'
+    }
+  }
+
   async stopPhalaDeployment(appId: string): Promise<void> {
     await runPhalaAsync(['cvms', 'stop', appId], 30_000)
   }

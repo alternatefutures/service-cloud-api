@@ -39,6 +39,7 @@ GraphQL Playground: **http://localhost:1602/graphql**
 - **Standard Compute** — deploy containers to decentralized infrastructure
 - **Confidential Compute** — hardware-isolated execution environments
 - Unified deployment lifecycle: create → deploy → monitor → close
+- Self-healing reconciler with strict close-on-`'gone'`-only policy and fleet-wide mass-event guards (Phase 49 + 49b — see `admin/cloud/docs/AF_DEVELOPMENT_PROCESS.md`)
 
 ### Templates
 - Pre-built deployment templates (GPU instances, game servers, AI agents, etc.)

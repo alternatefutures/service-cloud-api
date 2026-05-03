@@ -252,6 +252,39 @@ export class EscrowHealthMonitor {
       let closedCount = 0
       let errorCount = 0
 
+      // Phase 49b — mass-event guard. Previously this loop closed every
+      // ACTIVE row whose dseq was missing from `chainEscrows`. A single
+      // RPC blip that returned truncated data could nuke the fleet by
+      // mis-attributing every present deployment as "gone on-chain". Now
+      // we collect close candidates first, then refuse to act if a
+      // disproportionate share of the fleet would close in one cycle.
+      const closeCandidates: Array<{
+        deploymentId: string
+        dseq: string
+        reason: 'closed' | 'missing'
+      }> = []
+      const eligibleForCloseCheck: string[] = []
+
+      for (const dep of activeDeployments) {
+        const dseq = dep.dseq.toString()
+        if (!dseq || dseq === '0' || Number(dseq) < 0) continue
+        eligibleForCloseCheck.push(dseq)
+
+        const chain = chainEscrows.get(dseq)
+        if (!chain || chain.closed) {
+          closeCandidates.push({
+            deploymentId: dep.id,
+            dseq,
+            reason: chain ? 'closed' : 'missing',
+          })
+        }
+      }
+
+      const massCloseAborted = await this.maybeAbortMassClose(
+        closeCandidates,
+        eligibleForCloseCheck.length,
+      )
+
       for (const dep of activeDeployments) {
         const dseq = dep.dseq.toString()
         if (!dseq || dseq === '0' || Number(dseq) < 0) continue
@@ -261,6 +294,12 @@ export class EscrowHealthMonitor {
 
           // Deployment missing from chain or explicitly closed — settle billing
           if (!chain || chain.closed) {
+            if (massCloseAborted) {
+              // Mass-close abort: counters NOT advanced, no DB mutation.
+              // Next cycle re-evaluates with fresh chain state. The opsAlert
+              // inside maybeAbortMassClose covers operator visibility.
+              continue
+            }
             log.warn(
               { dseq, deploymentId: dep.id, reason: chain ? 'closed' : 'missing' },
               'Deployment gone on-chain — closing and settling billing'
@@ -341,6 +380,72 @@ export class EscrowHealthMonitor {
     } finally {
       this.running = false
     }
+  }
+
+  /**
+   * Phase 49b mass-close guard for the per-deployment "chain says gone"
+   * close path. Mirrors the staleDeploymentSweeper's reconciler guard.
+   *
+   * If a single chain query returns truncated data (RPC blip, gateway
+   * partial response, owner-mismatch), every ACTIVE row could appear to be
+   * "missing on chain" and the previous unguarded loop would close the
+   * entire fleet. Trip threshold matches the sweeper: ratio ≥ 0.5 of all
+   * eligible rows AND total ≥ 5.
+   *
+   * Returns `true` when the cycle should skip closing this pass (counters
+   * are NOT advanced — a real chain death will still surface next cycle).
+   */
+  private async maybeAbortMassClose(
+    closeCandidates: Array<{ deploymentId: string; dseq: string; reason: 'closed' | 'missing' }>,
+    eligibleTotal: number,
+  ): Promise<boolean> {
+    const MASS_MIN_TOTAL = 5
+    const MASS_RATIO = 0.5
+    if (closeCandidates.length === 0 || eligibleTotal < MASS_MIN_TOTAL) return false
+    const ratio = closeCandidates.length / eligibleTotal
+    if (ratio < MASS_RATIO) return false
+
+    const reasons = closeCandidates.reduce<Record<string, number>>((acc, c) => {
+      acc[c.reason] = (acc[c.reason] ?? 0) + 1
+      return acc
+    }, {})
+
+    log.error(
+      {
+        total: eligibleTotal,
+        wouldClose: closeCandidates.length,
+        ratio: +ratio.toFixed(2),
+        reasons,
+      },
+      'Mass-close event detected in escrow monitor — refusing to close any rows this cycle (likely RPC truncation / chain blip)',
+    )
+
+    try {
+      await opsAlert({
+        key: 'escrow-monitor-mass-close',
+        severity: 'critical',
+        title: 'Escrow monitor aborted mass-close',
+        message:
+          `Escrow monitor would have closed ${closeCandidates.length}/${eligibleTotal} ` +
+          `ACTIVE deployments in a single cycle (ratio ${(ratio * 100).toFixed(0)}%). ` +
+          `Aborted to avoid nuking the fleet on a chain RPC truncation. ` +
+          `Investigate \`akash query deployment list\` health; next cycle re-evaluates.`,
+        context: {
+          total: String(eligibleTotal),
+          wouldClose: String(closeCandidates.length),
+          ratio: ratio.toFixed(2),
+          reasons: JSON.stringify(reasons),
+          sampleDseqs: closeCandidates
+            .slice(0, 10)
+            .map((c) => c.dseq)
+            .join(','),
+        },
+        suppressMs: 30 * 60 * 1000,
+      })
+    } catch (err) {
+      log.warn({ err }, 'opsAlert failed during escrow-monitor mass-close abort')
+    }
+    return true
   }
 
   /**
