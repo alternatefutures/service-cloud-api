@@ -185,7 +185,14 @@ export class SubdomainProxy {
     this.cache = new BackendCache(CACHE_MAX_SIZE, CACHE_TTL_MS)
 
     this.proxy = httpProxy.createProxyServer({
-      changeOrigin: true,
+      // Preserve the browser's original Host header on the way out. AWS
+      // sigv4 backends (RustFS console, MinIO, S3 SDKs talking to a self-
+      // hosted bucket) include `Host` in the canonical request, so any
+      // rewrite breaks signature validation. Provider-side routing is
+      // handled by the SDL `expose.accept:` block instead — the SDL
+      // generator emits the AF subdomain hostname for every globally-
+      // proxied port (see `templates/sdl.ts:buildPortExpose`).
+      changeOrigin: false,
       // Akash providers may use self-signed certs on their ingress
       secure: false,
       // 30s timeout for Akash/Phala backends
