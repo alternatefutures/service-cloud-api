@@ -1723,6 +1723,7 @@ export const typeDefs = /* GraphQL */ `
     GAME_SERVER
     WEB_SERVER
     DATABASE
+    STORAGE
     AI_ML
     DEVTOOLS
     CUSTOM

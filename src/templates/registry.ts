@@ -31,6 +31,7 @@ import {
   alternateAgent,
   infisicalServer,
   telegramChatBot,
+  alternateBucket,
 } from './definitions/index.js'
 
 // ─── Registry ────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ const templates: Template[] = [
   // Databases
   postgres,
   redis,
+  // Storage
+  alternateBucket,
   // DevTools
   infisicalServer,
   n8nServer,

@@ -247,7 +247,17 @@ export class AkashProvider implements DeploymentProvider {
       if (allReady) overall = 'healthy'
       else if (anyReady && anyWaiting) overall = 'degraded'
       else if (anyWaiting) overall = 'starting'
-      else overall = 'unhealthy'
+      else if (containers.length === 0) {
+        // Empty `services: {}` from a successful lease-status call is NOT a
+        // death signal — Akash providers return this during k8s manifest
+        // re-pushes, brief container restarts, or any moment when their
+        // internal cache is empty. Classify as `unknown` so the sweeper's
+        // UNKNOWN_THRESHOLD (multiple consecutive observations) protects
+        // the lease, instead of falling into the `unhealthy` bucket which
+        // used to kill the lease in 1 tick. (2026-05-03 incident — single
+        // sweep pass killed 6 prod leases in 4 min, all reason=unhealthy.)
+        overall = 'unknown'
+      } else overall = 'unhealthy'
 
       const result: DeploymentHealthResult = { provider: 'akash', overall, containers, lastChecked: new Date() }
       AkashProvider.healthCache.set(deploymentId, { result, fetchedAt: now })
@@ -259,63 +269,21 @@ export class AkashProvider implements DeploymentProvider {
       AkashProvider.healthCache.delete(deploymentId)
       const isGone = msg.includes('404') || msg.includes('not found')
 
-      if (isGone && deployment.status === 'ACTIVE') {
-        // Lease is gone on the provider — auto-close to prevent ghost billing.
-        // Fire-and-forget so getHealth returns immediately.
-        this.autoCloseGhostDeployment(deploymentId, deployment.dseq.toString()).catch(e => {
-          log.error({ deploymentId, err: e }, 'autoCloseGhostDeployment failed')
-        })
-      }
-
+      // 2026-05-03 fix — DELIBERATELY do NOT auto-close from inside getHealth.
+      // The previous implementation here fired `autoCloseGhostDeployment` as
+      // fire-and-forget on a single 404, with NO audit row, NO failure-counter
+      // debounce, and NO failover-policy check. Forensics on prod showed 7
+      // ACTIVE leases killed by that path with zero audit trail in the last
+      // 30 days. The sweeper's threshold mechanism (`reconcileActiveDeployments`)
+      // already requires N consecutive observations, writes a proper audit
+      // row, and respects failover policy — let it handle ghost-detection
+      // through the normal `unhealthy` verdict path.
       return {
         provider: 'akash',
         overall: isGone ? 'unhealthy' : 'unknown',
         containers: [],
         lastChecked: new Date(),
       }
-    }
-  }
-
-  /**
-   * Close a deployment that the provider reports as gone (404) but our DB
-   * still considers ACTIVE. Settles billing and refunds escrow so we never
-   * charge for a non-existent lease.
-   */
-  private async autoCloseGhostDeployment(deploymentId: string, dseq: string): Promise<void> {
-    // Double-check DB status under a fresh read to avoid race conditions
-    const current = await this.prisma.akashDeployment.findUnique({
-      where: { id: deploymentId },
-      select: { status: true },
-    })
-    if (!current || current.status !== 'ACTIVE') return
-
-    log.warn({ deploymentId, dseq }, 'Auto-closing ghost deployment (lease gone on provider)')
-
-    const closedAt = new Date()
-
-    // Try to close on-chain too (may already be closed, that's fine)
-    try {
-      const orchestrator = getAkashOrchestrator(this.prisma)
-      await orchestrator.closeDeployment(Number(dseq))
-    } catch (closeErr) {
-      const closeMsg = (closeErr as Error).message ?? ''
-      const alreadyGone = /deployment not found|deployment closed|not active|does not exist/i.test(closeMsg)
-      if (!alreadyGone) {
-        log.error({ deploymentId, dseq, err: closeErr }, 'On-chain close failed during auto-close')
-      }
-    }
-
-    // Mark as CLOSED in DB
-    const result = await this.prisma.akashDeployment.updateMany({
-      where: { id: deploymentId, status: 'ACTIVE' },
-      data: { status: 'CLOSED', closedAt },
-    })
-
-    if (result.count > 0) {
-      // Settle billing and refund
-      await settleAkashEscrowToTime(this.prisma, deploymentId, closedAt)
-      await getEscrowService(this.prisma).refundEscrow(deploymentId)
-      log.info({ deploymentId, dseq }, 'Ghost deployment auto-closed, billing settled')
     }
   }
 

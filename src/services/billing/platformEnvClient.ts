@@ -1,13 +1,37 @@
 /**
  * Platform Env Injection Client
  *
- * Auto-injects platform-provided env vars (AF_ORG_ID, AF_API_KEY)
- * during template deployment. Uses the same service-to-service pattern
- * as the billing API client (AUTH_INTROSPECTION_SECRET).
+ * Auto-injects platform-provided env vars (AF_ORG_ID, AF_API_KEY,
+ * generated S3-style credentials) during template deployment. Uses the
+ * same service-to-service pattern as the billing API client
+ * (AUTH_INTROSPECTION_SECRET).
  */
 
+import { randomBytes } from 'crypto'
 import type { Template } from '../../templates/schema.js'
 import type { Context } from '../../resolvers/types.js'
+
+/**
+ * S3-style access key ID — uppercase alphanumeric, 20 chars (matches
+ * AWS / RustFS / minio convention so admins can paste it into any S3
+ * client without surprises).
+ */
+function generateAccessKeyId(): string {
+  const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  const bytes = randomBytes(20)
+  let out = ''
+  for (let i = 0; i < 20; i++) out += ALPHA[bytes[i]! % ALPHA.length]
+  return out
+}
+
+/**
+ * Opaque secret — base64url, 40 chars (>= 240 bits of entropy). Used for
+ * S3 secret keys and any other shared-secret env that needs to be strong
+ * out-of-the-box.
+ */
+function generateSecret(): string {
+  return randomBytes(40).toString('base64url').slice(0, 40)
+}
 
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:1601'
 const INTROSPECTION_SECRET = process.env.AUTH_INTROSPECTION_SECRET || ''
@@ -51,8 +75,14 @@ async function createInternalToken(args: {
  * Scan a template's envVars for `platformInjected` fields and inject
  * the appropriate values into envOverrides.
  *
- * - 'orgId'  → injects context.organizationId
- * - 'apiKey' → creates a scoped PAT via service-auth internal API
+ * - 'orgId'              → injects context.organizationId
+ * - 'apiKey'             → creates a scoped PAT via service-auth internal API
+ * - 'generatedAccessKey' → random 20-char uppercase alphanumeric (S3 access key)
+ * - 'generatedSecret'    → random 40-char base64url (S3 secret / opaque secret)
+ *
+ * If the user explicitly provided a value in envOverrides for a key, that
+ * value wins — generated values only fill in the gaps. This lets advanced
+ * users BYO credentials when they want to.
  *
  * Mutates envOverrides in place.
  */
@@ -85,6 +115,14 @@ export async function injectPlatformEnvVars(
         name: `auto: ${template.name} (${slug})`,
       })
       envOverrides[envVar.key] = result.token
+    }
+
+    if (envVar.platformInjected === 'generatedAccessKey') {
+      envOverrides[envVar.key] = generateAccessKeyId()
+    }
+
+    if (envVar.platformInjected === 'generatedSecret') {
+      envOverrides[envVar.key] = generateSecret()
     }
   }
 }
