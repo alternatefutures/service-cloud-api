@@ -32,6 +32,8 @@ import {
   templateMutations,
   templateFieldResolvers,
 } from './templates.js'
+import { getTemplateById } from '../templates/registry.js'
+import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
 import { regionsQueries } from './regions.js'
 import { githubQueries, githubMutations, githubFieldResolvers } from './github.js'
@@ -1547,9 +1549,38 @@ export const resolvers = {
         flavor = input.flavor
       }
 
-      return context.prisma.service.create({
+      // Phase 47 — when a templateId is supplied, resolve the template and
+      // run the same env-var seeding that `deployFromTemplate` does. Without
+      // this, the catalog flow (AddServiceBox -> createServiceEntry -> here)
+      // creates a stub Service with ZERO ServiceEnvVar rows, which means
+      // platform-injected creds (`generatedAccessKey` / `generatedSecret`)
+      // never get generated. The user lands on the workspace, deploys, and
+      // the SDL is emitted with no credentials → the running container
+      // falls back to upstream defaults (e.g. RustFS uses `rustfsadmin`).
+      // Bug surfaced via the bucket-as-first-class-service refactor:
+      // RustFS console showed empty access/secret keys after deploy.
+      const template = input.templateId ? getTemplateById(input.templateId) : null
+      if (input.templateId && !template) {
+        throw new GraphQLError(`Template not found: ${input.templateId}`, {
+          extensions: { code: 'NOT_FOUND' },
+        })
+      }
+
+      // Resolve env overrides up-front so injectPlatformEnvVars can fail fast
+      // (e.g. service-auth down) BEFORE we create any DB rows.
+      const envOverrides: Record<string, string> = {}
+      if (template) {
+        await injectPlatformEnvVars(template, envOverrides, context, slug)
+      }
+
+      const service = await context.prisma.service.create({
         data: {
-          type: serviceType,
+          // When a template is in play, force the service type to match the
+          // template's declared serviceType. The web client should already
+          // be sending the right value, but defending here means a
+          // mistyped client never desynchronises the registry from the
+          // template's intended deployment shape.
+          type: template?.serviceType ?? serviceType,
           name: input.name,
           slug,
           projectId: input.projectId,
@@ -1561,6 +1592,46 @@ export const resolvers = {
           internalHostname: generateInternalHostname(slug, project.slug),
         },
       })
+
+      if (template) {
+        // Persist a ServiceEnvVar row per template envVar so the deploy view
+        // shows real values (including generated creds), the user can edit
+        // them, and `injectPersistedEnvVars` in the orchestrator picks them
+        // up at SDL generation time.
+        if (template.envVars?.length) {
+          await context.prisma.$transaction(
+            template.envVars.map((ev) =>
+              context.prisma.serviceEnvVar.create({
+                data: {
+                  serviceId: service.id,
+                  key: ev.key,
+                  value: envOverrides[ev.key] ?? ev.default ?? '',
+                  secret: ev.secret ?? false,
+                },
+              })
+            )
+          )
+        }
+        // Persist ports the same way deployFromTemplate does. Idempotent
+        // for the workspace's port editor; deploy-time SDL generation also
+        // reads from the template, so this is mainly for UI surfacing.
+        if (template.ports?.length) {
+          await context.prisma.$transaction(
+            template.ports.map((p) =>
+              context.prisma.servicePort.create({
+                data: {
+                  serviceId: service.id,
+                  containerPort: p.port,
+                  publicPort: p.global ? p.as : null,
+                  protocol: 'TCP',
+                },
+              })
+            )
+          )
+        }
+      }
+
+      return service
     },
 
     updateServicePriority: async (
