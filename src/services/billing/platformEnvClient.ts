@@ -18,9 +18,19 @@ import type { Context } from '../../resolvers/types.js'
  */
 function generateAccessKeyId(): string {
   const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  const bytes = randomBytes(20)
+  const targetLength = 20
+  const maxUnbiasedByte = Math.floor(256 / ALPHA.length) * ALPHA.length
   let out = ''
-  for (let i = 0; i < 20; i++) out += ALPHA[bytes[i]! % ALPHA.length]
+
+  while (out.length < targetLength) {
+    const bytes = randomBytes(targetLength - out.length)
+    for (let i = 0; i < bytes.length && out.length < targetLength; i++) {
+      const byte = bytes[i]!
+      if (byte >= maxUnbiasedByte) continue
+      out += ALPHA[byte % ALPHA.length]
+    }
+  }
+
   return out
 }
 
