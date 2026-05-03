@@ -189,9 +189,14 @@ export class AkashProvider implements DeploymentProvider {
 
     const nonHealthStates = new Set(['CLOSED', 'FAILED', 'PERMANENTLY_FAILED'])
     if (nonHealthStates.has(deployment.status)) {
+      // CLOSED → 'unknown' (sweeper won't act on it; CLOSED rows aren't
+      // in the active set anyway). FAILED/PERMANENTLY_FAILED → 'gone'
+      // because the chain-side lease is genuinely no longer usable —
+      // those states are only ever set after we observed a permanent
+      // chain-side failure during the SUBMIT_TX → LEASE_CREATED pipeline.
       return {
         provider: 'akash',
-        overall: deployment.status === 'CLOSED' ? 'unknown' : 'unhealthy',
+        overall: deployment.status === 'CLOSED' ? 'unknown' : 'gone',
         containers: [],
         lastChecked: new Date(),
       }
@@ -277,10 +282,17 @@ export class AkashProvider implements DeploymentProvider {
       // 30 days. The sweeper's threshold mechanism (`reconcileActiveDeployments`)
       // already requires N consecutive observations, writes a proper audit
       // row, and respects failover policy — let it handle ghost-detection
-      // through the normal `unhealthy` verdict path.
+      // through the normal `gone` verdict path.
+      //
+      // 2026-05-03 follow-up — `isGone` (provider 404 / "not found") now
+      // returns 'gone' rather than 'unhealthy'. Container-unhealthy is no
+      // longer a sweeper-close signal (only opt-in failover acts on it);
+      // the sweeper still closes confirmed-gone leases via the new 'gone'
+      // verdict. Anything else (timeouts, RPC blips) stays 'unknown' and
+      // is never closed.
       return {
         provider: 'akash',
-        overall: isGone ? 'unhealthy' : 'unknown',
+        overall: isGone ? 'gone' : 'unknown',
         containers: [],
         lastChecked: new Date(),
       }

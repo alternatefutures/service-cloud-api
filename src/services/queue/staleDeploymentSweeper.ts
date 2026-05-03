@@ -200,9 +200,37 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
 //   to 5 so a sustained provider-side outage gets ~25 min to recover.
 // - EXCEPTION: keep at 3; CLI throws are very rarely transient long enough
 //   to clear over 15 min, but we still want consecutive confirmation.
-const UNHEALTHY_THRESHOLD = 3
-const UNKNOWN_THRESHOLD = 5
-const EXCEPTION_THRESHOLD = 3
+// Sweeper philosophy (2026-05-03 — explicit redesign after rustfs-p1td
+// incident):
+//
+//   The sweeper closes leases that are GENUINELY GONE on-chain. It does
+//   NOT close leases just because a container is unhealthy.
+//
+// Rationale: a crashed container is the user's problem to debug. Killing
+// the lease destroys their forensic context (logs, mounted volumes,
+// provider record), bills them again to redeploy, and leaves them with
+// zero feedback about what failed. Container health is surfaced in the
+// UI/audit log so the user sees what's broken; opt-in failoverPolicy is
+// the ONLY automated remediation for unhealth — and only because the
+// user explicitly asked for it.
+//
+// What still triggers a sweeper close:
+//   • `overall === 'gone'`  — provider returned 404 / "not found" on
+//     lease-status, OR our DB has the deployment in a terminal failure
+//     state. The chain-side lease is dead; we're just syncing bookkeeping.
+//   • Repeated probe exceptions where the LATEST exception is a
+//     provider-side 404 (folded into the 'gone' verdict above).
+//
+// What does NOT trigger close:
+//   • `overall === 'unhealthy'`         (container down, lease alive)
+//   • `overall === 'unknown'`           (we couldn't tell)
+//   • Probe exception that isn't 404    (timeout, RPC blip)
+//
+// Failover (opt-in, gated by service.failoverPolicy.enabled) still acts
+// on `unhealthy` after UNHEALTHY_THRESHOLD consecutive ticks — that's a
+// user-requested behaviour and stays.
+const GONE_THRESHOLD = 3        // 15 min of confirmed-gone before close
+const UNHEALTHY_THRESHOLD = 3   // failover trigger only (if policy enabled)
 
 // Mass-event guard. If a single sweep pass would close ≥ MASS_EVENT_RATIO
 // of all ACTIVE deployments AND the population is at least
@@ -213,147 +241,52 @@ const MASS_EVENT_MIN_TOTAL = 5
 const MASS_EVENT_RATIO = 0.5
 
 const failureCounters = new Map<string, number>()
-
-function isDefinitelyDead(health: { overall: string }): boolean {
-  return health.overall === 'unhealthy'
-}
-
-/**
- * Phase 43 — close-or-failover branch. The sweeper has already decided this
- * deployment is dead. We try `executeFailover()` if the service has opted
- * in AND the failure looks like a *provider* problem; otherwise we plain
- * `close()` (the existing behaviour).
- *
- * Returns true if the deployment was either closed or replaced (caller
- * counts it as reconciled either way).
- */
-async function closeOrFailover(
-  prisma: PrismaClient,
-  provider: { name: string; close(id: string): Promise<void> },
-  deploymentId: string,
-  sweepTraceId: string,
-  closeAuditExtra: Record<string, unknown>
-): Promise<boolean> {
-  if (provider.name !== 'akash') {
-    // Phala / future providers: failover not implemented yet; fall through.
-    try {
-      await provider.close(deploymentId)
-      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, closeAuditExtra)
-      return true
-    } catch (closeErr) {
-      log.error(
-        { provider: provider.name, deploymentId, err: closeErr },
-        'Failed to close dead deployment'
-      )
-      return false
-    }
-  }
-
-  let eligibility: Awaited<ReturnType<typeof evaluateFailoverEligibility>>
-  try {
-    eligibility = await evaluateFailoverEligibility(prisma, deploymentId)
-  } catch (evalErr) {
-    log.warn(
-      { deploymentId, err: evalErr },
-      'failover eligibility evaluation threw — defaulting to plain close'
-    )
-    eligibility = { eligible: false, reason: 'no_chain_root' }
-  }
-
-  if (!eligibility.eligible) {
-    // Skip-audit only the cases where the user explicitly asked for failover
-    // (i.e. policy was enabled). Disabled-by-default services would drown
-    // the audit log otherwise.
-    const noisySkips: ReadonlySet<FailoverSkipReason> = new Set([
-      'has_volumes',
-      'never_active',
-      'app_unhealthy',
-      'cap_exceeded',
-    ])
-    if (noisySkips.has(eligibility.reason)) {
-      try {
-        const dep = await prisma.akashDeployment.findUnique({
-          where: { id: deploymentId },
-          select: {
-            id: true,
-            serviceId: true,
-            service: { select: { projectId: true, project: { select: { organizationId: true } } } },
-          },
-        })
-        if (dep) {
-          auditFailoverSkipped(prisma, {
-            traceId: sweepTraceId,
-            deployment: dep,
-            reason: eligibility.reason,
-            detail: eligibility.detail,
-          })
-        }
-      } catch (auditErr) {
-        log.debug({ err: auditErr }, 'failover skip audit lookup failed')
-      }
-    }
-
-    try {
-      await provider.close(deploymentId)
-      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, closeAuditExtra)
-      return true
-    } catch (closeErr) {
-      log.error(
-        { provider: provider.name, deploymentId, err: closeErr },
-        'Failed to close dead deployment'
-      )
-      return false
-    }
-  }
-
-  try {
-    const result = await executeFailover(prisma, deploymentId, {
-      excludedProviders: eligibility.excludedProviders,
-      reason: String(closeAuditExtra.reason ?? 'unhealthy'),
-      triggeredBy: 'sweeper',
-      traceId: sweepTraceId,
-    })
-    log.info(
-      {
-        from: deploymentId,
-        to: result.newDeploymentId,
-        excluded: eligibility.excludedProviders.length,
-        attemptsInWindow: eligibility.attemptsInWindow,
-      },
-      'failover triggered for dead deployment'
-    )
-    return true
-  } catch (failoverErr) {
-    log.error(
-      { deploymentId, err: failoverErr },
-      'failover execution failed — falling back to plain close'
-    )
-    try {
-      await provider.close(deploymentId)
-      auditHealthClose(prisma, sweepTraceId, provider.name, deploymentId, {
-        ...closeAuditExtra,
-        failoverError: failoverErr instanceof Error ? failoverErr.message : String(failoverErr),
-      })
-      return true
-    } catch (closeErr) {
-      log.error(
-        { provider: provider.name, deploymentId, err: closeErr },
-        'Failed to close dead deployment after failover failure'
-      )
-      return false
-    }
-  }
-}
+const unhealthyCounters = new Map<string, number>()
 
 /**
  * Per-deployment verdict from the probe phase. The reconciler collects all
  * verdicts before deciding to close any of them — this lets the
  * mass-event guard (`MASS_EVENT_RATIO`) abort the close path entirely
  * when a provider-wide blip would otherwise nuke half the fleet.
+ *
+ * Verdict kinds:
+ *  - 'close_gone'       — lease is genuinely gone on-chain. Sweeper closes
+ *                         to sync our DB. This is the ONLY close path.
+ *  - 'failover_check'   — container reports unhealthy; lease still exists.
+ *                         Sweeper does NOT close. If failoverPolicy is
+ *                         enabled it triggers `executeFailover`; otherwise
+ *                         it audits and moves on. Container stays alive
+ *                         so the user can read logs and debug.
+ *  - 'visible_only'     — unhealthy/unknown/probe-exception that shouldn't
+ *                         drive any action this tick (e.g. still under
+ *                         threshold, or 'unknown' which never closes).
+ *                         Audit row written for forensic visibility.
+ *  - 'healthy'          — nothing to do.
  */
 type ReconcileVerdict =
-  | { id: string; kind: 'close'; reason: 'unhealthy' | 'unknown_health' | 'probe_exception'; failures: number; healthOverall?: string; probeError?: string }
-  | { id: string; kind: 'tracking'; reason: 'unhealthy' | 'unknown_health' | 'probe_exception'; failures: number }
+  | {
+      id: string
+      kind: 'close_gone'
+      reason: 'gone' | 'probe_exception_gone'
+      failures: number
+      healthOverall?: string
+      probeError?: string
+    }
+  | {
+      id: string
+      kind: 'failover_check'
+      reason: 'unhealthy'
+      failures: number
+      healthOverall: string
+    }
+  | {
+      id: string
+      kind: 'visible_only'
+      reason: 'unhealthy' | 'unknown_health' | 'probe_exception_other'
+      failures: number
+      healthOverall?: string
+      probeError?: string
+    }
   | { id: string; kind: 'healthy' }
 
 async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
@@ -373,48 +306,99 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
       // ─── Phase 1: probe every deployment, collect verdicts (no closes yet) ───
       const verdicts: ReconcileVerdict[] = []
       for (const id of activeIds) {
-        const counterKey = `${provider.name}:${id}`
+        const goneKey = `${provider.name}:gone:${id}`
+        const unhealthyKey = `${provider.name}:unhealthy:${id}`
 
         try {
           const health = await provider.getHealth(id)
 
-          if (!health || isDefinitelyDead(health)) {
-            const count = (failureCounters.get(counterKey) ?? 0) + 1
-            failureCounters.set(counterKey, count)
+          if (!health) {
+            // No DB row for this deployment — orphan at our end. Treat as
+            // 'gone' since we can't manage what we can't find.
+            const count = (failureCounters.get(goneKey) ?? 0) + 1
+            failureCounters.set(goneKey, count)
+            verdicts.push(
+              count >= GONE_THRESHOLD
+                ? { id, kind: 'close_gone', reason: 'gone', failures: count, healthOverall: 'no_record' }
+                : { id, kind: 'visible_only', reason: 'unknown_health', failures: count, healthOverall: 'no_record' }
+            )
+          } else if (health.overall === 'gone') {
+            // Lease genuinely gone on-chain (provider 404 or our DB has a
+            // terminal failure status). Sweeper close path.
+            const count = (failureCounters.get(goneKey) ?? 0) + 1
+            failureCounters.set(goneKey, count)
+            unhealthyCounters.delete(unhealthyKey)
+            verdicts.push(
+              count >= GONE_THRESHOLD
+                ? { id, kind: 'close_gone', reason: 'gone', failures: count, healthOverall: 'gone' }
+                : { id, kind: 'visible_only', reason: 'unknown_health', failures: count, healthOverall: 'gone' }
+            )
+          } else if (health.overall === 'unhealthy') {
+            // Container down, lease still alive. NEVER close from here —
+            // the user needs the lease to debug. Only run the opt-in
+            // failover branch; if no policy, audit-only.
+            const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
+            unhealthyCounters.set(unhealthyKey, count)
+            failureCounters.delete(goneKey)
             verdicts.push(
               count >= UNHEALTHY_THRESHOLD
-                ? { id, kind: 'close', reason: 'unhealthy', failures: count, healthOverall: health?.overall ?? '404' }
-                : { id, kind: 'tracking', reason: 'unhealthy', failures: count }
+                ? { id, kind: 'failover_check', reason: 'unhealthy', failures: count, healthOverall: 'unhealthy' }
+                : { id, kind: 'visible_only', reason: 'unhealthy', failures: count, healthOverall: 'unhealthy' }
             )
           } else if (health.overall === 'unknown') {
-            const count = (failureCounters.get(counterKey) ?? 0) + 1
-            failureCounters.set(counterKey, count)
-            verdicts.push(
-              count >= UNKNOWN_THRESHOLD
-                ? { id, kind: 'close', reason: 'unknown_health', failures: count, healthOverall: 'unknown' }
-                : { id, kind: 'tracking', reason: 'unknown_health', failures: count }
-            )
+            // Can't tell. Never closes. Audit-only on transition.
+            const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
+            unhealthyCounters.set(unhealthyKey, count)
+            failureCounters.delete(goneKey)
+            verdicts.push({
+              id,
+              kind: 'visible_only',
+              reason: 'unknown_health',
+              failures: count,
+              healthOverall: 'unknown',
+            })
           } else {
-            failureCounters.delete(counterKey)
+            // healthy / starting / degraded — nothing to do, reset counters.
+            const wasUnhealthy = (unhealthyCounters.get(unhealthyKey) ?? 0) > 0
+            const wasGone = (failureCounters.get(goneKey) ?? 0) > 0
+            failureCounters.delete(goneKey)
+            unhealthyCounters.delete(unhealthyKey)
+            if (wasUnhealthy || wasGone) {
+              auditHealthRecovered(prisma, sweepTraceId, provider.name, id, {
+                overall: health.overall,
+                previousState: wasGone ? 'gone' : 'unhealthy',
+              })
+            }
             verdicts.push({ id, kind: 'healthy' })
           }
         } catch (err) {
-          const count = (failureCounters.get(counterKey) ?? 0) + 1
-          failureCounters.set(counterKey, count)
+          // Probe threw. Could be RPC timeout, CLI death, network blip.
+          // We never close on raw exceptions — the provider 404 path is
+          // already mapped to 'gone' inside getHealth(). Audit + track only.
+          const errMsg = err instanceof Error ? err.message : String(err)
+          const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
+          unhealthyCounters.set(unhealthyKey, count)
           log.warn(
             { provider: provider.name, deploymentId: id, err, failures: count },
-            'Health check threw — counting as failure'
+            'Health check threw — recording probe exception (will NOT close)'
           )
-          verdicts.push(
-            count >= EXCEPTION_THRESHOLD
-              ? { id, kind: 'close', reason: 'probe_exception', failures: count, probeError: err instanceof Error ? err.message : String(err) }
-              : { id, kind: 'tracking', reason: 'probe_exception', failures: count }
-          )
+          verdicts.push({
+            id,
+            kind: 'visible_only',
+            reason: 'probe_exception_other',
+            failures: count,
+            probeError: errMsg,
+          })
         }
       }
 
       // ─── Phase 2: mass-event guard ───
-      const closures = verdicts.filter((v): v is Extract<ReconcileVerdict, { kind: 'close' }> => v.kind === 'close')
+      // Only count verdicts that would actually drive a close (close_gone).
+      // failover_check is a per-service opt-in, not a fleet-wide signal,
+      // so it's excluded here.
+      const closures = verdicts.filter(
+        (v): v is Extract<ReconcileVerdict, { kind: 'close_gone' }> => v.kind === 'close_gone'
+      )
       if (closures.length > 0 && verdicts.length >= MASS_EVENT_MIN_TOTAL) {
         const ratio = closures.length / verdicts.length
         if (ratio >= MASS_EVENT_RATIO) {
@@ -449,29 +433,57 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           }).catch((err) =>
             log.warn({ err }, 'opsAlert failed during mass-close abort'),
           )
-          // Reset close-bound counters so the same deployments don't tip
-          // over the threshold again on the very next pass while the
-          // outage is still ongoing.
-          for (const v of closures) failureCounters.delete(`${provider.name}:${v.id}`)
+          for (const v of closures) failureCounters.delete(`${provider.name}:gone:${v.id}`)
           continue
         }
       }
 
-      // ─── Phase 3: execute closes (or the failover branch) ───
+      // ─── Phase 3: act on verdicts ───
       for (const v of verdicts) {
-        if (v.kind !== 'close') {
-          if (v.kind === 'tracking') {
-            log.debug(
-              { provider: provider.name, deploymentId: v.id, failures: v.failures, reason: v.reason },
-              'Deployment unhealthy/unknown/exception — tracking consecutive failures'
-            )
+        if (v.kind === 'healthy') continue
+
+        if (v.kind === 'visible_only') {
+          // Audit on the first tick of a new unhealthy/unknown/exception
+          // streak so the user has a forensic trail. Subsequent ticks of
+          // the same streak don't re-audit (avoids spam) — but the close
+          // audit (if it ever happens) has the full failure count anyway.
+          if (v.failures === 1) {
+            auditHealthObserved(prisma, sweepTraceId, provider.name, v.id, {
+              reason: v.reason,
+              healthOverall: v.healthOverall,
+              probeError: v.probeError,
+            })
           }
+          log.debug(
+            { provider: provider.name, deploymentId: v.id, failures: v.failures, reason: v.reason },
+            'Deployment unhealthy/unknown/exception — recorded for visibility (no close)'
+          )
           continue
         }
 
+        if (v.kind === 'failover_check') {
+          // Container reports unhealthy past UNHEALTHY_THRESHOLD ticks.
+          // Try the opt-in failover path. If failover is disabled or
+          // ineligible, we LOG/AUDIT the skip but do NOT close — the
+          // user keeps their lease for debugging.
+          await tryFailoverNoFallbackClose(prisma, provider, v.id, sweepTraceId, {
+            reason: 'unhealthy',
+            failures: v.failures,
+            overall: v.healthOverall,
+          })
+          continue
+        }
+
+        // close_gone — the only path that actually closes.
         log.warn(
-          { provider: provider.name, deploymentId: v.id, failures: v.failures, reason: v.reason, health: v.healthOverall },
-          'Deployment confirmed dead — closing or failing over'
+          {
+            provider: provider.name,
+            deploymentId: v.id,
+            failures: v.failures,
+            reason: v.reason,
+            health: v.healthOverall,
+          },
+          'Deployment lease confirmed gone on-chain — closing to sync DB'
         )
         const closeAuditExtra: Record<string, unknown> = {
           reason: v.reason,
@@ -480,9 +492,18 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
         if (v.healthOverall) closeAuditExtra.overall = v.healthOverall
         if (v.probeError) closeAuditExtra.probeError = v.probeError
 
-        const ok = await closeOrFailover(prisma, provider, v.id, sweepTraceId, closeAuditExtra)
-        if (ok) totalReconciled++
-        failureCounters.delete(`${provider.name}:${v.id}`)
+        try {
+          await provider.close(v.id)
+          auditHealthClose(prisma, sweepTraceId, provider.name, v.id, closeAuditExtra)
+          totalReconciled++
+        } catch (closeErr) {
+          log.error(
+            { provider: provider.name, deploymentId: v.id, err: closeErr },
+            'Failed to close gone-lease deployment'
+          )
+        }
+        failureCounters.delete(`${provider.name}:gone:${v.id}`)
+        unhealthyCounters.delete(`${provider.name}:unhealthy:${v.id}`)
       }
     } catch (err) {
       log.error({ provider: provider.name, err }, 'Failed to reconcile provider')
@@ -490,7 +511,99 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   }
 
   if (totalReconciled > 0) {
-    log.info({ reconciled: totalReconciled }, 'Reconciled dead deployments across all providers')
+    log.info({ reconciled: totalReconciled }, 'Reconciled gone-lease deployments across all providers')
+  }
+}
+
+/**
+ * Try the opt-in failover path for a container-unhealthy deployment.
+ * Critical contract: this NEVER falls back to plain `close()`. If failover
+ * is disabled or ineligible, the lease stays alive — the user keeps
+ * forensic context. We only audit the skip reason so it's discoverable.
+ */
+async function tryFailoverNoFallbackClose(
+  prisma: PrismaClient,
+  provider: { name: string },
+  deploymentId: string,
+  sweepTraceId: string,
+  extra: Record<string, unknown>
+): Promise<void> {
+  if (provider.name !== 'akash') {
+    // Phala/etc don't have failover yet; skip silently.
+    return
+  }
+
+  let eligibility: Awaited<ReturnType<typeof evaluateFailoverEligibility>>
+  try {
+    eligibility = await evaluateFailoverEligibility(prisma, deploymentId)
+  } catch (evalErr) {
+    log.warn(
+      { deploymentId, err: evalErr },
+      'failover eligibility evaluation threw — skipping (no close)'
+    )
+    return
+  }
+
+  if (!eligibility.eligible) {
+    // Audit the skip when the user actually opted in (so they can see why
+    // their failover policy didn't fire). Disabled-by-default services
+    // would drown the audit log otherwise.
+    const noisySkips: ReadonlySet<FailoverSkipReason> = new Set([
+      'has_volumes',
+      'never_active',
+      'app_unhealthy',
+      'cap_exceeded',
+    ])
+    if (noisySkips.has(eligibility.reason)) {
+      try {
+        const dep = await prisma.akashDeployment.findUnique({
+          where: { id: deploymentId },
+          select: {
+            id: true,
+            serviceId: true,
+            service: { select: { projectId: true, project: { select: { organizationId: true } } } },
+          },
+        })
+        if (dep) {
+          auditFailoverSkipped(prisma, {
+            traceId: sweepTraceId,
+            deployment: dep,
+            reason: eligibility.reason,
+            detail: eligibility.detail,
+          })
+        }
+      } catch (auditErr) {
+        log.debug({ err: auditErr }, 'failover skip audit lookup failed')
+      }
+    }
+    log.debug(
+      { deploymentId, reason: eligibility.reason, ...extra },
+      'failover skipped — lease left alive (user can inspect logs / redeploy)'
+    )
+    return
+  }
+
+  try {
+    const result = await executeFailover(prisma, deploymentId, {
+      excludedProviders: eligibility.excludedProviders,
+      reason: String(extra.reason ?? 'unhealthy'),
+      triggeredBy: 'sweeper',
+      traceId: sweepTraceId,
+    })
+    log.info(
+      {
+        from: deploymentId,
+        to: result.newDeploymentId,
+        excluded: eligibility.excludedProviders.length,
+        attemptsInWindow: eligibility.attemptsInWindow,
+      },
+      'failover triggered for unhealthy deployment'
+    )
+  } catch (failoverErr) {
+    log.error(
+      { deploymentId, err: failoverErr },
+      'failover execution failed — leaving lease alive (no fallback close)'
+    )
   }
 }
 
@@ -521,22 +634,7 @@ function auditHealthClose(
   extra: Record<string, unknown>
 ): void {
   void (async () => {
-    let row: HealthCloseRow | null = null
-    try {
-      if (providerName === 'akash') {
-        row = (await prisma.akashDeployment.findFirst({
-          where: { id: providerDeploymentId },
-          select: {
-            id: true,
-            serviceId: true,
-            service: { select: { projectId: true, project: { select: { organizationId: true } } } },
-          },
-        })) as HealthCloseRow | null
-      }
-    } catch (err) {
-      log.debug({ err, providerName, providerDeploymentId }, 'audit enrichment lookup failed')
-    }
-
+    const row = await loadHealthCloseRow(prisma, providerName, providerDeploymentId)
     audit(prisma, {
       traceId,
       source: 'monitor',
@@ -550,6 +648,86 @@ function auditHealthClose(
       payload: { provider: providerName, ...extra },
     })
   })()
+}
+
+/**
+ * Per-streak audit — fired the first time we observe an unhealthy /
+ * unknown / probe-exception state (i.e. counter goes 0→1). Gives the user
+ * a forensic trail "we noticed your deployment is broken at T" without
+ * spamming an audit row every 5 minutes.
+ */
+function auditHealthObserved(
+  prisma: PrismaClient,
+  traceId: string,
+  providerName: string,
+  providerDeploymentId: string,
+  extra: Record<string, unknown>
+): void {
+  void (async () => {
+    const row = await loadHealthCloseRow(prisma, providerName, providerDeploymentId)
+    audit(prisma, {
+      traceId,
+      source: 'monitor',
+      category: 'health',
+      action: 'health.deployment_unhealthy_observed',
+      status: 'warn',
+      orgId: row?.service?.project?.organizationId ?? null,
+      projectId: row?.service?.projectId ?? null,
+      serviceId: row?.serviceId ?? null,
+      deploymentId: row?.id ?? providerDeploymentId,
+      payload: { provider: providerName, ...extra },
+    })
+  })()
+}
+
+/**
+ * Recovery audit — fired when a deployment that was previously unhealthy
+ * / gone / unknown returns to a healthy state. Pairs with
+ * `auditHealthObserved` to bracket the unhealthy window in the log.
+ */
+function auditHealthRecovered(
+  prisma: PrismaClient,
+  traceId: string,
+  providerName: string,
+  providerDeploymentId: string,
+  extra: Record<string, unknown>
+): void {
+  void (async () => {
+    const row = await loadHealthCloseRow(prisma, providerName, providerDeploymentId)
+    audit(prisma, {
+      traceId,
+      source: 'monitor',
+      category: 'health',
+      action: 'health.deployment_health_recovered',
+      status: 'ok',
+      orgId: row?.service?.project?.organizationId ?? null,
+      projectId: row?.service?.projectId ?? null,
+      serviceId: row?.serviceId ?? null,
+      deploymentId: row?.id ?? providerDeploymentId,
+      payload: { provider: providerName, ...extra },
+    })
+  })()
+}
+
+async function loadHealthCloseRow(
+  prisma: PrismaClient,
+  providerName: string,
+  providerDeploymentId: string
+): Promise<HealthCloseRow | null> {
+  if (providerName !== 'akash') return null
+  try {
+    return (await prisma.akashDeployment.findFirst({
+      where: { id: providerDeploymentId },
+      select: {
+        id: true,
+        serviceId: true,
+        service: { select: { projectId: true, project: { select: { organizationId: true } } } },
+      },
+    })) as HealthCloseRow | null
+  } catch (err) {
+    log.debug({ err, providerName, providerDeploymentId }, 'audit enrichment lookup failed')
+    return null
+  }
 }
 
 /**
