@@ -112,7 +112,7 @@
       "prisma"
     ],
     "overrides": {
-      "axios": ">=1.15.0",
+      "axios": ">=1.16.0",
       "elliptic": "^6.6.1",
       "secp256k1": "^5.0.1",
       "parse-duration": "^2.1.3",
