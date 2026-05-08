@@ -137,7 +137,7 @@
       "bn.js": ">=5.2.3",
       "ajv": ">=8.18.0",
       "yaml": ">=2.8.3",
-      "brace-expansion": ">=5.0.5",
+      "brace-expansion": ">=5.0.6",
       "@smithy/config-resolver": ">=4.4.0"
     }
   },
