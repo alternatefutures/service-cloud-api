@@ -40,11 +40,15 @@ import {
   registerProvider,
   createAkashProvider,
   createPhalaProvider,
+  createSpheronProvider,
+  startSpheronSshKeyBootstrap,
+  SpheronBalanceMonitor,
 } from './services/providers/index.js'
 import {
   initQueueHandler,
   handleAkashWebhook,
   handlePhalaWebhook,
+  handleSpheronWebhook,
   handlePolicyWebhook,
 } from './services/queue/index.js'
 import { startStaleDeploymentSweeper, stopStaleDeploymentSweeper } from './services/queue/staleDeploymentSweeper.js'
@@ -62,6 +66,7 @@ import { handleAdminBillingStats } from './services/admin/billingStatsEndpoint.j
 import { handleSchedulerStats } from './services/admin/schedulerStatsEndpoint.js'
 import { handleAdminAuditEvents } from './services/admin/auditEventsEndpoint.js'
 import { handlePhalaInstanceTypesRequest } from './services/providers/phalaInstanceTypesEndpoint.js'
+import { handleSpheronGpuAvailabilityRequest } from './services/spheron/gpuAvailabilityEndpoint.js'
 import { handleBuildCallback } from './services/github/buildCallbackEndpoint.js'
 import { handleGithubWebhook } from './services/github/webhookEndpoint.js'
 import { reconcileActivePolicyExpirySchedules } from './services/policy/runtimeScheduler.js'
@@ -85,6 +90,7 @@ const invoiceScheduler = new InvoiceScheduler(prisma)
 const usageAggregator = new UsageAggregator(prisma)
 const computeBillingScheduler = new ComputeBillingScheduler(prisma)
 const escrowHealthMonitor = new EscrowHealthMonitor(prisma)
+const spheronBalanceMonitor = new SpheronBalanceMonitor(prisma)
 const providerRegistryScheduler = new ProviderRegistryScheduler(prisma)
 const providerVerificationScheduler = new ProviderVerificationScheduler(prisma)
 const gpuBidProbeScheduler = new GpuBidProbeScheduler(prisma)
@@ -367,6 +373,11 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
       return
     }
 
+    if (url.pathname === '/internal/spheron-gpu-availability' && req.method === 'GET') {
+      await handleSpheronGpuAvailabilityRequest(req, res)
+      return
+    }
+
     if (url.pathname === '/internal/proxy/flush-cache' && req.method === 'POST') {
       const expectedToken = process.env.INTERNAL_AUTH_TOKEN
       const authToken = req.headers['x-internal-auth']
@@ -395,6 +406,10 @@ async function requestHandler(req: IncomingMessage, res: ServerResponse) {
     }
     if (url.pathname === '/queue/phala/step' && req.method === 'POST') {
       await handlePhalaWebhook(req, res)
+      return
+    }
+    if (url.pathname === '/queue/spheron/step' && req.method === 'POST') {
+      await handleSpheronWebhook(req, res)
       return
     }
     if (url.pathname === '/queue/policy/expire' && req.method === 'POST') {
@@ -495,7 +510,21 @@ server.listen(port, async () => {
 
   registerProvider(createAkashProvider(prisma))
   registerProvider(createPhalaProvider(prisma))
-  log.info('deployment providers registered')
+  registerProvider(createSpheronProvider(prisma))
+  log.info('deployment providers registered (akash, phala, spheron)')
+
+  // Bootstrap Spheron platform SSH key (idempotent — safe across restarts).
+  // Returns null + warns if the .pub file is missing; deploys then fail
+  // loudly at first SSH attempt, which is the right cliff.
+  startSpheronSshKeyBootstrap().catch(err => {
+    log.warn({ err }, 'spheron-ssh-bootstrap unexpectedly threw — first DEPLOY_VM may fail')
+  })
+
+  // Per-pod Spheron balance monitor — opsAlert when the platform team
+  // balance falls below SPHERON_MIN_BALANCE_USD. Single shared team =
+  // a single failure mode for ALL Spheron deploys, so this guard is
+  // load-bearing.
+  spheronBalanceMonitor.start()
 
   initQueueHandler(prisma)
   log.info('QStash queue handler initialized')
@@ -506,6 +535,17 @@ server.listen(port, async () => {
   const orchestrator = new AkashOrchestrator(prisma)
   orchestrator.resumeDeployingDeployments()
   orchestrator.resumePendingBackfills()
+
+  // Spheron's step worker is an in-process recursive setTimeout chain in
+  // dev (QStash in prod). A cloud-api restart strands any in-flight
+  // CREATING/STARTING rows because the chain dies with the process.
+  // Re-enter the appropriate step on boot — handlers are idempotent.
+  try {
+    const { getSpheronOrchestrator } = await import('./services/spheron/orchestrator.js')
+    await getSpheronOrchestrator(prisma).resumeStuckDeployments()
+  } catch (err) {
+    log.error({ err }, 'Failed to resume stuck Spheron deployments on startup')
+  }
 
   // Stale sweeper writes terminal-state rows + drives close TXs, so
   // it MUST be a singleton across replicas.
@@ -525,6 +565,7 @@ async function gracefulShutdown(signal: string) {
   await stopAllLeaderSchedulers(prisma)
   if (healthPrewarmerInterval) clearInterval(healthPrewarmerInterval)
   stopApplicationHealthRunner()
+  spheronBalanceMonitor.stop()
 
   const forceExitTimeout = setTimeout(() => {
     log.warn('Graceful shutdown timed out after 15s — forcing exit')

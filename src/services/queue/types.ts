@@ -86,6 +86,56 @@ export type PhalaJobPayload =
   | PhalaPollStatusPayload
   | PhalaHandleFailurePayload
 
+// ── Spheron deployment steps ──────────────────────────────────────────
+//
+// Spheron lifecycle:
+//   DEPLOY_VM            → POST /api/deployments (cloudInit lays down compose)
+//   POLL_STATUS          → GET /api/deployments/{id} until status=running + ipAddress
+//   RUN_CLOUDINIT_PROBE  → SSH-probe `docker ps` to confirm the workload came up
+//                          (Spheron `running` only means VM is up, not the app).
+//                          Splits out as its own step so transient SSH errors
+//                          retry independently of VM provisioning.
+//   HANDLE_FAILURE       → uniform failure path (mirrors phala/akash)
+//
+// Phase A v1 ships DEDICATED-only — SPOT (`status: terminated-provider`) is a
+// reserved code path. The PROVIDER_INTERRUPTED policy stop reason exists in
+// the schema but no step emits it yet.
+
+export type SpheronStep =
+  | 'DEPLOY_VM'
+  | 'POLL_STATUS'
+  | 'RUN_CLOUDINIT_PROBE'
+  | 'HANDLE_FAILURE'
+
+export interface SpheronDeployVmPayload {
+  step: 'DEPLOY_VM'
+  deploymentId: string
+}
+
+export interface SpheronPollStatusPayload {
+  step: 'POLL_STATUS'
+  deploymentId: string
+  attempt: number
+}
+
+export interface SpheronRunCloudInitProbePayload {
+  step: 'RUN_CLOUDINIT_PROBE'
+  deploymentId: string
+  attempt: number
+}
+
+export interface SpheronHandleFailurePayload {
+  step: 'HANDLE_FAILURE'
+  deploymentId: string
+  errorMessage: string
+}
+
+export type SpheronJobPayload =
+  | SpheronDeployVmPayload
+  | SpheronPollStatusPayload
+  | SpheronRunCloudInitProbePayload
+  | SpheronHandleFailurePayload
+
 // ── Policy runtime jobs ───────────────────────────────────────────────
 
 export type PolicyStep = 'EXPIRE_POLICY'
@@ -102,7 +152,7 @@ export type PolicyJobPayload = PolicyExpirePayload
 
 export interface DeploymentProgressEvent {
   deploymentId: string
-  provider: 'akash' | 'phala'
+  provider: 'akash' | 'phala' | 'spheron'
   status: string
   step: string
   stepNumber: number
@@ -115,6 +165,7 @@ export interface DeploymentProgressEvent {
 
 export const AKASH_TOTAL_STEPS = 6
 export const PHALA_TOTAL_STEPS = 3
+export const SPHERON_TOTAL_STEPS = 4
 
 export const AKASH_STEP_NUMBERS: Record<AkashStep, number> = {
   SUBMIT_TX: 1,
@@ -131,9 +182,26 @@ export const PHALA_STEP_NUMBERS: Record<PhalaStep, number> = {
   HANDLE_FAILURE: 3,
 }
 
+export const SPHERON_STEP_NUMBERS: Record<SpheronStep, number> = {
+  DEPLOY_VM: 1,
+  POLL_STATUS: 2,
+  RUN_CLOUDINIT_PROBE: 3,
+  HANDLE_FAILURE: 4,
+}
+
 export const MAX_RETRY_COUNT = 3
 export const BID_POLL_MAX_ATTEMPTS = 10
 // Bumped from 24 → 60: large images (700MB+)
 export const URL_POLL_MAX_ATTEMPTS = 60
 // Bumped from 60 → 180: TDX CVMs pull Docker images inside the enclave; 3GB+ images can take 10-15 min
 export const PHALA_POLL_MAX_ATTEMPTS = 180
+// Spheron VM provisioning typically takes 30-90s; set generously for cold
+// starts on cluster providers. Each attempt is 5s apart → ~10min ceiling.
+export const SPHERON_POLL_MAX_ATTEMPTS = 120
+// Post-boot SSH probe: cloudInit may install Docker, pull a 5GB image, run
+// `docker compose up`. Spheron's own dashboard advertises "Available in 20m"
+// for fresh GPU VMs (driver/firmware setup happens before our cloudInit even
+// runs), so 5min was too aggressive — observed real failures with healthy
+// upstream VMs that simply hadn't finished provisioning. 5s × 240 = 20min
+// ceiling matches Spheron's stated ramp-up window.
+export const SPHERON_CLOUDINIT_PROBE_MAX_ATTEMPTS = 240

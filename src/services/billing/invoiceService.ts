@@ -235,6 +235,52 @@ export class InvoiceService {
         })
       }
     }
+
+    // Spheron hourly charges in the period — same shape as Phala. Note we
+    // include STOPPED rows because Spheron's resume creates a fresh row
+    // (no native start), so a stopped row's totalBilledCents is its final
+    // contribution to the lifetime invoice. DELETED rows are likewise
+    // included for the user-deleted path.
+    const spheronDeployments = await this.prisma.spheronDeployment.findMany({
+      where: {
+        totalBilledCents: { gt: 0 },
+        ...(orgIds.length > 0 ? { organizationId: { in: orgIds } } : {}),
+        OR: [
+          { status: 'ACTIVE', lastBilledAt: { gte: periodStart } },
+          { status: 'STOPPED', updatedAt: { gte: periodStart } },
+          { status: 'DELETED', updatedAt: { gte: periodStart } },
+        ],
+      },
+    })
+
+    for (const deployment of spheronDeployments) {
+      if (deployment.totalBilledCents > 0 && deployment.hourlyRateCents) {
+        const hours = Math.ceil(
+          deployment.totalBilledCents / deployment.hourlyRateCents
+        )
+        await this.prisma.invoiceLineItem.create({
+          data: {
+            invoiceId,
+            description:
+              `Spheron VM (${deployment.gpuCount}× ${deployment.gpuType}, ` +
+              `${deployment.provider}/${deployment.region}: ${deployment.name})`,
+            quantity: hours,
+            unitPrice: deployment.hourlyRateCents,
+            amount: deployment.totalBilledCents,
+            metadata: {
+              type: 'SPHERON_VM',
+              upstreamProvider: deployment.provider,
+              gpuType: deployment.gpuType,
+              gpuCount: deployment.gpuCount,
+              region: deployment.region,
+              instanceType: deployment.instanceType,
+              providerDeploymentId: deployment.providerDeploymentId,
+              deploymentId: deployment.id,
+            },
+          },
+        })
+      }
+    }
   }
 
   /**
@@ -505,6 +551,61 @@ export class InvoiceService {
     }
 
     // ========================================
+    // SPHERON VM DETAIL SECTION
+    // ========================================
+
+    const spheronLineItems = invoice.lineItems.filter(
+      (li) => (li.metadata as any)?.type === 'SPHERON_VM'
+    )
+
+    if (spheronLineItems.length > 0) {
+      y += 30
+
+      if (y > 650) {
+        doc.addPage()
+        y = 50
+      }
+
+      doc
+        .font('Instrument Sans SemiBold')
+        .fontSize(12)
+        .fillColor('#000000')
+        .text('Spheron VM Detail', 50, y)
+
+      y += 20
+
+      doc.rect(50, y - 5, 500, 20).fillAndStroke('#f5f5f5', '#e0e0e0')
+      doc
+        .font('Instrument Sans SemiBold')
+        .fontSize(9)
+        .fillColor('#000000')
+        .text('VM', 55, y)
+        .text('GPU', 200, y)
+        .text('Hours', 290, y)
+        .text('Rate', 360, y)
+        .text('Total', 450, y)
+
+      y += 20
+
+      for (const item of spheronLineItems) {
+        const meta = item.metadata as any
+        const gpuLabel = meta?.gpuType
+          ? `${meta?.gpuCount ?? 1}× ${meta.gpuType}`
+          : 'GPU'
+        doc
+          .font('Instrument Sans')
+          .fontSize(9)
+          .fillColor('#000000')
+          .text(item.description.slice(0, 35), 55, y)
+          .text(gpuLabel, 200, y)
+          .text(`${item.quantity}`, 290, y)
+          .text(`$${(item.unitPrice / 100).toFixed(2)}/hr`, 360, y)
+          .text(`$${(item.amount / 100).toFixed(2)}`, 450, y)
+        y += 18
+      }
+    }
+
+    // ========================================
     // SUMMARY FOOTER
     // ========================================
 
@@ -540,7 +641,17 @@ export class InvoiceService {
         0
       )
 
-      const combinedDailyCents = totalDailyCostCents + phalaDailyCostCents
+      const spheronActive = await this.prisma.spheronDeployment.findMany({
+        where: { status: 'ACTIVE', hourlyRateCents: { not: null } },
+      })
+
+      const spheronDailyCostCents = spheronActive.reduce(
+        (sum, s) => sum + (s.hourlyRateCents || 0) * 24,
+        0
+      )
+
+      const combinedDailyCents =
+        totalDailyCostCents + phalaDailyCostCents + spheronDailyCostCents
 
       // Summary box
       doc.rect(50, y - 10, 500, 80).fillAndStroke('#f8f9fa', '#e0e0e0')

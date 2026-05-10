@@ -168,6 +168,8 @@ export const typeDefs = /* GraphQL */ `
     # Phala deployments for this service (or parent if companion)
     phalaDeployments: [PhalaDeployment!]!
     activePhalaDeployment: PhalaDeployment
+    spheronDeployments: [SpheronDeployment!]!
+    activeSpheronDeployment: SpheronDeployment
 
     # Inter-service communication
     envVars: [ServiceEnvVar!]!
@@ -687,6 +689,190 @@ export const typeDefs = /* GraphQL */ `
     STOPPED
     DELETED
     PERMANENTLY_FAILED
+  }
+
+  # ============================================
+  # SPHERON DEPLOYMENTS (GPU VM via cloudInit + SSH)
+  # ============================================
+
+  """
+  A Spheron-provisioned GPU VM. The platform owns one shared team account on
+  Spheron; user services run in Docker on the VM, brought up by cloud-init.
+  Live ports are exposed via UFW + the subdomain proxy at
+  http://<ipAddress>:<Service.containerPort>.
+
+  Pricing snapshot is captured at deploy time from spheronGpuOffers (no
+  static rate table — see config/pricing.ts comment block).
+  """
+  type SpheronDeployment {
+    id: ID!
+    """Spheron's deployment id (null until DEPLOY_VM step persists it)."""
+    providerDeploymentId: String
+    name: String!
+    status: SpheronDeploymentStatus!
+    errorMessage: String
+
+    """Upstream provider (sesterce|voltage-park|data-crunch|massed-compute|spheron-ai|verda)."""
+    provider: String!
+    offerId: String!
+    gpuType: String!
+    gpuCount: Int!
+    region: String!
+    operatingSystem: String!
+    """SPOT | DEDICATED | CLUSTER. v1 ships DEDICATED only."""
+    instanceType: String!
+
+    """Public IPv4 of the VM, populated when status reaches STARTING/ACTIVE."""
+    ipAddress: String
+    sshUser: String
+    sshPort: Int
+
+    composeContent: String
+    envKeys: [String!]
+
+    """Pricing snapshot live from /api/gpu-offers at deploy time."""
+    pricedSnapshotJson: JSON
+    costPerHour: Float
+    costPerDay: Float
+    costPerMonth: Float
+
+    serviceId: ID!
+    service: Service!
+
+    siteId: ID
+    site: Site
+    afFunctionId: ID
+    afFunction: AFFunction
+
+    retryCount: Int!
+    parentDeploymentId: String
+    """Set when this row was spawned from a STOPPED row by resumeHandler."""
+    resumedFromId: String
+    policy: DeploymentPolicy
+
+    createdAt: Date!
+    updatedAt: Date!
+    """
+    Earliest activeStartedAt across the queue-retry / resume chain that ends
+    at this row. Same purpose as PhalaDeployment.activeSince — drives the
+    "Running for Xh" timer without being reset by background retries or by
+    pause/resume bounces.
+    """
+    activeSince: Date
+  }
+
+  enum SpheronDeploymentStatus {
+    CREATING
+    STARTING
+    ACTIVE
+    FAILED
+    STOPPED
+    DELETED
+    PERMANENTLY_FAILED
+  }
+
+  """
+  A single concrete GPU offer in Spheron's live catalog. Returned by
+  spheronGpuOffers. Filter on supportsCloudInit: true for offers
+  compatible with our Docker-via-cloudInit bring-up path.
+  """
+  type SpheronGpuOffer {
+    provider: String!
+    offerId: String!
+    name: String!
+    description: String
+    vcpus: Int!
+    memory: Float!
+    storage: Float!
+    gpuCount: Int!
+    """USD/hour for the WHOLE instance (all GPUs included)."""
+    price: Float!
+    """Present on SPOT offers only."""
+    spotPrice: Float
+    available: Boolean!
+    """Region IDs (e.g. 'Finland 3'). Passed verbatim as region on deploy."""
+    clusters: [String!]!
+    """VRAM per GPU in GB."""
+    gpuMemory: Float!
+    """Verbatim OS strings used on POST /api/deployments operatingSystem."""
+    osOptions: [String!]!
+    interconnectType: String
+    instanceType: String!
+    """Critical — false on some Sesterce offers; we filter on this."""
+    supportsCloudInit: Boolean!
+  }
+
+  """
+  Spheron groups offers by GPU type (e.g. "H100_SXM5") with aggregate stats.
+  """
+  type SpheronGpuOfferGroup {
+    gpuType: String!
+    gpuModel: String!
+    displayName: String!
+    totalAvailable: Int!
+    lowestPrice: Float!
+    highestPrice: Float!
+    averagePrice: Float!
+    providers: [String!]!
+    offers: [SpheronGpuOffer!]!
+  }
+
+  type SpheronGpuOffersResponse {
+    data: [SpheronGpuOfferGroup!]!
+    total: Int!
+    page: Int!
+    limit: Int!
+    totalPages: Int!
+  }
+
+  input SpheronGpuOffersFilters {
+    page: Int
+    limit: Int
+    search: String
+    """lowestPrice | highestPrice | averagePrice"""
+    sortBy: String
+    """asc | desc"""
+    sortOrder: String
+    """SPOT | DEDICATED | CLUSTER"""
+    instanceType: String
+    """When true (default), filter to offers where supportsCloudInit = true."""
+    cloudInitOnly: Boolean
+  }
+
+  """
+  Input for deploying a service to Spheron. serviceId must exist in the
+  Service registry. Offer selection is auto-picked from the cheapest
+  cloudInit-capable DEDICATED offer matching the service's GPU + region
+  constraints, unless offerId (and optionally provider) is set
+  (Advanced override).
+  """
+  input DeployToSpheronInput {
+    serviceId: ID!
+    """Optional deployment policy (budget, GPU, runtime constraints)."""
+    policy: DeploymentPolicyInput
+    """Optional resource overrides; today only the GPU constraint is consulted."""
+    resourceOverrides: ResourceOverrideInput
+    """Optional base Docker image for raw services (e.g. ubuntu:24.04)."""
+    baseImage: String
+    """
+    Optional curated region bucket: us-east | us-west | eu | asia.
+    Null/omitted = Any (cheapest globally). When set, only offers whose
+    upstream cluster maps to this bucket are considered. If none qualify
+    the deploy fails with NO_CAPACITY so the web-app's auto-router can
+    fall back to Akash.
+    """
+    region: String
+    """
+    Advanced override — explicit offerId from spheronGpuOffers. When
+    set, the resolver fetches that specific offer instead of auto-picking.
+    """
+    offerId: String
+    """
+    Advanced override — restrict offer lookup to a specific upstream
+    provider (e.g. data-crunch). Combined with offerId when both are
+    provided.
+    """
+    provider: String
   }
 
   # ============================================
@@ -2000,6 +2186,18 @@ export const typeDefs = /* GraphQL */ `
     phalaDeployments(serviceId: ID, projectId: ID): [PhalaDeployment!]!
     phalaDeploymentByService(serviceId: ID!): PhalaDeployment
 
+    # Spheron Deployments (GPU VM via cloudInit + SSH)
+    spheronDeployment(id: ID!): SpheronDeployment
+    spheronDeployments(serviceId: ID, projectId: ID): [SpheronDeployment!]!
+    spheronDeploymentByService(serviceId: ID!): SpheronDeployment
+    """
+    Live Spheron GPU offer catalog, paginated. Public — no auth required
+    (mirrors Spheron's own /api/gpu-offers which is unauthenticated). The
+    cloudInitOnly flag (default true) filters out offers that don't accept
+    a cloudInit payload, since our bring-up flow requires it.
+    """
+    spheronGpuOffers(filters: SpheronGpuOffersFilters): SpheronGpuOffersResponse!
+
     # Storage Tracking
     pinnedContent(limit: Int): [PinnedContent!]!
     storageSnapshots(
@@ -2165,6 +2363,7 @@ export const typeDefs = /* GraphQL */ `
     # Templates
     deployFromTemplate(input: DeployFromTemplateInput!): AkashDeployment!
     deployFromTemplateToPhala(input: DeployFromTemplateInput!): PhalaDeployment!
+    deployFromTemplateToSpheron(input: DeployFromTemplateInput!): SpheronDeployment!
     deployCompositeTemplate(input: DeployCompositeTemplateInput!): CompositeDeploymentResult!
 
     # Phala Deployments
@@ -2172,6 +2371,13 @@ export const typeDefs = /* GraphQL */ `
     deployToPhala(input: DeployToPhalaInput!): PhalaDeployment!
     stopPhalaDeployment(id: ID!): PhalaDeployment!
     deletePhalaDeployment(id: ID!): PhalaDeployment!
+
+    # Spheron Deployments
+    # General-purpose: deploy any service to Spheron (GPU VM + cloudInit + SSH).
+    # Spheron has no native stop — deleteSpheronDeployment is the only user
+    # action; pause/resume happens automatically via the low-balance scheduler.
+    deployToSpheron(input: DeployToSpheronInput!): SpheronDeployment!
+    deleteSpheronDeployment(id: ID!): SpheronDeployment!
 
     # Service Environment Variables
     setServiceEnvVar(serviceId: ID!, key: String!, value: String!, secret: Boolean): ServiceEnvVar!

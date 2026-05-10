@@ -107,6 +107,9 @@ function makePrisma(hasDeployment = true) {
     phalaDeployment: {
       findFirst: vi.fn().mockResolvedValue(null),
     },
+    spheronDeployment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
   } as unknown as Parameters<
     typeof LogStreamEndpoint.prototype.handle
   >[0] extends never
@@ -472,16 +475,21 @@ describe('LogStreamEndpoint — CORS headers on 200 SSE response', () => {
  */
 function makePrismaQueued(
   akashResults: (null | { id: string })[],
-  phalaResults: (null | { id: string })[] = []
+  phalaResults: (null | { id: string })[] = [],
+  spheronResults: (null | { id: string })[] = []
 ): any {
   const akashQueue = [...akashResults]
   const phalaQueue = [...phalaResults]
+  const spheronQueue = [...spheronResults]
   return {
     akashDeployment: {
       findFirst: vi.fn(() => Promise.resolve(akashQueue.shift() ?? null)),
     },
     phalaDeployment: {
       findFirst: vi.fn(() => Promise.resolve(phalaQueue.shift() ?? null)),
+    },
+    spheronDeployment: {
+      findFirst: vi.fn(() => Promise.resolve(spheronQueue.shift() ?? null)),
     },
   }
 }

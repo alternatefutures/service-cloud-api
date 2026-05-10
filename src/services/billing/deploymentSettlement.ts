@@ -407,3 +407,166 @@ export async function processFinalPhalaBilling(
     return 0
   }
 }
+
+/**
+ * Spheron's server-side minimum-runtime floor. Spheron charges the platform
+ * `max(actualMinutes, 20) × hourlyRate` regardless of when DELETE is invoked
+ * (the API itself blocks DELETE inside this window — see
+ * `SpheronApiError.isMinimumRuntimeNotMet()` and the
+ * `reconcileSpheronUpstreamCleanups` sweeper pass). The user-facing charge
+ * MUST mirror that floor or the platform eats the difference on every
+ * sub-20-min deploy.
+ */
+const SPHERON_MIN_RUNTIME_MS = 20 * 60_000
+
+/**
+ * Bill Spheron usage through the provided timestamp with minute-level
+ * precision. Mirrors `processFinalPhalaBilling` (same hourly-rate math via
+ * `calculateProratedPhalaCents`) with one Spheron-specific delta:
+ *
+ *   **20-minute server-side minimum-runtime floor.** Spheron charges the
+ *   platform `max(lifetimeMinutes, 20) × hourlyRate` whether the user's VM
+ *   ran for 5 minutes or 19. We pass that floor through verbatim so we
+ *   don't eat the gap. The floor only ever fires on the FIRST settlement
+ *   (lifetime < 20m); once an hourly debit has run, lifetime > 1h ≫ 20m
+ *   and the floor is moot. Calculation:
+ *     chargeableLifetimeMs = max(billedAt − activeStartedAt, 20m)
+ *     alreadyChargedMs     = lastBilledAt ? lastBilledAt − activeStartedAt : 0
+ *     elapsedMs            = max(0, chargeableLifetimeMs − alreadyChargedMs)
+ *
+ * Other differences vs Phala:
+ *   - `provider: 'SPHERON'` on the ledger row + auth wire payload.
+ *   - `serviceType: 'spheron_vm'` matches the auth-side service-type tag.
+ *   - `idempotencyPrefix` defaults to `'spheron_final'` to keep Spheron and
+ *     Phala settlement keys in independent namespaces (collision protection).
+ *
+ * Phase 34 contract: the `alreadyProcessed` branch returns early WITHOUT
+ * updating local `lastBilledAt` / `totalBilledCents` because the prior
+ * commit already wrote them. The hourly accrual scheduler
+ * (`processSpheronDebits`) follows the post-Phase-34 Phala fix and mirrors
+ * locally first, then logs the idempotency-hit branch — that is the
+ * canonical pattern for the recurring path.
+ */
+export async function processFinalSpheronBilling(
+  prisma: PrismaClient,
+  spheronDeploymentId: string,
+  billedAt = new Date(),
+  idempotencyPrefix = 'spheron_final'
+): Promise<number> {
+  const deployment = await prisma.spheronDeployment.findUnique({
+    where: { id: spheronDeploymentId },
+    select: {
+      id: true,
+      orgBillingId: true,
+      hourlyRateCents: true,
+      lastBilledAt: true,
+      activeStartedAt: true,
+      createdAt: true,
+      totalBilledCents: true,
+      gpuType: true,
+      provider: true,
+      policyId: true,
+    },
+  })
+
+  if (!deployment?.orgBillingId || !deployment.hourlyRateCents) {
+    return 0
+  }
+
+  // Anchor the floor at activeStartedAt (the moment Spheron started the VM
+  // billing clock). createdAt is the row creation, not the VM start — using
+  // it would over-estimate lifetime in the rare-but-real case where DEPLOY_VM
+  // sat in the queue before the upstream POST landed.
+  const lifetimeAnchor =
+    deployment.activeStartedAt || deployment.createdAt
+  const rawLifetimeMs = Math.max(0, billedAt.getTime() - lifetimeAnchor.getTime())
+  const chargeableLifetimeMs = Math.max(rawLifetimeMs, SPHERON_MIN_RUNTIME_MS)
+
+  const alreadyChargedMs = deployment.lastBilledAt
+    ? Math.max(0, deployment.lastBilledAt.getTime() - lifetimeAnchor.getTime())
+    : 0
+
+  const elapsedMs = Math.max(0, chargeableLifetimeMs - alreadyChargedMs)
+  const amountCents = calculateProratedPhalaCents(
+    deployment.hourlyRateCents,
+    elapsedMs
+  )
+
+  if (amountCents <= 0) {
+    return 0
+  }
+
+  const minimumRuntimeApplied = chargeableLifetimeMs > rawLifetimeMs
+  if (minimumRuntimeApplied) {
+    log.info(
+      {
+        spheronDeploymentId,
+        rawLifetimeMs,
+        chargeableLifetimeMs,
+        floorMs: SPHERON_MIN_RUNTIME_MS,
+      },
+      'Spheron 20-min minimum-runtime floor applied to final settlement'
+    )
+  }
+
+  try {
+    const idempotencyKey = settlementIdempotencyKey(
+      idempotencyPrefix,
+      deployment.id,
+      billedAt,
+    )
+    const result = await settleViaLedger(prisma, {
+      provider: 'SPHERON',
+      kind: 'FINAL_SETTLEMENT',
+      deploymentRef: deployment.id,
+      idempotencyKey,
+      orgBillingId: deployment.orgBillingId,
+      amountCents,
+      settledTo: billedAt,
+      policyId: deployment.policyId ?? null,
+      serviceType: 'spheron_vm',
+      resource: deployment.id,
+      description: `Spheron VM final billing: $${(amountCents / 100).toFixed(2)}`,
+      metadata: {
+        gpuType: deployment.gpuType,
+        upstreamProvider: deployment.provider,
+        source: 'spheron_final_settlement',
+      },
+    })
+
+    if (result.alreadyProcessed) {
+      return amountCents
+    }
+
+    const nextTotalBilledCents = deployment.totalBilledCents + amountCents
+
+    await prisma.spheronDeployment.update({
+      where: { id: deployment.id },
+      data: {
+        lastBilledAt: billedAt,
+        totalBilledCents: nextTotalBilledCents,
+      },
+    })
+
+    if (deployment.policyId) {
+      await prisma.deploymentPolicy.update({
+        where: { id: deployment.policyId },
+        data: { totalSpentUsd: nextTotalBilledCents / 100 },
+      })
+    }
+
+    log.info(
+      {
+        spheronDeploymentId,
+        amountCents,
+        nextTotalBilledCents,
+      },
+      'Processed final Spheron billing through shutdown time'
+    )
+
+    return amountCents
+  } catch (error) {
+    log.warn({ spheronDeploymentId, err: error }, 'Final Spheron billing failed — ledger row will be reconciled')
+    return 0
+  }
+}

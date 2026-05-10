@@ -24,13 +24,14 @@ interface DeployCostEstimate {
 
 /**
  * Total HOURLY burn in cents for ALL active services in the org.
- * Sums Akash escrows (daily rate / 24) + Phala deployments (hourly rate).
+ * Sums Akash escrows (daily rate / 24) + Phala deployments (hourly rate)
+ * + Spheron deployments (hourly rate).
  */
 export async function getOrgHourlyBurnCents(
   prisma: PrismaClient,
   orgBillingId: string
 ): Promise<number> {
-  const [akashEscrows, phalaDeployments] = await Promise.all([
+  const [akashEscrows, phalaDeployments, spheronDeployments] = await Promise.all([
     prisma.deploymentEscrow.findMany({
       where: { orgBillingId, status: 'ACTIVE' },
       select: { dailyRateCents: true },
@@ -39,11 +40,16 @@ export async function getOrgHourlyBurnCents(
       where: { orgBillingId, status: 'ACTIVE', hourlyRateCents: { not: null } },
       select: { hourlyRateCents: true },
     }),
+    prisma.spheronDeployment.findMany({
+      where: { orgBillingId, status: 'ACTIVE', hourlyRateCents: { not: null } },
+      select: { hourlyRateCents: true },
+    }),
   ])
 
   let totalCents = 0
   for (const e of akashEscrows) totalCents += e.dailyRateCents / 24
   for (const p of phalaDeployments) totalCents += (p.hourlyRateCents ?? 0)
+  for (const s of spheronDeployments) totalCents += (s.hourlyRateCents ?? 0)
   return totalCents
 }
 
@@ -87,8 +93,20 @@ export async function getOrgReservedCents(
     select: { reservedCents: true, totalSpentUsd: true },
   })
 
+  const spheronReservations = await prisma.deploymentPolicy.findMany({
+    where: {
+      stopReason: null,
+      reservedCents: { gt: 0 },
+      spheronDeployment: {
+        status: 'ACTIVE',
+        organizationId,
+      },
+    },
+    select: { reservedCents: true, totalSpentUsd: true },
+  })
+
   let total = 0
-  for (const p of [...akashReservations, ...phalaReservations]) {
+  for (const p of [...akashReservations, ...phalaReservations, ...spheronReservations]) {
     // Remaining reservation = reserved - already consumed
     const consumed = Math.ceil(p.totalSpentUsd * 100)
     total += Math.max(0, p.reservedCents - consumed)
@@ -106,12 +124,16 @@ async function getOrgUnbilledCents(
 ): Promise<number> {
   const now = new Date()
 
-  const [akashEscrows, phalaDeployments] = await Promise.all([
+  const [akashEscrows, phalaDeployments, spheronDeployments] = await Promise.all([
     prisma.deploymentEscrow.findMany({
       where: { orgBillingId, status: 'ACTIVE' },
       select: { dailyRateCents: true, lastBilledAt: true, createdAt: true },
     }),
     prisma.phalaDeployment.findMany({
+      where: { orgBillingId, status: 'ACTIVE', hourlyRateCents: { not: null } },
+      select: { hourlyRateCents: true, lastBilledAt: true, createdAt: true },
+    }),
+    prisma.spheronDeployment.findMany({
       where: { orgBillingId, status: 'ACTIVE', hourlyRateCents: { not: null } },
       select: { hourlyRateCents: true, lastBilledAt: true, createdAt: true },
     }),
@@ -128,6 +150,11 @@ async function getOrgUnbilledCents(
     const hours = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
     total += (p.hourlyRateCents ?? 0) * hours
   }
+  for (const s of spheronDeployments) {
+    const lastBilled = s.lastBilledAt || s.createdAt || now
+    const hours = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
+    total += (s.hourlyRateCents ?? 0) * hours
+  }
   return Math.ceil(total)
 }
 
@@ -138,7 +165,7 @@ async function getOrgUnbilledCents(
  */
 export async function checkTimeLimitedDeployBalance(
   organizationId: string,
-  provider: 'akash' | 'phala',
+  provider: 'akash' | 'phala' | 'spheron',
   prisma: PrismaClient,
   hourlyCostCents: number,
   requestedHours: number
@@ -193,7 +220,7 @@ export async function checkTimeLimitedDeployBalance(
 
 export async function assertDeployBalance(
   organizationId: string | undefined,
-  provider: 'akash' | 'phala',
+  provider: 'akash' | 'phala' | 'spheron',
   prisma?: PrismaClient,
   estimate?: DeployCostEstimate
 ): Promise<void> {

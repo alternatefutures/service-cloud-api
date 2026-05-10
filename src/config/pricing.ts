@@ -76,6 +76,26 @@ export const COMPUTE_PRICING = {
 } as const
 
 // ============================================
+// SPHERON — INTENTIONALLY NO STATIC RATES
+// ============================================
+//
+// Locked decision (see admin/cloud/docs/AF_HANDOFF_2026-05-06_SPHERON_PHASE_A.md
+// §"Phase B.5"): Spheron pricing is **live-only**. Resolvers query
+// `client.listGpuOffers()` at deploy time, snapshot the chosen offer's
+// `price` onto `SpheronDeployment.originalHourlyRateCents` (pre-margin) and
+// `hourlyRateCents` (post-margin), and never reference a config-file rate.
+//
+// Rationale: Spheron's catalogue spans dozens of providers × GPU types
+// with frequent price changes (e.g. data-crunch flips H100 SXM5 hourly).
+// A static config would either go stale and silently overcharge users or
+// require a sync cron. Snapshotting at deploy time gives forensic
+// reproducibility ("this row was billed at the price the user signed up
+// for") without the staleness risk.
+//
+// DO NOT add `SPHERON_RATES` here. If a downstream caller needs a rate,
+// they should read `SpheronDeployment.hourlyRateCents` from the row.
+
+// ============================================
 // PHALA TEE — RAW PROVIDER RATES ($/hr)
 // ============================================
 

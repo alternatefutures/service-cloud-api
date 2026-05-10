@@ -109,9 +109,10 @@ model Site {
   deployments      Deployment[]
   domains          Domain[]
   ipnsRecords      IPNSRecord[]
-  zones            Zone[]
-  akashDeployments AkashDeployment[]
-  phalaDeployments PhalaDeployment[]
+  zones              Zone[]
+  akashDeployments   AkashDeployment[]
+  phalaDeployments   PhalaDeployment[]
+  spheronDeployments SpheronDeployment[]
 
   primaryDomainId String?
   primaryDomain   Domain? @relation("PrimaryDomain", fields: [primaryDomainId], references: [id])
@@ -180,10 +181,11 @@ model AFFunction {
   currentDeploymentId String?               @unique
   currentDeployment   AFFunctionDeployment? @relation("CurrentDeployment", fields: [currentDeploymentId], references: [id])
 
-  deployments      AFFunctionDeployment[] @relation("FunctionDeployments")
-  akashDeployments AkashDeployment[]
-  phalaDeployments PhalaDeployment[]
-  agents           Agent[]
+  deployments        AFFunctionDeployment[] @relation("FunctionDeployments")
+  akashDeployments   AkashDeployment[]
+  phalaDeployments   PhalaDeployment[]
+  spheronDeployments SpheronDeployment[]
+  agents             Agent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -317,8 +319,9 @@ model Service {
   afFunction AFFunction?
 
   // Akash deployments for this service (can have multiple over time)
-  akashDeployments AkashDeployment[]
-  phalaDeployments PhalaDeployment[]
+  akashDeployments   AkashDeployment[]
+  phalaDeployments   PhalaDeployment[]
+  spheronDeployments SpheronDeployment[]
 
   // Build history for git-source services
   buildJobs BuildJob[]
@@ -1301,6 +1304,11 @@ model PolicySettlementLedger {
 enum SettlementProvider {
   AKASH
   PHALA
+  // Spheron Phase A — hourly-billed VM marketplace. Same settlement shape as
+  // PHALA (final + hourly accruals via settleViaLedger). The auth-side
+  // computeDebit `provider` string is `'spheron'` (lowercase) to match
+  // existing Akash/Phala convention.
+  SPHERON
 }
 
 enum SettlementKind {
@@ -1453,6 +1461,139 @@ model PhalaDeployment {
 }
 
 // ============================================
+// SPHERON DEPLOYMENTS (Phase A — added 2026-05-06)
+// ============================================
+// Spheron is a GPU VM marketplace aggregating multiple upstream providers
+// (sesterce, voltage-park, data-crunch/Verda, massed-compute, spheron-ai).
+// Mirrors PhalaDeployment shape since both are hourly-billed, single-API,
+// non-blockchain providers. Notable differences from Phala:
+//   - configFormat: cloudInit (`'custom'` in capabilities)
+//   - supportsStop: false (only deploy + DELETE — matches Akash, NOT Phala)
+//   - shell + log access via SSH child process, not a CLI (no exec API)
+//   - savedCloudInit + savedDeployInput preserve the recipe so resume after
+//     low-balance pause can re-deploy from scratch (no native pause/resume).
+
+enum SpheronDeploymentStatus {
+  CREATING // VM being requested from Spheron
+  STARTING // status=deploying — provisioning underway
+  ACTIVE // status=running — VM up and reachable on ipAddress:sshPort
+  FAILED // Provider returned status=failed (or our health checks said so)
+  STOPPED // We DELETE'd the VM (low-balance pause / user stop)
+  DELETED // We DELETE'd the VM permanently (close)
+  PERMANENTLY_FAILED // Failed after MAX_RETRY_COUNT retries; CVM destroyed
+}
+
+model SpheronDeployment {
+  id String @id @default(cuid())
+
+  // Identity
+  // providerDeploymentId is what Spheron calls `id` on POST /api/deployments.
+  // Persisted as a separate column so future schema audits can diff our `id`
+  // (cuid) against the upstream identifier without joining.
+  providerDeploymentId String? @map("provider_deployment_id") // Spheron's deployment id (null until first DEPLOY_VM step succeeds)
+  name                 String // Internal name (af-<slug>-<timestamp>) — also passed to Spheron as `name`
+
+  // Status
+  status       SpheronDeploymentStatus @default(CREATING)
+  errorMessage String?
+
+  // Spheron offer selection (snapshotted at deploy time)
+  // `provider` here is the upstream Spheron provider string ("sesterce",
+  // "voltage-park", "data-crunch"|"verda", "massed-compute", "spheron-ai").
+  // Discovered dynamically from GET /api/providers — we do NOT hardcode the list.
+  provider        String // Upstream provider (sesterce|voltage-park|data-crunch|massed-compute|spheron-ai)
+  offerId         String // Spheron's offerId from GET /api/gpu-offers
+  gpuType         String // e.g. "H100_SXM5"
+  gpuCount        Int    @default(1)
+  region          String // e.g. "Finland 3" — from offer.clusters
+  operatingSystem String // From offer.os_options — drives cloudInit Docker bring-up strategy
+  instanceType   String  @default("DEDICATED") // SPOT | DEDICATED | CLUSTER (v1 = DEDICATED only)
+
+  // Connection (populated when status transitions to ACTIVE)
+  ipAddress String? @map("ip_address")
+  sshUser   String? @map("ssh_user") // typically "ubuntu"
+  sshPort   Int?    @map("ssh_port")
+
+  // Spheron SSH key id used at deploy time (registered via spheronSshKeyBootstrap.ts).
+  // v1 = single platform-managed key; per-deployment ephemeral keys are deferred.
+  sshKeyId String @map("ssh_key_id")
+
+  // What we deployed (recipe preserved for resume — no native pause/resume in Spheron)
+  // savedCloudInit:   { packages, writeFiles, runcmd } as we sent it
+  // savedDeployInput: full POST /api/deployments body for forensic + idempotent resume
+  savedCloudInit   Json? @map("saved_cloud_init")
+  savedDeployInput Json? @map("saved_deploy_input")
+
+  // Compose source (mirrors PhalaDeployment.composeContent — cloudInit lays this
+  // down at /opt/af/docker-compose.yml and runs `docker compose up -d`)
+  composeContent String? @db.Text @map("compose_content")
+  envKeys        Json? // Array of env var keys only (never values)
+
+  // Pricing snapshot (live from GET /api/gpu-offers at deploy time — locked
+  // decision: pricing is per-deploy, not config-file rates)
+  pricedSnapshotJson      Json? @map("priced_snapshot_json") // The full offer object, captured for audit
+  hourlyRateCents         Int?  @map("hourly_rate_cents") // Provider rate in cents/hour, including margin
+  originalHourlyRateCents Int?  @map("original_hourly_rate_cents") // Pre-margin cents/hour (matches offer.price)
+  marginRate              Float? @map("margin_rate") // Plan markup applied at deploy time
+
+  // Billing
+  orgBillingId     String?   @map("org_billing_id") // OrganizationBilling.id (mirror PhalaDeployment)
+  organizationId   String?   @map("organization_id")
+  activeStartedAt  DateTime? @map("active_started_at")
+  lastBilledAt     DateTime? @map("last_billed_at")
+  totalBilledCents Int       @default(0) @map("total_billed_cents")
+
+  // QStash retry tracking (mirrors PhalaDeployment)
+  retryCount         Int     @default(0) @map("retry_count")
+  parentDeploymentId String? @map("parent_deployment_id") // Links retries to original deployment
+  qstashMessageId    String? @map("qstash_message_id")
+
+  // Resume chain (mirrors PhalaDeployment.resumedFromId — preserves the
+  // user-visible "Running for Xh" timer across pause/resume bounces)
+  resumedFromId String? @map("resumed_from_id")
+
+  // Spheron enforces a 20-minute minimum runtime per VM (server-side
+  // contract, surfaced as 400 with `canTerminate:false, timeRemaining:N` on
+  // DELETE). When close() runs inside the floor window we settle billing
+  // locally and mark status=DELETED, but the upstream DELETE has to wait.
+  // Sweeper picks up rows with status=DELETED, providerDeploymentId set,
+  // and upstreamDeletedAt=null, retries DELETE until it sticks (or
+  // isAlreadyGone), then sets this column to the actual cleanup time.
+  // Audit / forensic trail is preserved either way.
+  upstreamDeletedAt DateTime? @map("upstream_deleted_at")
+
+  // Relations
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  siteId String?
+  site   Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+
+  afFunctionId String?
+  afFunction   AFFunction? @relation(fields: [afFunctionId], references: [id], onDelete: SetNull)
+
+  policyId String?           @unique @map("policy_id")
+  policy   DeploymentPolicy? @relation(fields: [policyId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serviceId])
+  @@index([siteId])
+  @@index([afFunctionId])
+  @@index([status])
+  @@index([providerDeploymentId])
+  @@index([orgBillingId])
+  @@index([resumedFromId])
+  // Mirror PhalaDeployment compound index for assertOrgConcurrency.
+  @@index([organizationId, status])
+  // Sweeper pass: status=DELETED + providerDeploymentId IS NOT NULL +
+  // upstreamDeletedAt IS NULL hits this index for fast scan.
+  @@index([status, upstreamDeletedAt])
+  @@map("spheron_deployment")
+}
+
+// ============================================
 // DEPLOYMENT POLICY (budget, GPU, runtime constraints)
 // ============================================
 
@@ -1461,6 +1602,12 @@ enum PolicyStopReason {
   RUNTIME_EXPIRED
   MANUAL_STOP
   BALANCE_LOW
+  // Spheron only: surfaced when a SPOT instance is reclaimed by the upstream
+  // provider (status=`terminated-provider`). v1 ships DEDICATED-only, so this
+  // value is reserved but not yet emitted; lands the schema bit so we don't
+  // need a follow-up migration the day SPOT is enabled. Triggers the
+  // Phase 43 auto-failover path when Service.failoverPolicy is set.
+  PROVIDER_INTERRUPTED
 }
 
 model DeploymentPolicy {
@@ -1502,8 +1649,9 @@ model DeploymentPolicy {
   updatedAt DateTime @updatedAt
 
   // Relations (1:1 back-references)
-  akashDeployment AkashDeployment?
-  phalaDeployment PhalaDeployment?
+  akashDeployment   AkashDeployment?
+  phalaDeployment   PhalaDeployment?
+  spheronDeployment SpheronDeployment?
 
   @@index([expiresAt])
   @@index([stopReason])
@@ -1517,6 +1665,7 @@ model DeploymentPolicy {
 enum ComputeProviderType {
   AKASH
   PHALA
+  SPHERON
 }
 
 model ComputeProvider {

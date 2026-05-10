@@ -1,9 +1,9 @@
 /**
  * Service Logs Resolver
  *
- * Exposes container logs from the active deployment (Akash or Phala)
- * through a unified `serviceLogs` query. The resolver determines which
- * provider owns the active deployment and delegates to its getLogs().
+ * Exposes container logs from the active deployment (Akash, Phala, or
+ * Spheron) through a unified `serviceLogs` query. The resolver determines
+ * which provider owns the active deployment and delegates to its getLogs().
  */
 
 import { GraphQLError } from 'graphql'
@@ -92,6 +92,35 @@ export const logsQueries = {
       } catch (err) {
         throw new GraphQLError(
           `Failed to fetch Phala logs: ${(err as Error).message}`,
+        )
+      }
+    }
+
+    // Try Spheron — only ACTIVE has the SSH info (ipAddress/sshPort) the
+    // provider needs to run `docker logs` over SSH. STARTING/FAILED rows
+    // can't surface logs because the VM's network isn't ready yet.
+    const spheronDeployment = await context.prisma.spheronDeployment.findFirst({
+      where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    if (spheronDeployment) {
+      const { getProvider } = await import('../services/providers/registry.js')
+      const spheron = getProvider('spheron')
+      try {
+        const logs = await spheron.getLogs(spheronDeployment.id, {
+          tail: tailLines,
+          service: logServiceFilter,
+        })
+        return {
+          logs,
+          provider: 'spheron',
+          deploymentId: spheronDeployment.id,
+          timestamp: new Date(),
+        }
+      } catch (err) {
+        throw new GraphQLError(
+          `Failed to fetch Spheron logs: ${(err as Error).message}`,
         )
       }
     }

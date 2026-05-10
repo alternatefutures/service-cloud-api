@@ -162,3 +162,60 @@ export async function resolvePhalaActiveSince(
 
   return earliest
 }
+
+/**
+ * Spheron equivalent. Spheron has no native pause/resume — `resumeHandler`
+ * spawns a fresh row linked via `resumedFromId`, and queue-step retries set
+ * `parentDeploymentId`. The chain is identical in shape to Phala's so we
+ * walk the same precedence (resumedFromId first, then parentDeploymentId).
+ *
+ * Spheron does not currently set `failoverParentId` (no auto-failover yet),
+ * so we don't include it in the walk. If/when Spheron joins Phase 43
+ * failover, this loop should adopt the same precedence Akash uses.
+ */
+export async function resolveSpheronActiveSince(
+  prisma: PrismaClient,
+  deploymentId: string,
+): Promise<Date | null> {
+  let earliest: Date | null = null
+  const visited = new Set<string>()
+  let cursor: {
+    id: string
+    activeStartedAt: Date | null
+    resumedFromId: string | null
+    parentDeploymentId: string | null
+  } | null = await prisma.spheronDeployment.findUnique({
+    where: { id: deploymentId },
+    select: {
+      id: true,
+      activeStartedAt: true,
+      resumedFromId: true,
+      parentDeploymentId: true,
+    },
+  })
+
+  for (let i = 0; i < MAX_CHAIN_DEPTH && cursor; i++) {
+    if (visited.has(cursor.id)) break
+    visited.add(cursor.id)
+
+    if (
+      cursor.activeStartedAt &&
+      (!earliest || cursor.activeStartedAt < earliest)
+    ) {
+      earliest = cursor.activeStartedAt
+    }
+    const parentId = cursor.resumedFromId ?? cursor.parentDeploymentId
+    if (!parentId) break
+    cursor = await prisma.spheronDeployment.findUnique({
+      where: { id: parentId },
+      select: {
+        id: true,
+        activeStartedAt: true,
+        resumedFromId: true,
+        parentDeploymentId: true,
+      },
+    })
+  }
+
+  return earliest
+}

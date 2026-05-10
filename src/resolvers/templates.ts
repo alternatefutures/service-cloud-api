@@ -11,6 +11,8 @@ import { generateSlug } from '../utils/slug.js'
 import { assertSubscriptionActive } from './subscriptionCheck.js'
 import { assertDeployBalance } from './balanceCheck.js'
 import { BILLING_CONFIG } from '../config/billing.js'
+import { applyMargin } from '../config/pricing.js'
+import { getBillingApiClient } from '../services/billing/billingApiClient.js'
 import { generateInternalHostname } from '../utils/internalHostname.js'
 import {
   getAllTemplates,
@@ -717,6 +719,289 @@ export const templateMutations = {
     } catch (error: any) {
       throw new GraphQLError(
         `Phala deployment failed: ${error.message || 'Unknown error'}`
+      )
+    }
+  },
+
+  // ─── Spheron Template Deployment ──────────────────────────────
+
+  /**
+   * Mirror of `deployFromTemplateToPhala` for Spheron GPU VMs.
+   *
+   * Spheron's offer catalogue is dynamic — there are no static rates, so
+   * the resolver picks the cheapest cloudInit-capable DEDICATED offer
+   * matching the template's GPU + region constraints, snapshots the
+   * pricing onto the row, and hands off to `deployServiceSpheron`.
+   *
+   * If no offer matches (tight region filter, GPU acceptables locked
+   * down, or temporary fleet starvation), throws `NO_CAPACITY` so the
+   * web-app's auto-router can fall back to Akash.
+   */
+  deployFromTemplateToSpheron: async (
+    _: unknown,
+    {
+      input,
+    }: {
+      input: {
+        templateId: string
+        projectId: string
+        serviceName?: string
+        envOverrides?: Array<{ key: string; value: string }>
+        resourceOverrides?: ResourceOverrideInput
+        policy?: DeploymentPolicyInput
+      }
+    },
+    context: Context,
+  ) => {
+    await assertSubscriptionActive(context.organizationId)
+    if (!context.userId) throw new GraphQLError('Not authenticated')
+    if (!context.organizationId) {
+      throw new GraphQLError(
+        'Spheron deployments require an organization context. Switch to a workspace first.',
+        { extensions: { code: 'BAD_USER_INPUT' } },
+      )
+    }
+
+    const template = getTemplateById(input.templateId)
+    if (!template) {
+      throw new GraphQLError(`Template not found: ${input.templateId}`)
+    }
+
+    const project = await context.prisma.project.findUnique({
+      where: { id: input.projectId },
+    })
+    if (!project) throw new GraphQLError('Project not found')
+    assertProjectAccess(context, project, 'Not authorized to deploy to this project')
+
+    const serviceName =
+      input.serviceName || defaultServiceNameForTemplate(template)
+    const slug = generateSlug(serviceName)
+
+    const envOverrides: Record<string, string> = {}
+    if (input.envOverrides) {
+      for (const { key, value } of input.envOverrides) envOverrides[key] = value
+    }
+
+    await injectPlatformEnvVars(template, envOverrides, context, slug)
+    assertRequiredTemplateEnvVars(template, envOverrides)
+
+    if (input.policy) {
+      const validation = validatePolicyInput(input.policy)
+      if (!validation.allowed) {
+        throw new GraphQLError(validation.reason ?? 'Invalid deployment policy')
+      }
+    }
+
+    // ── Pick the offer BEFORE creating any DB rows so a NO_CAPACITY
+    //    failure never leaves a stub Service behind for the auto-router ──
+    const { getSpheronClient, pickSpheronOffer, NoSpheronCapacityError } =
+      await import('../services/spheron/index.js')
+
+    const client = getSpheronClient()
+    if (!client) {
+      throw new GraphQLError('Spheron is not configured on this server.', {
+        extensions: { code: 'PROVIDER_UNAVAILABLE' },
+      })
+    }
+
+    const { getCachedSpheronSshKeyId } = await import('../services/providers/spheronSshKeyBootstrap.js')
+    const sshKeyId = getCachedSpheronSshKeyId()
+    if (!sshKeyId) {
+      throw new GraphQLError(
+        'Spheron SSH key bootstrap has not completed yet. Try again in 30 seconds.',
+        { extensions: { code: 'PROVIDER_UNAVAILABLE' } },
+      )
+    }
+
+    const resourceOverrides = normalizeResourceOverrides(input.resourceOverrides)
+    const resolved = resolveTemplateResources(template.resources, resourceOverrides)
+    const requiredGpu = resolved.gpu
+
+    let picked
+    try {
+      picked = await pickSpheronOffer({
+        client,
+        instanceType: 'DEDICATED',
+        bucket: null,
+        gpuConstraint: {
+          gpuCount: input.policy?.gpuUnits ?? requiredGpu?.units ?? 1,
+          acceptableGpuModels:
+            input.policy?.acceptableGpuModels ??
+            (requiredGpu?.model ? [requiredGpu.model] : []),
+        },
+      })
+    } catch (err) {
+      if (err instanceof NoSpheronCapacityError) {
+        throw new GraphQLError(err.reason, {
+          extensions: { code: 'NO_CAPACITY', provider: 'spheron' },
+        })
+      }
+      throw err
+    }
+
+    // ── Pricing snapshot ─────────────────────────────────────
+    const billing = getBillingApiClient()
+    const orgBilling = await billing.getOrgBilling(context.organizationId)
+    const orgMarkup = await billing.getOrgMarkup(orgBilling.orgBillingId)
+    const rawHourlyUsd = picked.offer.price
+    const chargedHourlyUsd = applyMargin(rawHourlyUsd, orgMarkup.marginRate)
+    const hourlyRateCents = Math.ceil(chargedHourlyUsd * 100)
+    const originalHourlyRateCents = Math.ceil(rawHourlyUsd * 100)
+
+    const estimatedDailyCostCents = Math.max(
+      BILLING_CONFIG.spheron.minBalanceCentsToLaunch,
+      hourlyRateCents * 24,
+    )
+    await assertDeployBalance(context.organizationId, 'spheron', context.prisma, {
+      dailyCostCents: estimatedDailyCostCents,
+    })
+
+    // ── Now create the Service + ports + envVars (mirror Phala flow) ─
+    const service = await context.prisma.service.create({
+      data: {
+        name: serviceName,
+        slug,
+        type: template.serviceType,
+        projectId: input.projectId,
+        templateId: input.templateId,
+        createdByUserId: context.userId ?? null,
+        internalHostname: generateInternalHostname(slug, project.slug),
+      },
+    })
+
+    if (template.envVars?.length) {
+      await context.prisma.$transaction(
+        template.envVars.map((ev: any) =>
+          context.prisma.serviceEnvVar.create({
+            data: {
+              serviceId: service.id,
+              key: ev.key,
+              value: envOverrides[ev.key] ?? ev.default ?? '',
+              secret: ev.secret ?? false,
+            },
+          }),
+        ),
+      )
+    }
+    if (template.ports?.length) {
+      await context.prisma.$transaction(
+        template.ports.map((p: any) =>
+          context.prisma.servicePort.create({
+            data: {
+              serviceId: service.id,
+              containerPort: p.port,
+              publicPort: p.global ? p.as : null,
+              protocol: 'TCP',
+            },
+          }),
+        ),
+      )
+    }
+
+    // No companion services on Spheron — the cloudInit is a single VM.
+    // Templates that declare companions (e.g. postgres sidecar) deploy
+    // ALL components into the same compose YAML. Phase 2 work item if a
+    // template ever genuinely needs a separate VM per companion.
+
+    let policyId: string | undefined
+    if (input.policy) {
+      const policyRecord = await context.prisma.deploymentPolicy.create({
+        data: {
+          acceptableGpuModels: input.policy.acceptableGpuModels ?? [],
+          gpuUnits: input.policy.gpuUnits ?? null,
+          gpuVendor: input.policy.gpuVendor ?? null,
+          maxBudgetUsd: input.policy.maxBudgetUsd ?? null,
+          maxMonthlyUsd: input.policy.maxMonthlyUsd ?? null,
+          runtimeMinutes: input.policy.runtimeMinutes ?? null,
+          expiresAt: input.policy.runtimeMinutes
+            ? new Date(Date.now() + input.policy.runtimeMinutes * 60_000)
+            : null,
+        },
+      })
+      policyId = policyRecord.id
+    }
+
+    const composeContent = generateComposeFromTemplate(template, {
+      serviceName: slug,
+      envOverrides,
+      resourceOverrides,
+      target: 'spheron',
+    })
+    const envKeys = getEnvKeysFromTemplate(template, envOverrides)
+
+    const mergedEnv: Record<string, string> = {}
+    for (const v of template.envVars) {
+      if (v.default !== null) mergedEnv[v.key] = v.default
+    }
+    Object.assign(mergedEnv, envOverrides)
+
+    // UFW must open the host-side port (LEFT side of the compose
+    // `host:container` mapping). For TemplatePort that's `as` (exposed
+    // ingress port) — `port` is the container-internal port the app
+    // listens on, which is invisible from outside the VM. e.g. milady
+    // declares `{ port: 2138, as: 80 }` and the compose generator emits
+    // `"80:2138"`; the VM's ip:80 is reachable, ip:2138 is not.
+    const exposePorts: number[] = []
+    for (const p of template.ports ?? []) {
+      const hostPort = typeof p.as === 'number' && p.as > 0 ? p.as : p.port
+      if (typeof hostPort === 'number' && hostPort > 0) exposePorts.push(hostPort)
+    }
+
+    const { getSpheronOrchestrator } = await import('../services/spheron/index.js')
+    const orchestrator = getSpheronOrchestrator(context.prisma)
+
+    try {
+      const deploymentId = await orchestrator.deployServiceSpheron(service.id, {
+        provider: picked.offer.provider,
+        offerId: picked.offer.offerId,
+        gpuType: picked.group.gpuType,
+        gpuCount: picked.offer.gpuCount,
+        region: picked.region,
+        operatingSystem: picked.operatingSystem,
+        instanceType: 'DEDICATED',
+        hourlyRateCents,
+        originalHourlyRateCents,
+        marginRate: orgMarkup.marginRate,
+        pricedSnapshotJson: picked.offer as unknown,
+        sshKeyId,
+        composeContent,
+        envVars: mergedEnv,
+        exposePorts,
+        orgBillingId: orgBilling.orgBillingId,
+        organizationId: context.organizationId,
+        policyId,
+      })
+
+      const { isQStashEnabled, publishJob } = await import('../services/queue/qstashClient.js')
+      if (isQStashEnabled()) {
+        await publishJob(
+          '/queue/spheron/step',
+          { step: 'POLL_STATUS', deploymentId, attempt: 1 },
+          { delaySec: 5 },
+        )
+      } else {
+        const { handleSpheronStep } = await import('../services/queue/webhookHandler.js')
+        handleSpheronStep({ step: 'POLL_STATUS', deploymentId, attempt: 1 } as never).catch(err => {
+          log.error({ err, deploymentId }, 'In-process Spheron POLL_STATUS dispatch failed')
+        })
+      }
+
+      log.info(
+        { deploymentId, envKeyCount: envKeys.length, provider: picked.offer.provider, region: picked.region },
+        'Started Spheron template deployment',
+      )
+
+      const deployment = await context.prisma.spheronDeployment.findUnique({
+        where: { id: deploymentId },
+        include: { policy: true },
+      })
+      if (!deployment) {
+        throw new GraphQLError('Spheron deployment record not found after creation')
+      }
+      return deployment
+    } catch (error: any) {
+      throw new GraphQLError(
+        `Spheron deployment failed: ${error?.message || 'Unknown error'}`,
       )
     }
   },
