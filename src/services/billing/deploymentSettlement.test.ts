@@ -4,6 +4,7 @@ import {
   calculateProratedAkashCents,
   calculateProratedPhalaCents,
   processFinalPhalaBilling,
+  processFinalSpheronBilling,
   settleAkashEscrowToTime,
 } from './deploymentSettlement.js'
 
@@ -269,5 +270,220 @@ describe('deploymentSettlement', () => {
   it('keeps the minute-level prorated helpers stable', () => {
     expect(calculateProratedAkashCents(1440, 40 * 60 * 1000)).toBe(40)
     expect(calculateProratedPhalaCents(120, 40 * 60 * 1000)).toBe(80)
+  })
+
+  // ===== Spheron =====
+  //
+  // Phase B contracts under test:
+  //   1. Floor at 20 minutes when actual lifetime < 20m (Spheron's
+  //      server-side minimum-runtime contract).
+  //   2. Floor does NOT apply when actual lifetime > 20m.
+  //   3. Floor does NOT apply when an hourly debit has already advanced
+  //      lastBilledAt past the floor (residual elapsed math wins).
+  //   4. Phase 34 — `alreadyProcessed: true` returns early WITHOUT
+  //      writing local lastBilledAt / totalBilledCents (the prior commit
+  //      already wrote them; this is the canonical FINAL_SETTLEMENT shape
+  //      mirrored from processFinalPhalaBilling).
+  //   5. No-op when the deployment is missing orgBillingId or rate.
+
+  it('Spheron: applies 20-min minimum-runtime floor on sub-20-min closes', async () => {
+    // VM ran for 5 actual minutes; Spheron will charge us 20 min anyway.
+    // 60c/hr * 20/60 hr = 20c (ceiled).
+    const activeStartedAt = new Date('2026-05-06T10:00:00.000Z')
+    const billedAt = new Date('2026-05-06T10:05:00.000Z') // 5 min later
+    const prisma = {
+      spheronDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'spheron-floored',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 0,
+          gpuType: 'A4000_PCIE',
+          provider: 'spheron-ai',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalSpheronBilling(
+      prisma as unknown as PrismaClient,
+      'spheron-floored',
+      billedAt,
+    )
+
+    expect(charged).toBe(20)
+    expect(computeDebitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'spheron',
+        serviceType: 'spheron_vm',
+        amountCents: 20,
+        idempotencyKey: expect.stringMatching(/^spheron_final:spheron-floored:\d+$/),
+      })
+    )
+    expect(prisma.spheronDeployment.update).toHaveBeenCalledWith({
+      where: { id: 'spheron-floored' },
+      data: {
+        lastBilledAt: billedAt,
+        totalBilledCents: 20,
+      },
+    })
+  })
+
+  it('Spheron: skips floor when actual lifetime > 20 min', async () => {
+    // VM ran for 40 actual minutes; floor irrelevant. 60c/hr * 40/60 hr = 40c.
+    const activeStartedAt = new Date('2026-05-06T10:00:00.000Z')
+    const billedAt = new Date('2026-05-06T10:40:00.000Z')
+    const prisma = {
+      spheronDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'spheron-real',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 0,
+          gpuType: 'H100',
+          provider: 'spheron-ai',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalSpheronBilling(
+      prisma as unknown as PrismaClient,
+      'spheron-real',
+      billedAt,
+    )
+
+    expect(charged).toBe(40)
+  })
+
+  it('Spheron: floor does not double-charge when hourly debit already ran past it', async () => {
+    // Lifetime 70m; hourly debit at 60m advanced lastBilledAt; final
+    // settlement should bill the residual 10m only — NOT the floor.
+    const activeStartedAt = new Date('2026-05-06T10:00:00.000Z')
+    const lastBilledAt = new Date('2026-05-06T11:00:00.000Z')
+    const billedAt = new Date('2026-05-06T11:10:00.000Z')
+    const prisma = {
+      spheronDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'spheron-residual',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 120,
+          lastBilledAt,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 120,
+          gpuType: 'H100',
+          provider: 'spheron-ai',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalSpheronBilling(
+      prisma as unknown as PrismaClient,
+      'spheron-residual',
+      billedAt,
+    )
+
+    // 120c/hr * 10/60 hr = 20c residual.
+    expect(charged).toBe(20)
+    expect(prisma.spheronDeployment.update).toHaveBeenCalledWith({
+      where: { id: 'spheron-residual' },
+      data: {
+        lastBilledAt: billedAt,
+        totalBilledCents: 140,
+      },
+    })
+  })
+
+  it('Spheron: alreadyProcessed=true returns the amount WITHOUT mirroring locally (Phase 34 final-settlement shape)', async () => {
+    computeDebitMock.mockResolvedValueOnce({
+      success: true,
+      balanceCents: 0,
+      alreadyProcessed: true,
+    })
+
+    const activeStartedAt = new Date('2026-05-06T10:00:00.000Z')
+    const billedAt = new Date('2026-05-06T11:00:00.000Z') // 60 min later
+    const prisma = {
+      spheronDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'spheron-idem',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 0,
+          gpuType: 'H100',
+          provider: 'spheron-ai',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalSpheronBilling(
+      prisma as unknown as PrismaClient,
+      'spheron-idem',
+      billedAt,
+    )
+
+    // Returns the amount that WOULD have been charged (60c/hr * 60min = 60c)
+    expect(charged).toBe(60)
+    // But does NOT mirror to local DB — the prior committing path already did.
+    // This matches processFinalPhalaBilling's behavior. The recurring
+    // path (processSpheronDebits) mirrors locally on alreadyProcessed; the
+    // final-settlement path does not.
+    expect(prisma.spheronDeployment.update).not.toHaveBeenCalled()
+  })
+
+  it('Spheron: no-ops when row missing orgBillingId or hourlyRateCents', async () => {
+    const prisma = {
+      spheronDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'spheron-orphaned',
+          orgBillingId: null,
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt: new Date('2026-05-06T10:00:00.000Z'),
+          createdAt: new Date('2026-05-06T10:00:00.000Z'),
+          totalBilledCents: 0,
+          gpuType: 'H100',
+          provider: 'spheron-ai',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalSpheronBilling(
+      prisma as unknown as PrismaClient,
+      'spheron-orphaned',
+      new Date('2026-05-06T10:30:00.000Z'),
+    )
+
+    expect(charged).toBe(0)
+    expect(computeDebitMock).not.toHaveBeenCalled()
+    expect(prisma.spheronDeployment.update).not.toHaveBeenCalled()
   })
 })

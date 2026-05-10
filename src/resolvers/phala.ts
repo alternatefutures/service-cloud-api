@@ -10,6 +10,7 @@ import { assertLaunchAllowed } from './launchGuards.js'
 import { decrementOrgConcurrency } from '../services/concurrency/concurrencyService.js'
 import { BILLING_CONFIG } from '../config/billing.js'
 import { resolvePhalaInstanceType } from '../services/phala/instanceTypes.js'
+import { parseServiceVolumes } from '../services/akash/orchestrator.js'
 import { validatePolicyInput } from '../services/policy/validator.js'
 import type { DeploymentPolicyInput } from '../services/policy/types.js'
 import {
@@ -361,7 +362,17 @@ export const phalaMutations = {
     } else {
       // ── Raw service (custom Docker image or user-selected base) ──
       const dockerImage = service.dockerImage || input.baseImage || 'ubuntu:24.04'
-      const needsKeepAlive = !service.dockerImage
+      // Same `service.type === 'VM'` discriminator as the Spheron path —
+      // a bare base image without a daemon CMD must be kept alive or the
+      // container exits immediately. Keeps Spheron + Phala behaviourally
+      // aligned for the raw-service flow.
+      const startCommand = service.startCommand
+        ? service.startCommand
+        : service.type === 'VM' || !service.dockerImage
+          ? 'sleep infinity'
+          : undefined
+      const isGithubBuild = service.flavor === 'github' || !!service.gitProvider
+      const parsedVolumes = parseServiceVolumes(service.volumes)
 
       resolvedResources = {
         cpu: ro?.cpu ?? 1,
@@ -378,7 +389,11 @@ export const phalaMutations = {
         dockerImage,
         ports: service.ports,
         envVars: service.envVars.map(ev => ({ key: ev.key, value: ev.value })),
-        startCommand: needsKeepAlive ? 'sleep infinity' : undefined,
+        startCommand,
+        containerPort: service.containerPort,
+        isGithubBuild,
+        volumes: parsedVolumes,
+        target: 'phala',
       })
 
       envKeys = service.envVars.map(ev => ev.key)

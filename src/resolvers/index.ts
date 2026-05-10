@@ -35,6 +35,7 @@ import {
 import { getTemplateById } from '../templates/registry.js'
 import { injectPlatformEnvVars } from '../services/billing/platformEnvClient.js'
 import { phalaQueries, phalaMutations, phalaFieldResolvers } from './phala.js'
+import { spheronQueries, spheronMutations, spheronFieldResolvers } from './spheron.js'
 import { regionsQueries } from './regions.js'
 import { githubQueries, githubMutations, githubFieldResolvers } from './github.js'
 import {
@@ -769,6 +770,12 @@ export const resolvers = {
           service: { projectId: { in: projectIds } },
         },
       })
+      const activeSpheronCount = await context.prisma.spheronDeployment.count({
+        where: {
+          status: 'ACTIVE',
+          service: { projectId: { in: projectIds } },
+        },
+      })
 
       const totalAkash = await context.prisma.akashDeployment.count({
         where: { service: { projectId: { in: projectIds } } },
@@ -776,9 +783,12 @@ export const resolvers = {
       const totalPhala = await context.prisma.phalaDeployment.count({
         where: { service: { projectId: { in: projectIds } } },
       })
+      const totalSpheron = await context.prisma.spheronDeployment.count({
+        where: { service: { projectId: { in: projectIds } } },
+      })
 
-      const activeCount = activeAkash.length + activePhalaCount
-      const totalCount = totalAkash + totalPhala
+      const activeCount = activeAkash.length + activePhalaCount + activeSpheronCount
+      const totalCount = totalAkash + totalPhala + totalSpheron
       const deploymentsFormatted = `${activeCount} active`
 
       // ── Spend Metrics (real ledger data from auth service) ────────
@@ -1058,6 +1068,63 @@ export const resolvers = {
         })
       }
 
+      // 5. Spheron Deployments (GPU VMs via cloudInit + SSH)
+      const spheronDeployments = await context.prisma.spheronDeployment.findMany({
+        where: {
+          service: { projectId: { in: projectIds } },
+        },
+        include: {
+          service: { select: { name: true, slug: true, type: true, projectId: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      })
+
+      for (const dep of spheronDeployments) {
+        const spheronStatusMap: Record<string, string> = {
+          CREATING: 'INITIALIZING',
+          STARTING: 'DEPLOYING',
+          ACTIVE: 'ACTIVE',
+          FAILED: 'FAILED',
+          STOPPED: 'STOPPED',
+          DELETED: 'REMOVED',
+          PERMANENTLY_FAILED: 'FAILED',
+        }
+
+        // Extract image from compose YAML when available — same shape as
+        // the Akash row's `image:` regex so the unified list is consistent.
+        let image: string | null = null
+        if (dep.composeContent) {
+          const imageMatch = dep.composeContent.match(/image:\s*["']?([^\s"']+)/)
+          image = imageMatch ? imageMatch[1] : null
+        }
+
+        unified.push({
+          id: dep.id,
+          shortId: dep.id.slice(-8),
+          status: spheronStatusMap[dep.status] || dep.status,
+          kind: 'SPHERON',
+          serviceName: dep.service?.name || dep.name,
+          serviceId: dep.serviceId,
+          serviceSlug: dep.service?.slug || null,
+          serviceType: dep.service?.type || 'VM',
+          projectId: dep.service?.projectId || null,
+          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
+          source: 'docker',
+          image,
+          statusMessage:
+            dep.errorMessage ||
+            (dep.status === 'ACTIVE'
+              ? `Running on ${dep.provider} (${dep.region})`
+              : dep.status === 'STOPPED'
+              ? 'Stopped (low balance)'
+              : null),
+          createdAt: dep.createdAt,
+          updatedAt: dep.updatedAt,
+          author: authorInfo,
+        })
+      }
+
       // Sort all by createdAt descending
       unified.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
 
@@ -1084,6 +1151,9 @@ export const resolvers = {
     // Akash deployment queries
     ...akashQueries,
     ...phalaQueries,
+
+    // Spheron GPU VM deployment queries
+    ...spheronQueries,
 
     // Phase 46 — region picker query (provider-agnostic; PHALA returns sentinel)
     ...regionsQueries,
@@ -2142,6 +2212,11 @@ export const resolvers = {
             orderBy: { createdAt: 'desc' },
             take: 1,
           },
+          spheronDeployments: {
+            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
       })
 
@@ -2163,6 +2238,13 @@ export const resolvers = {
       if (activePhala) {
         throw new GraphQLError(
           `Cannot delete "${service.name}" — it has an active Phala deployment (${activePhala.status}). Stop or delete the deployment first.`
+        )
+      }
+
+      const activeSpheron = service.spheronDeployments[0]
+      if (activeSpheron) {
+        throw new GraphQLError(
+          `Cannot delete "${service.name}" — it has an active Spheron deployment (${activeSpheron.status}). Delete the deployment first.`
         )
       }
 
@@ -2215,6 +2297,32 @@ export const resolvers = {
         })
       }
 
+      // Same hygiene pass for Spheron — STOPPED rows still have a paid VM
+      // upstream until the sweeper or this DELETE clears them.
+      const orphanedSpheron = await context.prisma.spheronDeployment.findMany({
+        where: {
+          serviceId: id,
+          status: { in: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] },
+        },
+        select: { id: true, providerDeploymentId: true },
+      })
+      for (const dep of orphanedSpheron) {
+        if (dep.providerDeploymentId) {
+          try {
+            const { getSpheronOrchestrator } = await import('../services/spheron/index.js')
+            const orchestrator = getSpheronOrchestrator(context.prisma)
+            await orchestrator.closeDeployment(dep.providerDeploymentId)
+          } catch {
+            // Non-fatal — the VM may already be deleted, or the 20-min floor
+            // is blocking; the sweeper will catch up.
+          }
+        }
+        await context.prisma.spheronDeployment.update({
+          where: { id: dep.id },
+          data: { status: 'DELETED' },
+        })
+      }
+
       await context.prisma.service.delete({ where: { id } })
       return service
     },
@@ -2245,6 +2353,9 @@ export const resolvers = {
 
     // Phala deployment mutations
     ...phalaMutations,
+
+    // Spheron deployment mutations
+    ...spheronMutations,
 
     // GitHub-source deploy mutations
     ...githubMutations,
@@ -2400,6 +2511,8 @@ export const resolvers = {
     ...(akashFieldResolvers.Service ?? {}),
     // Merge Phala-related Service field resolvers (phalaDeployments, activePhalaDeployment)
     ...(phalaFieldResolvers.Service ?? {}),
+    // Merge Spheron-related Service field resolvers (spheronDeployments, activeSpheronDeployment)
+    ...(spheronFieldResolvers.Service ?? {}),
     // Merge inter-service communication field resolvers (envVars, ports, linksFrom, linksTo)
     ...(serviceConnectivityFieldResolvers.Service ?? {}),
     // Merge GitHub-source field resolvers (latestBuild, buildJobs)
@@ -2588,6 +2701,9 @@ export const resolvers = {
 
   // Phala deployment field resolvers
   PhalaDeployment: phalaFieldResolvers.PhalaDeployment,
+
+  // Spheron deployment field resolvers
+  SpheronDeployment: spheronFieldResolvers.SpheronDeployment,
 
   // Subscriptions for real-time updates
   Subscription: {

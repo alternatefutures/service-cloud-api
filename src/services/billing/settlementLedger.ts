@@ -119,7 +119,7 @@ export async function settleViaLedger(
       orgBillingId: row.orgBillingId,
       amountCents: row.amountCents,
       serviceType: args.serviceType,
-      provider: args.provider === 'PHALA' ? 'phala' : 'akash',
+      provider: settlementProviderToWire(args.provider),
       resource: args.resource,
       description: args.description,
       idempotencyKey: row.idempotencyKey,
@@ -211,8 +211,8 @@ export async function reconcilePendingSettlements(
       const result = await billingApi.computeDebit({
         orgBillingId: row.orgBillingId,
         amountCents: row.amountCents,
-        serviceType: row.provider === 'PHALA' ? 'phala_tee' : 'akash_compute',
-        provider: row.provider === 'PHALA' ? 'phala' : 'akash',
+        serviceType: settlementProviderToServiceType(row.provider),
+        provider: settlementProviderToWire(row.provider),
         resource: row.deploymentRef,
         description: `Settlement reconcile (${row.kind})`,
         idempotencyKey: row.idempotencyKey,
@@ -288,4 +288,40 @@ export async function reconcilePendingSettlements(
   }
 
   return { committed, failed, remaining: stuck.length - committed - failed }
+}
+
+/**
+ * Map a `SettlementProvider` enum to the lowercase wire-format provider
+ * string accepted by the auth-side `/billing/internal/compute-debit` endpoint.
+ *
+ * Auth treats `provider` as an opaque tag for usage-log dimensions, so
+ * extending this map is purely additive (no auth-side migration needed).
+ */
+function settlementProviderToWire(provider: SettlementProvider): string {
+  switch (provider) {
+    case 'PHALA':
+      return 'phala'
+    case 'SPHERON':
+      return 'spheron'
+    case 'AKASH':
+    default:
+      return 'akash'
+  }
+}
+
+/**
+ * Map a `SettlementProvider` enum to the canonical `serviceType` used by
+ * the reconciler when retrying a debit (the original `serviceType` is not
+ * persisted on the ledger row — only the provider/kind tuple is).
+ */
+function settlementProviderToServiceType(provider: SettlementProvider): string {
+  switch (provider) {
+    case 'PHALA':
+      return 'phala_tee'
+    case 'SPHERON':
+      return 'spheron_vm'
+    case 'AKASH':
+    default:
+      return 'akash_compute'
+  }
 }

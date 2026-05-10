@@ -2,11 +2,14 @@
  * Org Suspension Handler
  *
  * Called by auth service (via internal API) when a subscription becomes SUSPENDED.
- * Pauses all active Akash and Phala deployments for the organization.
+ * Pauses all active Akash, Phala, and Spheron deployments for the organization.
  *
  * Pause logic:
  *   - Akash ACTIVE: Save SDL, close on-chain, mark SUSPENDED, pause escrow
  *   - Phala ACTIVE: Stop CVM via API, mark STOPPED
+ *   - Spheron ACTIVE: Settle final billing (with 20-min floor), DELETE
+ *     upstream VM (deferred via sweeper if inside 20-min floor), mark STOPPED
+ *     locally with savedCloudInit + savedDeployInput preserved for resume.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -14,6 +17,7 @@ import type { PrismaClient } from '@prisma/client'
 import { getEscrowService } from './escrowService.js'
 import {
   processFinalPhalaBilling,
+  processFinalSpheronBilling,
   settleAkashEscrowToTime,
 } from './deploymentSettlement.js'
 import { createLogger } from '../../lib/logger.js'
@@ -208,6 +212,111 @@ export async function handleSuspendOrg(
         log.error(
           { deploymentId: deployment.id, err: error },
           'Failed to pause Phala deployment'
+        )
+      }
+    }
+
+    // 3. Pause Spheron deployments. No native stop — DELETE the VM and
+    //    preserve savedCloudInit / savedDeployInput on the row so resume
+    //    can re-deploy. The 20-min minimum-runtime floor is handled via
+    //    isMinimumRuntimeNotMet: settle billing + mark STOPPED + leave the
+    //    upstream cleanup to the sweeper (`reconcileSpheronUpstreamCleanups`).
+    const spheronDeployments = await prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [{ organizationId }, { service: { project: { organizationId } } }],
+      },
+    })
+
+    for (const deployment of spheronDeployments) {
+      try {
+        const stoppedAt = new Date()
+
+        // Phase 31 — settle billing BEFORE the upstream DELETE. The
+        // 20-min floor is enforced inside processFinalSpheronBilling.
+        await processFinalSpheronBilling(
+          prisma,
+          deployment.id,
+          stoppedAt,
+          'spheron_balance_low_suspend'
+        )
+
+        let providerStopped = false
+        let upstreamDeletedAt: Date | null = null
+
+        if (deployment.providerDeploymentId) {
+          try {
+            const { getSpheronOrchestrator } = await import('../spheron/orchestrator.js')
+            const orchestrator = getSpheronOrchestrator(prisma)
+            await orchestrator.closeDeployment(deployment.providerDeploymentId)
+            upstreamDeletedAt = new Date()
+            providerStopped = true
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            const { SpheronApiError } = await import('../spheron/client.js')
+            if (err instanceof SpheronApiError && err.isAlreadyGone()) {
+              log.warn(
+                { providerDeploymentId: deployment.providerDeploymentId, err },
+                'Spheron VM already gone during org suspend — treating as stopped'
+              )
+              upstreamDeletedAt = new Date()
+              providerStopped = true
+            } else if (
+              err instanceof SpheronApiError &&
+              err.isMinimumRuntimeNotMet()
+            ) {
+              log.warn(
+                { providerDeploymentId: deployment.providerDeploymentId },
+                'Spheron DELETE deferred (minimum runtime) during org suspend — sweeper will retry'
+              )
+              providerStopped = true
+            } else {
+              log.error(
+                { deploymentId: deployment.id, err: errMsg },
+                'Spheron DELETE failed during org suspend — deployment stays ACTIVE and billed'
+              )
+              errors.push(
+                `Spheron ${deployment.id}: DELETE failed, still running and billed`
+              )
+            }
+          }
+        } else {
+          // No upstream id — nothing to delete, treat as stopped.
+          upstreamDeletedAt = new Date()
+          providerStopped = true
+        }
+
+        if (providerStopped) {
+          await prisma.spheronDeployment.update({
+            where: { id: deployment.id },
+            data: {
+              status: 'STOPPED',
+              ...(upstreamDeletedAt ? { upstreamDeletedAt } : {}),
+            },
+          })
+
+          if (deployment.policyId) {
+            await prisma.deploymentPolicy
+              .update({
+                where: { id: deployment.policyId },
+                data: { stopReason: 'BALANCE_LOW', stoppedAt },
+              })
+              .catch((err) =>
+                log.warn(
+                  { policyId: deployment.policyId, err },
+                  'Failed to set Spheron policy stopReason'
+                )
+              )
+          }
+
+          paused.push(`Spheron: ${deployment.name}`)
+        }
+      } catch (error) {
+        const msg = `Spheron ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        errors.push(msg)
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Spheron deployment'
         )
       }
     }

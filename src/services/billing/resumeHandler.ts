@@ -8,6 +8,14 @@
  * Resume logic:
  *   - Akash SUSPENDED: Re-deploy from savedSdl, create new escrow
  *   - Phala STOPPED (with orgBillingId): Start CVM, resume billing
+ *   - Spheron STOPPED (with orgBillingId): Re-deploy from
+ *     savedCloudInit + savedDeployInput. Spheron has no native start
+ *     (the upstream API only exposes create + DELETE), so resume = a
+ *     fresh row that inherits the stopped row's recipe + pricing
+ *     snapshot. Linked via `resumedFromId` so the user-visible
+ *     "Running for Xh" timer keeps walking the chain back to the
+ *     original first-active moment instead of resetting to 0 every
+ *     pause/resume bounce.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -16,6 +24,7 @@ import { getBillingApiClient } from './billingApiClient.js'
 import { getEscrowService } from './escrowService.js'
 import { scheduleOrEnforcePolicyExpiry } from '../policy/runtimeScheduler.js'
 import { createLogger } from '../../lib/logger.js'
+import type { SpheronCreateDeploymentInput } from '../spheron/client.js'
 
 const log = createLogger('resume-handler')
 
@@ -92,6 +101,13 @@ export async function handleComputeResumeCheck(
       },
     })
 
+    const pausedSpheron = await prisma.spheronDeployment.findMany({
+      where: {
+        orgBillingId,
+        status: 'STOPPED',
+      },
+    })
+
     // Estimate total daily cost if all resume
     let totalDailyCostCents = 0
     for (const escrow of pausedEscrows) {
@@ -99,6 +115,9 @@ export async function handleComputeResumeCheck(
     }
     for (const phala of pausedPhala) {
       totalDailyCostCents += (phala.hourlyRateCents || 0) * 24
+    }
+    for (const spheron of pausedSpheron) {
+      totalDailyCostCents += (spheron.hourlyRateCents || 0) * 24
     }
 
     // Only resume if balance covers at least 1 day
@@ -275,6 +294,136 @@ export async function handleComputeResumeCheck(
       } catch (error) {
         errors.push(
           `Phala ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        )
+      }
+    }
+
+    // Resume Spheron deployments (re-deploy from saved cloudInit + deploy
+    // input — Spheron has no native start). Mirrors the Akash pattern more
+    // than the Phala one: we spawn a fresh row, link it via resumedFromId
+    // so the lease-chain walker keeps the user-visible "Running for Xh"
+    // timer continuous, and refund-equivalent the old row by leaving it in
+    // STOPPED with the recipe preserved (forensic trail).
+    for (const deployment of pausedSpheron) {
+      try {
+        if (!deployment.savedDeployInput) {
+          errors.push(`Spheron ${deployment.id}: no saved deploy input — cannot replay`)
+          continue
+        }
+
+        const savedInput = deployment.savedDeployInput as unknown as SpheronCreateDeploymentInput
+
+        const { getSpheronOrchestrator } = await import('../spheron/orchestrator.js')
+        const { getCachedSpheronSshKeyId } = await import('../providers/spheronSshKeyBootstrap.js')
+        const orchestrator = getSpheronOrchestrator(prisma)
+
+        // savedInput.sshKeyId may be missing on rows pre-bootstrap; fall
+        // back to the platform-managed key registered at startup. The
+        // stopped row's `sshKeyId` column is the most reliable fallback
+        // since it's required at insert time.
+        const sshKeyId =
+          savedInput.sshKeyId || deployment.sshKeyId || getCachedSpheronSshKeyId()
+        if (!sshKeyId) {
+          errors.push(`Spheron ${deployment.id}: no sshKeyId available — bootstrap not run`)
+          continue
+        }
+
+        const newDeploymentId = await orchestrator.deployServiceSpheron(
+          deployment.serviceId,
+          {
+            provider: savedInput.provider,
+            offerId: savedInput.offerId,
+            gpuType: savedInput.gpuType,
+            gpuCount: savedInput.gpuCount,
+            region: savedInput.region,
+            operatingSystem: savedInput.operatingSystem,
+            instanceType: savedInput.instanceType,
+            sshKeyId,
+            // Pricing snapshot from the stopped row — Spheron's live offer
+            // pricing may have changed but the user expects to be charged
+            // the price they originally signed up for.
+            hourlyRateCents: deployment.hourlyRateCents ?? 0,
+            originalHourlyRateCents: deployment.originalHourlyRateCents ?? 0,
+            marginRate: deployment.marginRate ?? 0,
+            pricedSnapshotJson: deployment.pricedSnapshotJson,
+            composeContent: deployment.composeContent ?? undefined,
+            // envVars are intentionally NOT replayed — `envKeys` records
+            // only the keys, not the values. Resume preserves the same
+            // recipe shape but a true env-value resume would need secret
+            // storage outside Spheron (Phase 2).
+            envVars: undefined,
+            orgBillingId,
+            organizationId,
+            policyId: undefined,
+            // Mirror the Akash pattern: a fresh policy clone if the
+            // stopped row had one, so runtime caps + budget caps reset
+            // their accounting against the new lifetime window.
+          },
+        )
+
+        // Phase 49b lease-chain — link the new row to the STOPPED row so
+        // the user-visible "Running for Xh" timer keeps walking back to
+        // the original first-active moment. Best-effort: a failure here
+        // doesn't break the resume itself, just degrades the timer.
+        try {
+          await prisma.spheronDeployment.update({
+            where: { id: newDeploymentId },
+            data: { resumedFromId: deployment.id },
+          })
+        } catch (linkErr) {
+          log.warn(
+            {
+              err: linkErr instanceof Error ? linkErr.message : linkErr,
+              newDeploymentId,
+              stoppedId: deployment.id,
+            },
+            'Failed to set resumedFromId on resumed Spheron deployment — uptime timer will reset for this row',
+          )
+        }
+
+        // Preserve policy: clone with same constraints + reset
+        // expiresAt window. Mirror of the Akash policy-clone path.
+        if (deployment.policyId) {
+          try {
+            const oldPolicy = await prisma.deploymentPolicy.findUnique({
+              where: { id: deployment.policyId },
+            })
+            if (oldPolicy) {
+              const newPolicy = await prisma.deploymentPolicy.create({
+                data: {
+                  acceptableGpuModels: oldPolicy.acceptableGpuModels,
+                  gpuUnits: oldPolicy.gpuUnits,
+                  gpuVendor: oldPolicy.gpuVendor,
+                  maxBudgetUsd: oldPolicy.maxBudgetUsd,
+                  maxMonthlyUsd: oldPolicy.maxMonthlyUsd,
+                  runtimeMinutes: oldPolicy.runtimeMinutes,
+                  expiresAt: oldPolicy.runtimeMinutes
+                    ? new Date(Date.now() + oldPolicy.runtimeMinutes * 60_000)
+                    : null,
+                  totalSpentUsd: oldPolicy.totalSpentUsd,
+                },
+              })
+              await prisma.spheronDeployment.update({
+                where: { id: newDeploymentId },
+                data: { policyId: newPolicy.id },
+              })
+              await scheduleOrEnforcePolicyExpiry(prisma, newPolicy.id)
+            }
+          } catch (policyErr) {
+            log.warn(
+              {
+                err: policyErr instanceof Error ? policyErr.message : policyErr,
+                stoppedId: deployment.id,
+              },
+              'Failed to clone Spheron policy on resume — new row has no policy',
+            )
+          }
+        }
+
+        resumed.push(`Spheron: ${deployment.name} → new deployment ${newDeploymentId}`)
+      } catch (error) {
+        errors.push(
+          `Spheron ${deployment.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
         )
       }
     }

@@ -23,6 +23,15 @@ export const BILLING_CONFIG = {
     billingIntervalHours: 1,
     minBalanceCentsToLaunch: 100,
   },
+  // Spheron mirrors Phala's hourly cadence. The 20-minute server-side
+  // minimum-runtime floor is enforced at the `processFinalSpheronBilling`
+  // level (NOT here) — the recurring path only runs after the first full
+  // hour has elapsed, so the floor is moot for hourly debits and only
+  // matters when a deploy closes inside the first hour.
+  spheron: {
+    billingIntervalHours: 1,
+    minBalanceCentsToLaunch: 100,
+  },
   scheduler: {
     cronExpression: '0 * * * *',
   },

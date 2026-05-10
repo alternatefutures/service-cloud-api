@@ -26,4 +26,7 @@ export {
 
 export { AkashProvider, createAkashProvider } from './akashProvider.js'
 export { PhalaProvider, createPhalaProvider } from './phalaProvider.js'
+export { SpheronProvider, createSpheronProvider, isSpheronConfigured } from './spheronProvider.js'
+export { startSpheronSshKeyBootstrap, getCachedSpheronSshKeyId } from './spheronSshKeyBootstrap.js'
+export { SpheronBalanceMonitor } from './spheronBalanceMonitor.js'
 export { ProviderVerificationScheduler } from './providerVerificationScheduler.js'

@@ -19,6 +19,7 @@ import { settleAkashEscrowToTime } from '../billing/deploymentSettlement.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import { getAvailableProviders } from '../providers/registry.js'
 import { decrementOrgConcurrency } from '../concurrency/concurrencyService.js'
+import { getSpheronClient, SpheronApiError } from '../spheron/client.js'
 import { createLogger } from '../../lib/logger.js'
 import { audit } from '../../lib/audit.js'
 import { opsAlert } from '../../lib/opsAlert.js'
@@ -917,12 +918,122 @@ async function sweepAwaitingRegionResponse(prisma: PrismaClient): Promise<void> 
   }
 }
 
+/**
+ * Spheron-specific upstream-cleanup retry pass.
+ *
+ * Spheron's DELETE endpoint enforces a 20-minute server-side minimum
+ * runtime. When the user / sweeper / scheduler closes a Spheron VM
+ * inside that floor, `spheronProvider.close()` settles billing locally
+ * and marks `status = DELETED` but leaves `upstreamDeletedAt = null` so
+ * this pass can finish the upstream cleanup once the floor elapses.
+ *
+ * Pass selects rows where:
+ *   status = DELETED
+ *   providerDeploymentId IS NOT NULL
+ *   upstreamDeletedAt IS NULL
+ *
+ * For each, calls `client.deleteDeployment(providerDeploymentId)`:
+ *   - Success → set upstreamDeletedAt = now()
+ *   - isAlreadyGone (404 / "already deleted") → set upstreamDeletedAt = now()
+ *   - isMinimumRuntimeNotMet → leave upstreamDeletedAt null, retry next sweep
+ *   - Other error → leave null + log; retry next sweep
+ *
+ * Bound by `SPHERON_UPSTREAM_CLEANUP_BATCH` so a single bad sweep doesn't
+ * spend the rate-limit budget. Errors NEVER escape — the sweep cycle
+ * continues to other passes regardless.
+ */
+const SPHERON_UPSTREAM_CLEANUP_BATCH = 20
+
+async function reconcileSpheronUpstreamCleanups(prisma: PrismaClient): Promise<void> {
+  const client = getSpheronClient()
+  if (!client) return // Spheron not configured — nothing to reconcile.
+
+  let pending: Array<{
+    id: string
+    providerDeploymentId: string | null
+    updatedAt: Date
+  }> = []
+  try {
+    pending = await prisma.spheronDeployment.findMany({
+      where: {
+        status: 'DELETED',
+        upstreamDeletedAt: null,
+        providerDeploymentId: { not: null },
+      },
+      select: {
+        id: true,
+        providerDeploymentId: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: SPHERON_UPSTREAM_CLEANUP_BATCH,
+    })
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : err }, 'Spheron upstream-cleanup scan failed')
+    return
+  }
+
+  if (pending.length === 0) return
+
+  log.info(`Spheron upstream cleanup: ${pending.length} pending DELETE(s)`)
+
+  for (const row of pending) {
+    if (!row.providerDeploymentId) continue // narrowed by query; defensive.
+    try {
+      await client.deleteDeployment(row.providerDeploymentId)
+      await prisma.spheronDeployment.update({
+        where: { id: row.id },
+        data: { upstreamDeletedAt: new Date() },
+      })
+      log.info(
+        { localId: row.id, providerDeploymentId: row.providerDeploymentId },
+        'Spheron upstream DELETE retry succeeded',
+      )
+    } catch (err) {
+      if (err instanceof SpheronApiError) {
+        if (err.isAlreadyGone()) {
+          await prisma.spheronDeployment.update({
+            where: { id: row.id },
+            data: { upstreamDeletedAt: new Date() },
+          }).catch(() => undefined)
+          log.info(
+            { localId: row.id, providerDeploymentId: row.providerDeploymentId },
+            'Spheron upstream already gone — stamping upstreamDeletedAt',
+          )
+          continue
+        }
+        const min = err.isMinimumRuntimeNotMet()
+        if (min) {
+          log.debug(
+            {
+              localId: row.id,
+              providerDeploymentId: row.providerDeploymentId,
+              timeRemainingMinutes: min.timeRemainingMinutes,
+            },
+            'Spheron upstream DELETE still inside minimum-runtime window — will retry next sweep',
+          )
+          continue
+        }
+      }
+      log.warn(
+        {
+          localId: row.id,
+          providerDeploymentId: row.providerDeploymentId,
+          err: err instanceof Error ? err.message : err,
+        },
+        'Spheron upstream DELETE retry failed — will retry next sweep',
+      )
+    }
+  }
+}
+
 function runSweep(prisma: PrismaClient): void {
   const sweep = (async () => {
     await sweepStaleDeployments(prisma)
     await sweepAwaitingRegionResponse(prisma)
     await reconcileActiveDeployments(prisma)
     await reconcileOrphanedEscrows(prisma)
+    await reconcileSpheronUpstreamCleanups(prisma)
   })()
     .catch(err => log.error(err as Error, 'Sweep failed'))
     .finally(() => { if (activeSweep === sweep) activeSweep = null })

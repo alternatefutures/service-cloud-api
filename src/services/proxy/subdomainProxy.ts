@@ -370,11 +370,19 @@ export class SubdomainProxy {
   // -------------------------------------------------------------------------
 
   /**
-   * Look up the Akash or Phala backend URL for a given slug.
+   * Look up the Akash, Phala, or Spheron backend URL for a given slug.
    *
    * Priority:
    *   1. Active AkashDeployment with serviceUrls
    *   2. Active PhalaDeployment with appUrl
+   *   3. Active SpheronDeployment with ipAddress (resolved to
+   *      `http://<ipAddress>:<service.containerPort>`).
+   *
+   * Spheron note: VMs only natively expose port 22; user services run on
+   * the container's port behind UFW. The cloudInit builder opens
+   * `service.containerPort` via `ufw allow <port>/tcp` so the proxy can
+   * reach it directly. HTTPS termination is the user's problem (deferred
+   * Caddy sidecar — Phase 2).
    */
   private async lookupBackend(
     slug: string,
@@ -389,6 +397,7 @@ export class SubdomainProxy {
           type: true,
           sdlServiceName: true,
           parentServiceId: true,
+          containerPort: true,
           akashDeployments: {
             where: { status: 'ACTIVE' },
             orderBy: { deployedAt: 'desc' },
@@ -400,6 +409,16 @@ export class SubdomainProxy {
             orderBy: { createdAt: 'desc' },
             take: 1,
             select: { appUrl: true, status: true },
+          },
+          spheronDeployments: {
+            where: { status: 'ACTIVE' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { ipAddress: true, status: true },
+          },
+          ports: {
+            orderBy: { containerPort: 'asc' },
+            select: { containerPort: true, publicPort: true },
           },
         },
       })
@@ -464,8 +483,29 @@ export class SubdomainProxy {
         return { target, status: 'ACTIVE', serviceId: service.id, tier }
       }
 
+      // Try Spheron — `http://<ipAddress>:<hostPort>` directly. Spheron VMs
+      // run our docker-compose, which binds `${publicPort}:${containerPort}`
+      // (host:container) when the port row sets `publicPort`, else does a
+      // 1:1 `containerPort:containerPort` mapping. The VM's external IP
+      // therefore listens on the HOST side of that mapping, never on the
+      // container-internal port. Picking `publicPort` first matches the
+      // milady-style `{containerPort: 2138, publicPort: 80}` case where the
+      // app inside the container listens on 2138 but the VM exposes 80.
+      // For ports with no publicPort, `containerPort` is also the host bind.
+      const spheronDep = service.spheronDeployments?.[0]
+      if (spheronDep?.ipAddress) {
+        const firstPort = service.ports?.[0]
+        const port =
+          firstPort?.publicPort ??
+          firstPort?.containerPort ??
+          service.containerPort ??
+          80
+        const target = `http://${spheronDep.ipAddress}:${port}`
+        return { target, status: 'ACTIVE', serviceId: service.id, tier }
+      }
+
       // Deployment exists but URIs not yet available (provider still setting up ingress)
-      if (akashDep || phalaDep) {
+      if (akashDep || phalaDep || spheronDep) {
         return {
           target: null,
           status: 'PROVISIONING',

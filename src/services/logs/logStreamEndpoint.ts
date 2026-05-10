@@ -34,7 +34,11 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { PrismaClient } from '@prisma/client'
-import { AkashDeploymentStatus, PhalaDeploymentStatus } from '@prisma/client'
+import {
+  AkashDeploymentStatus,
+  PhalaDeploymentStatus,
+  SpheronDeploymentStatus,
+} from '@prisma/client'
 import { authorizeServiceAccess } from '../auth/serviceAccess.js'
 import { getProvider } from '../providers/registry.js'
 import type { LogStream } from '../providers/types.js'
@@ -177,10 +181,22 @@ const PHALA_LOG_ELIGIBLE_STATUSES: PhalaDeploymentStatus[] = [
   PhalaDeploymentStatus.PERMANENTLY_FAILED,
 ]
 
+// Spheron is more restrictive: SSH-based log fetching needs `ipAddress` +
+// `sshPort`, and those only populate on ACTIVE. STARTING/CREATING haven't
+// reached `running` upstream so there's literally no VM to SSH into yet.
+// FAILED rows that briefly held SSH info are excluded too — by the time
+// we'd want to tail them the VM is usually gone or being torn down.
+const SPHERON_LOG_ELIGIBLE_STATUSES: SpheronDeploymentStatus[] = [
+  SpheronDeploymentStatus.ACTIVE,
+]
+
 async function pickLogEligibleDeployment(
   prisma: PrismaClient,
   serviceId: string
-): Promise<{ deploymentId: string; provider: 'akash' | 'phala' } | null> {
+): Promise<{
+  deploymentId: string
+  provider: 'akash' | 'phala' | 'spheron'
+} | null> {
   // Pass 1: prefer ACTIVE deployments (tiebreaker — healthy beats stale/failed)
   const akashActive = await prisma.akashDeployment.findFirst({
     where: { serviceId, status: 'ACTIVE' },
@@ -195,6 +211,15 @@ async function pickLogEligibleDeployment(
     select: { id: true },
   })
   if (phalaActive) return { deploymentId: phalaActive.id, provider: 'phala' }
+
+  const spheronActive = await prisma.spheronDeployment.findFirst({
+    where: { serviceId, status: 'ACTIVE' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+  if (spheronActive) {
+    return { deploymentId: spheronActive.id, provider: 'spheron' }
+  }
 
   // Pass 2: fall back to any log-eligible deployment (has a lease, can be tailed)
   const akash = await prisma.akashDeployment.findFirst({
@@ -216,6 +241,16 @@ async function pickLogEligibleDeployment(
     select: { id: true },
   })
   if (phala) return { deploymentId: phala.id, provider: 'phala' }
+
+  const spheron = await prisma.spheronDeployment.findFirst({
+    where: {
+      serviceId,
+      status: { in: SPHERON_LOG_ELIGIBLE_STATUSES },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+  if (spheron) return { deploymentId: spheron.id, provider: 'spheron' }
 
   return null
 }

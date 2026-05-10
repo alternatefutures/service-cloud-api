@@ -16,6 +16,7 @@ import { getBillingApiClient } from './billingApiClient.js'
 import { BILLING_CONFIG } from '../../config/billing.js'
 import {
   processFinalPhalaBilling,
+  processFinalSpheronBilling,
   settleAkashEscrowToTime,
 } from './deploymentSettlement.js'
 import { reconcilePendingSettlements } from './settlementLedger.js'
@@ -143,6 +144,9 @@ export class ComputeBillingScheduler {
       akashIdempotencyHits: 0,
       phalaProcessed: 0,
       phalaErrors: 0,
+      spheronProcessed: 0,
+      spheronErrors: 0,
+      spheronIdempotencyHits: 0,
       orgsPaused: 0,
       totalDebitedCents: 0,
     }
@@ -181,6 +185,7 @@ export class ComputeBillingScheduler {
 
       await this.processAkashEscrows(stats)
       await this.processPhalaDebits(stats)
+      await this.processSpheronDebits(stats)
 
       if (this.noPauseMode) {
         log.info('Skipping threshold/pause check (no-pause mode)')
@@ -208,6 +213,9 @@ export class ComputeBillingScheduler {
           akashIdempotencyHits: stats.akashIdempotencyHits,
           phalaProcessed: stats.phalaProcessed,
           phalaErrors: stats.phalaErrors,
+          spheronProcessed: stats.spheronProcessed,
+          spheronErrors: stats.spheronErrors,
+          spheronIdempotencyHits: stats.spheronIdempotencyHits,
           orgsPaused: stats.orgsPaused,
           totalDebitedCents: stats.totalDebitedCents,
           policyBudgetStopped: policyStats.budgetStopped,
@@ -220,7 +228,8 @@ export class ComputeBillingScheduler {
       // Phase 44 audit: one event per tick carrying the full stats blob.
       // status=warn when any provider errored but the cycle otherwise
       // completed; status=error lives in the catch block below.
-      const hadErrors = stats.akashErrors > 0 || stats.phalaErrors > 0
+      const hadErrors =
+        stats.akashErrors > 0 || stats.phalaErrors > 0 || stats.spheronErrors > 0
       audit(this.prisma, {
         traceId: tickTraceId,
         source: 'cron',
@@ -780,6 +789,316 @@ export class ComputeBillingScheduler {
   }
 
   // ========================================
+  // STEP 2-bis: SPHERON PER-HOUR DEBITS
+  // Mirrors processPhalaDebits exactly. Same liveness contract: the
+  // provider-agnostic reconciler in staleDeploymentSweeper verifies ACTIVE
+  // Spheron rows are still alive upstream; if a VM is dead, the reconciler
+  // calls provider.close() which settles billing via
+  // processFinalSpheronBilling(). This method trusts DB status.
+  //
+  // Two Spheron-specific notes:
+  //   - 20-min minimum-runtime floor lives in processFinalSpheronBilling,
+  //     NOT here. The hourly cadence (>= 1h elapsed) is always above the
+  //     20-min floor so this loop never needs to consider it.
+  //   - Resume after low-balance pause is a re-deploy from savedCloudInit
+  //     (NO native start) — see resumeHandler.ts.
+  // ========================================
+
+  private async processSpheronDebits(stats: {
+    spheronProcessed: number
+    spheronErrors: number
+    spheronIdempotencyHits: number
+    totalDebitedCents: number
+  }) {
+    const billingApi = getBillingApiClient()
+
+    const activeSpheron = await this.prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        orgBillingId: { not: null },
+        hourlyRateCents: { not: null },
+      },
+    })
+
+    log.info(
+      { count: activeSpheron.length },
+      'Processing active Spheron deployments'
+    )
+
+    // Surface ACTIVE Spheron deployments that the main loop *cannot* bill
+    // because their orgBillingId / hourlyRateCents is null. Silent money
+    // leak — page on every cycle until ops backfills the row. Mirror of
+    // alertUnbillablePhalaDeployments.
+    await this.alertUnbillableSpheronDeployments()
+
+    const now = new Date()
+
+    for (const deployment of activeSpheron) {
+      try {
+        if (!deployment.orgBillingId || !deployment.hourlyRateCents) {
+          continue
+        }
+
+        const lastBilled =
+          deployment.lastBilledAt ||
+          deployment.activeStartedAt ||
+          deployment.createdAt
+        const hoursSinceLastBill =
+          (now.getTime() - lastBilled.getTime()) / (1000 * 60 * 60)
+
+        if (
+          hoursSinceLastBill < BILLING_CONFIG.spheron.billingIntervalHours &&
+          !this.forceMode
+        ) {
+          log.info(
+            { deploymentId: deployment.id },
+            'Spheron deployment <1h since last bill — skipping'
+          )
+          continue
+        }
+
+        const hoursToBill = this.forceMode
+          ? Math.max(1, Math.floor(hoursSinceLastBill))
+          : Math.max(1, Math.floor(hoursSinceLastBill))
+        const amountCents = hoursToBill * deployment.hourlyRateCents
+
+        if (amountCents <= 0) continue
+
+        // Hourly idempotency key (NEVER daily — see Phase 34 / Phala bug
+        // PRP §3.6). Key is bound to the slot the user is being charged
+        // for so coalesce-billing on missed cycles works.
+        const slotStart = new Date(
+          Math.floor(now.getTime() / 3_600_000) * 3_600_000
+        )
+        const hourKey = slotStart.toISOString().slice(0, 13)
+        const runId = this.forceMode ? `force_${hourKey}` : hourKey
+        const idempotencyKey = `spheron_hourly:${deployment.id}:${runId}`
+
+        const result = await billingApi.computeDebit({
+          orgBillingId: deployment.orgBillingId,
+          amountCents,
+          serviceType: 'spheron_vm',
+          provider: 'spheron',
+          resource: deployment.id,
+          description:
+            `Spheron VM (${deployment.gpuCount}× ${deployment.gpuType} @ ${deployment.provider}/${deployment.region}): ` +
+            `${hoursToBill}h @ $${(deployment.hourlyRateCents / 100).toFixed(2)}/hr`,
+          idempotencyKey,
+          metadata: {
+            deploymentId: deployment.id,
+            providerDeploymentId: deployment.providerDeploymentId,
+            upstreamProvider: deployment.provider,
+            offerId: deployment.offerId,
+            gpuType: deployment.gpuType,
+            gpuCount: deployment.gpuCount,
+            region: deployment.region,
+            instanceType: deployment.instanceType,
+            source: 'spheron_hourly_billing',
+          },
+        })
+
+        // Phase 34 — mirror locally on every code path. Advance lastBilledAt
+        // by exactly hoursToBill*1h (NOT to `now`), capped at `now`, so the
+        // fractional tail rolls forward to the next cycle / final
+        // settlement instead of being silently discarded. Update
+        // totalBilledCents BEFORE the alreadyProcessed branch so a prior
+        // `success` from auth that we never recorded locally cannot cause
+        // the next cycle to compute hoursToBill against a stale anchor and
+        // double-charge with a fresh idempotency key.
+        const advancedLastBilledAt = new Date(
+          Math.min(now.getTime(), lastBilled.getTime() + hoursToBill * 3_600_000)
+        )
+        await this.prisma.spheronDeployment.update({
+          where: { id: deployment.id },
+          data: {
+            lastBilledAt: advancedLastBilledAt,
+            totalBilledCents: deployment.totalBilledCents + amountCents,
+          },
+        })
+
+        if (result.alreadyProcessed) {
+          stats.spheronIdempotencyHits++
+          log.info(
+            { deploymentId: deployment.id, amountCents, idempotencyKey },
+            'Spheron deployment already processed (idempotency hit) — mirrored to local DB'
+          )
+        } else {
+          stats.spheronProcessed++
+          stats.totalDebitedCents += amountCents
+          log.info(
+            { deploymentId: deployment.id, debitedCents: amountCents, hoursToBill },
+            'Spheron deployment debited'
+          )
+        }
+      } catch (error) {
+        stats.spheronErrors++
+        const errMsg = error instanceof Error ? error.message : String(error)
+
+        if (errMsg.includes('INSUFFICIENT_BALANCE')) {
+          log.warn(
+            { deploymentId: deployment.id },
+            'Spheron deployment insufficient balance — will pause'
+          )
+        } else {
+          log.error(
+            {
+              deploymentId: deployment.id,
+              err: error,
+              body: (error as { body?: unknown }).body,
+            },
+            'Spheron deployment error'
+          )
+          await opsAlert({
+            key: `spheron-billing-error:${deployment.id}`,
+            severity: 'warning',
+            title: 'Spheron billing cycle error',
+            message:
+              `Failed to bill Spheron deployment ${deployment.id} during the hourly cycle. ` +
+              `If this persists the user will stop being charged for a live VM while the platform ` +
+              `still owes Spheron the hourly rate.`,
+            context: {
+              deploymentId: deployment.id,
+              providerDeploymentId: deployment.providerDeploymentId,
+              orgBillingId: deployment.orgBillingId,
+              hourlyRateCents: deployment.hourlyRateCents,
+              upstreamProvider: deployment.provider,
+              error: errMsg.slice(0, 400),
+            },
+            suppressMs: 55 * 60 * 1000,
+          })
+        }
+      }
+    }
+
+    await this.detectSpheronBillingDrift()
+  }
+
+  /**
+   * Emit an ops alert (and detailed log line) for any ACTIVE Spheron
+   * deployment that is missing `orgBillingId` or `hourlyRateCents`. The
+   * main loop's `where` clause silently filters these out, so without this
+   * they are invisible money leaks: a VM is running on Spheron's network
+   * (and Spheron is charging the platform) but no one is being billed.
+   * Direct mirror of `alertUnbillablePhalaDeployments`.
+   */
+  private async alertUnbillableSpheronDeployments(): Promise<void> {
+    const broken = await this.prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [
+          { orgBillingId: null },
+          { hourlyRateCents: null },
+        ],
+      },
+      select: {
+        id: true,
+        providerDeploymentId: true,
+        organizationId: true,
+        orgBillingId: true,
+        hourlyRateCents: true,
+        provider: true,
+        gpuType: true,
+        createdAt: true,
+      },
+    })
+    if (broken.length === 0) return
+
+    log.error(
+      { count: broken.length, ids: broken.map(b => b.id) },
+      'ACTIVE Spheron deployments missing billing fields — NOT being charged',
+    )
+    await opsAlert({
+      key: 'spheron-unbillable-deployments',
+      severity: 'critical',
+      title: 'ACTIVE Spheron deployments are not being billed',
+      message:
+        `${broken.length} ACTIVE Spheron deployment(s) have a NULL orgBillingId or hourlyRateCents. ` +
+        `They are running on Spheron (the platform is being charged) but no one is paying for the compute. ` +
+        `Backfill the missing fields ASAP — see admin/cloud/docs/AF_INCIDENT_RUNBOOKS.md.`,
+      context: {
+        count: broken.length,
+        sample: broken.slice(0, 10).map(b => ({
+          deploymentId: b.id,
+          providerDeploymentId: b.providerDeploymentId,
+          organizationId: b.organizationId,
+          upstreamProvider: b.provider,
+          gpuType: b.gpuType,
+          missing: [
+            b.orgBillingId ? null : 'orgBillingId',
+            b.hourlyRateCents ? null : 'hourlyRateCents',
+          ].filter(Boolean),
+        })),
+      },
+      suppressMs: 55 * 60 * 1000,
+    })
+  }
+
+  /**
+   * Find ACTIVE Spheron deployments whose `lastBilledAt` has fallen behind
+   * `now` by more than the configured threshold. Same rationale as
+   * `detectPhalaBillingDrift` — visibility for missed cycles. The next
+   * cycle's coalesce-bill path picks them up (hoursToBill=floor(drift)).
+   */
+  private async detectSpheronBillingDrift(): Promise<void> {
+    const DRIFT_THRESHOLD_HOURS = 2
+    const driftCutoff = new Date(Date.now() - DRIFT_THRESHOLD_HOURS * 3_600_000)
+    const drifted = await this.prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        orgBillingId: { not: null },
+        hourlyRateCents: { not: null },
+        OR: [
+          { lastBilledAt: { lt: driftCutoff } },
+          {
+            lastBilledAt: null,
+            activeStartedAt: { lt: driftCutoff },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        providerDeploymentId: true,
+        orgBillingId: true,
+        lastBilledAt: true,
+        activeStartedAt: true,
+        hourlyRateCents: true,
+      },
+    })
+    if (drifted.length === 0) return
+
+    log.warn(
+      {
+        count: drifted.length,
+        thresholdHours: DRIFT_THRESHOLD_HOURS,
+        ids: drifted.map(d => d.id),
+      },
+      'Spheron billing drift detected — next cycle will coalesce-charge missed hours',
+    )
+    await opsAlert({
+      key: 'spheron-billing-drift',
+      severity: 'warning',
+      title: 'Spheron billing has drifted behind real time',
+      message:
+        `${drifted.length} ACTIVE Spheron deployment(s) have lastBilledAt > ${DRIFT_THRESHOLD_HOURS}h behind now. ` +
+        `The next cycle should coalesce the missed hours, but persistent drift means the cron isn't running ` +
+        `cleanly — investigate scheduler health and pod logs.`,
+      context: {
+        count: drifted.length,
+        thresholdHours: DRIFT_THRESHOLD_HOURS,
+        sample: drifted.slice(0, 10).map(d => ({
+          deploymentId: d.id,
+          providerDeploymentId: d.providerDeploymentId,
+          orgBillingId: d.orgBillingId,
+          lastBilledAt: d.lastBilledAt?.toISOString() ?? null,
+          activeStartedAt: d.activeStartedAt?.toISOString() ?? null,
+          hourlyRateCents: d.hourlyRateCents,
+        })),
+      },
+      suppressMs: 55 * 60 * 1000,
+    })
+  }
+
+  // ========================================
   // STEP 3: THRESHOLD CHECK → PAUSE
   // ========================================
 
@@ -811,6 +1130,18 @@ export class ComputeBillingScheduler {
       },
     })
 
+    const activeSpheron = await this.prisma.spheronDeployment.findMany({
+      where: { status: 'ACTIVE', orgBillingId: { not: null } },
+      select: {
+        orgBillingId: true,
+        organizationId: true,
+        hourlyRateCents: true,
+        lastBilledAt: true,
+        activeStartedAt: true,
+        createdAt: true,
+      },
+    })
+
     const orgBurnRates = new Map<
       string,
       { hourlyCostCents: number; orgId: string }
@@ -835,6 +1166,16 @@ export class ComputeBillingScheduler {
       orgBurnRates.set(p.orgBillingId, existing)
     }
 
+    for (const s of activeSpheron) {
+      if (!s.orgBillingId || !s.hourlyRateCents) continue
+      const existing = orgBurnRates.get(s.orgBillingId) || {
+        hourlyCostCents: 0,
+        orgId: s.organizationId || '',
+      }
+      existing.hourlyCostCents += s.hourlyRateCents
+      orgBurnRates.set(s.orgBillingId, existing)
+    }
+
     // Build a map of unbilled cost per orgBillingId by summing up cost accrued
     // since the last billing for each active deployment.
     const unbilledCostByOrg = new Map<string, number>()
@@ -853,6 +1194,24 @@ export class ComputeBillingScheduler {
       const hoursSince = Math.max(0, (now.getTime() - new Date(lastBilled).getTime()) / (1000 * 60 * 60))
       const unbilledCents = p.hourlyRateCents * hoursSince
       unbilledCostByOrg.set(p.orgBillingId, (unbilledCostByOrg.get(p.orgBillingId) || 0) + unbilledCents)
+    }
+
+    for (const s of activeSpheron) {
+      if (!s.orgBillingId || !s.hourlyRateCents) continue
+      // Anchor unbilled drift at activeStartedAt for parity with the
+      // 20-min floor enforced in processFinalSpheronBilling — createdAt
+      // would over-estimate when the row was queued before the upstream
+      // POST landed.
+      const anchor = s.lastBilledAt || s.activeStartedAt || s.createdAt || now
+      const hoursSince = Math.max(
+        0,
+        (now.getTime() - new Date(anchor).getTime()) / (1000 * 60 * 60)
+      )
+      const unbilledCents = s.hourlyRateCents * hoursSince
+      unbilledCostByOrg.set(
+        s.orgBillingId,
+        (unbilledCostByOrg.get(s.orgBillingId) || 0) + unbilledCents
+      )
     }
 
     for (const [orgBillingId, { hourlyCostCents, orgId }] of orgBurnRates) {
@@ -1131,6 +1490,159 @@ export class ComputeBillingScheduler {
       }
     }
 
+    const spheronDeployments = await this.prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        orgBillingId,
+      },
+      include: {
+        service: { select: { shutdownPriority: true, name: true } },
+      },
+    })
+
+    spheronDeployments.sort((a, b) =>
+      ((b as { service?: { shutdownPriority?: number } }).service
+        ?.shutdownPriority ?? 50) -
+      ((a as { service?: { shutdownPriority?: number } }).service
+        ?.shutdownPriority ?? 50)
+    )
+
+    for (const deployment of spheronDeployments) {
+      if (balanceCents >= remainingHourlyBurn * threshold) {
+        log.info(
+          { balanceCents, remainingHourlyBurn },
+          'Remaining services affordable after Akash + Phala suspensions — skipping Spheron'
+        )
+        break
+      }
+
+      const deploymentHourlyCost = deployment.hourlyRateCents ?? 0
+
+      try {
+        const stoppedAt = new Date()
+
+        // Phase 31 — settle billing BEFORE the upstream DELETE. This
+        // applies the 20-min minimum-runtime floor for sub-20-min
+        // deploys (see processFinalSpheronBilling).
+        await processFinalSpheronBilling(
+          this.prisma,
+          deployment.id,
+          stoppedAt,
+          'spheron_balance_low_pause'
+        )
+
+        // Spheron has no native stop. Resume = re-deploy from
+        // savedCloudInit / savedDeployInput (see resumeHandler.ts).
+        // The provider adapter's close() handles the 20-min DELETE
+        // floor by marking the row STOPPED locally and letting the
+        // sweeper retry the upstream cleanup. Here we mirror the
+        // Phala flow but use status=STOPPED (not DELETED) so resume
+        // can find these rows. The sweeper's
+        // reconcileSpheronUpstreamCleanups still cleans the upstream
+        // VM eventually since providerDeploymentId stays populated
+        // and upstreamDeletedAt is null.
+        let providerStopped = false
+        let upstreamDeletedAt: Date | null = null
+
+        if (deployment.providerDeploymentId) {
+          try {
+            const { getSpheronOrchestrator } = await import('../spheron/orchestrator.js')
+            const orchestrator = getSpheronOrchestrator(this.prisma)
+            await orchestrator.closeDeployment(deployment.providerDeploymentId)
+            upstreamDeletedAt = new Date()
+            providerStopped = true
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            const { SpheronApiError } = await import('../spheron/client.js')
+            if (err instanceof SpheronApiError && err.isAlreadyGone()) {
+              log.warn(
+                { providerDeploymentId: deployment.providerDeploymentId, err },
+                'Spheron VM already gone during pause — treating as stopped'
+              )
+              upstreamDeletedAt = new Date()
+              providerStopped = true
+            } else if (
+              err instanceof SpheronApiError &&
+              err.isMinimumRuntimeNotMet()
+            ) {
+              // Defer upstream DELETE to the sweeper; row goes to
+              // STOPPED (settled, hidden from user). The 20-min floor
+              // billing was already charged in processFinalSpheronBilling.
+              log.warn(
+                { providerDeploymentId: deployment.providerDeploymentId },
+                'Spheron DELETE deferred (minimum runtime) during pause — sweeper will retry'
+              )
+              providerStopped = true
+            } else {
+              log.error(
+                { deploymentId: deployment.id, err: errMsg },
+                'Spheron DELETE failed during pause — deployment stays ACTIVE and billed'
+              )
+            }
+          }
+        } else {
+          // No upstream id — nothing to delete, treat as stopped.
+          upstreamDeletedAt = new Date()
+          providerStopped = true
+        }
+
+        if (providerStopped) {
+          const result = await this.prisma.spheronDeployment.updateMany({
+            where: { id: deployment.id, status: 'ACTIVE' },
+            data: {
+              status: 'STOPPED',
+              ...(upstreamDeletedAt ? { upstreamDeletedAt } : {}),
+            },
+          })
+          if (result.count > 0) {
+            if (deployment.organizationId) {
+              const { decrementOrgConcurrency } = await import(
+                '../concurrency/concurrencyService.js'
+              )
+              await decrementOrgConcurrency(
+                this.prisma,
+                deployment.organizationId
+              ).catch((err) =>
+                log.warn(
+                  { err, deploymentId: deployment.id },
+                  'Concurrency decrement failed (suspend Spheron)'
+                )
+              )
+            }
+            if (deployment.policyId) {
+              await this.prisma.deploymentPolicy.updateMany({
+                where: { id: deployment.policyId, reservedCents: { gt: 0 } },
+                data: { reservedCents: 0, stopReason: 'BALANCE_LOW', stoppedAt },
+              })
+            }
+            audit(this.prisma, {
+              category: 'billing',
+              action: 'balance.low_suspended',
+              status: 'warn',
+              deploymentId: deployment.id,
+              payload: {
+                provider: 'spheron',
+                providerDeploymentId: deployment.providerDeploymentId,
+                hourlyCostCents: deploymentHourlyCost,
+                balanceCentsAtSuspend: balanceCents,
+                remainingHourlyBurnAfter:
+                  remainingHourlyBurn - deploymentHourlyCost,
+              },
+            })
+            remainingHourlyBurn -= deploymentHourlyCost
+            pausedServices.push(
+              `Spheron: ${deployment.name} (priority=${(deployment as { service?: { shutdownPriority?: number } }).service?.shutdownPriority ?? 50})`
+            )
+          }
+        }
+      } catch (error) {
+        log.error(
+          { deploymentId: deployment.id, err: error },
+          'Failed to pause Spheron deployment'
+        )
+      }
+    }
+
     if (pausedServices.length > 0) {
       try {
         await billingApi.notify({
@@ -1191,6 +1703,26 @@ export class ComputeBillingScheduler {
     })
 
     for (const dep of phalaPolicies) {
+      if (!dep.policyId) continue
+      const spentUsd = (dep.totalBilledCents ?? 0) / 100
+      await this.prisma.deploymentPolicy.update({
+        where: { id: dep.policyId },
+        data: { totalSpentUsd: spentUsd },
+      })
+    }
+
+    const spheronPolicies = await this.prisma.spheronDeployment.findMany({
+      where: {
+        status: 'ACTIVE',
+        policyId: { not: null },
+      },
+      select: {
+        policyId: true,
+        totalBilledCents: true,
+      },
+    })
+
+    for (const dep of spheronPolicies) {
       if (!dep.policyId) continue
       const spentUsd = (dep.totalBilledCents ?? 0) / 100
       await this.prisma.deploymentPolicy.update({

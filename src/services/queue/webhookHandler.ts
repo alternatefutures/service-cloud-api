@@ -15,9 +15,15 @@ import type { PrismaClient } from '@prisma/client'
 import { verifyWebhookSignature, isQStashEnabled } from './qstashClient.js'
 import { handleSubmitTx, handleCheckBids, handleCreateLease, handleSendManifest, handlePollUrls, handleFailure } from './akashSteps.js'
 import { handleDeployCvm, handlePollStatus, handlePhalaFailure } from './phalaSteps.js'
+import {
+  handleDeployVm as handleSpheronDeployVm,
+  handlePollStatus as handleSpheronPollStatus,
+  handleRunCloudInitProbe as handleSpheronRunCloudInitProbe,
+  handleSpheronFailure,
+} from './spheronSteps.js'
 import { handlePolicyExpiry } from '../policy/runtimeScheduler.js'
-import type { AkashJobPayload, PhalaJobPayload, PolicyJobPayload } from './types.js'
-import type { AkashStep, PhalaStep, PolicyStep } from './types.js'
+import type { AkashJobPayload, PhalaJobPayload, PolicyJobPayload, SpheronJobPayload } from './types.js'
+import type { AkashStep, PhalaStep, PolicyStep, SpheronStep } from './types.js'
 import { createLogger } from '../../lib/logger.js'
 
 const log = createLogger('webhook-handler')
@@ -61,6 +67,7 @@ const AKASH_STEPS = new Set<AkashStep>([
   'SUBMIT_TX', 'CHECK_BIDS', 'CREATE_LEASE', 'SEND_MANIFEST', 'POLL_URLS', 'HANDLE_FAILURE',
 ])
 const PHALA_STEPS = new Set<PhalaStep>(['DEPLOY_CVM', 'POLL_STATUS', 'HANDLE_FAILURE'])
+const SPHERON_STEPS = new Set<SpheronStep>(['DEPLOY_VM', 'POLL_STATUS', 'RUN_CLOUDINIT_PROBE', 'HANDLE_FAILURE'])
 const POLICY_STEPS = new Set<PolicyStep>(['EXPIRE_POLICY'])
 
 function validateAkashPayload(raw: unknown): AkashJobPayload {
@@ -88,6 +95,20 @@ function validatePhalaPayload(raw: unknown): PhalaJobPayload {
   if (typeof obj.deploymentId !== 'string' || !obj.deploymentId)
     throw new Error('Missing deploymentId')
   return raw as PhalaJobPayload
+}
+
+function validateSpheronPayload(raw: unknown): SpheronJobPayload {
+  if (!raw || typeof raw !== 'object') throw new Error('Payload must be an object')
+  const obj = raw as Record<string, unknown>
+  if (typeof obj.step !== 'string' || !SPHERON_STEPS.has(obj.step as SpheronStep))
+    throw new Error(`Invalid or missing Spheron step: ${String(obj.step)}`)
+  if (typeof obj.deploymentId !== 'string' || !obj.deploymentId)
+    throw new Error('Missing deploymentId')
+  if (obj.step === 'HANDLE_FAILURE' && typeof obj.errorMessage !== 'string')
+    throw new Error('HANDLE_FAILURE requires errorMessage')
+  if ((obj.step === 'POLL_STATUS' || obj.step === 'RUN_CLOUDINIT_PROBE') && typeof obj.attempt !== 'number')
+    throw new Error(`${obj.step} requires attempt (number)`)
+  return raw as SpheronJobPayload
 }
 
 function validatePolicyPayload(raw: unknown): PolicyJobPayload {
@@ -137,6 +158,24 @@ export async function handlePhalaStep(payload: PhalaJobPayload): Promise<void> {
       return handlePhalaFailure(_prisma, payload)
     default:
       throw new Error(`Unknown Phala step: ${(payload as any).step}`)
+  }
+}
+
+/**
+ * Handle Spheron step — can be called from QStash webhook or directly in local dev.
+ */
+export async function handleSpheronStep(payload: SpheronJobPayload): Promise<void> {
+  switch (payload.step) {
+    case 'DEPLOY_VM':
+      return handleSpheronDeployVm(_prisma, payload.deploymentId)
+    case 'POLL_STATUS':
+      return handleSpheronPollStatus(_prisma, payload)
+    case 'RUN_CLOUDINIT_PROBE':
+      return handleSpheronRunCloudInitProbe(_prisma, payload)
+    case 'HANDLE_FAILURE':
+      return handleSpheronFailure(_prisma, payload)
+    default:
+      throw new Error(`Unknown Spheron step: ${(payload as any).step}`)
   }
 }
 
@@ -254,6 +293,59 @@ export async function handlePhalaWebhook(req: IncomingMessage, res: ServerRespon
     sendJson(res, 200, { ok: true, step: payload.step })
   } catch (err) {
     log.error(err as Error, `Phala step ${payload.step} failed`)
+    sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
+  }
+}
+
+/**
+ * HTTP request handler for /queue/spheron/step
+ *
+ * Processes the step BEFORE responding so QStash retries on failure.
+ */
+export async function handleSpheronWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: 'Method not allowed' })
+    return
+  }
+
+  let body: string
+  try {
+    body = await readBody(req)
+  } catch {
+    sendJson(res, 413, { error: 'Request body too large' })
+    return
+  }
+
+  if (isQStashEnabled()) {
+    const signature = req.headers['upstash-signature'] as string
+    if (!signature) {
+      sendJson(res, 401, { error: 'Missing signature' })
+      return
+    }
+    const valid = await verifyWebhookSignature(signature, body)
+    if (!valid) {
+      sendJson(res, 401, { error: 'Invalid signature' })
+      return
+    }
+  } else if (process.env.NODE_ENV === 'production') {
+    log.error('QStash not configured in production — rejecting webhook')
+    sendJson(res, 503, { error: 'Queue system not configured' })
+    return
+  }
+
+  let payload: SpheronJobPayload
+  try {
+    payload = validateSpheronPayload(JSON.parse(body))
+  } catch (err) {
+    sendJson(res, 400, { error: `Invalid payload: ${(err as Error).message}` })
+    return
+  }
+
+  try {
+    await handleSpheronStep(payload)
+    sendJson(res, 200, { ok: true, step: payload.step })
+  } catch (err) {
+    log.error(err as Error, `Spheron step ${payload.step} failed`)
     sendJson(res, 500, { error: 'Step processing failed', step: payload.step })
   }
 }

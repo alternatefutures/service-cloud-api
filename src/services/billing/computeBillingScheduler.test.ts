@@ -33,6 +33,7 @@ vi.mock('./escrowService.js', () => ({
 
 vi.mock('./deploymentSettlement.js', () => ({
   processFinalPhalaBilling: vi.fn().mockResolvedValue(undefined),
+  processFinalSpheronBilling: vi.fn().mockResolvedValue(undefined),
   settleAkashEscrowToTime: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -49,6 +50,10 @@ vi.mock('../../config/billing.js', () => ({
       minBalanceCentsToLaunch: 100,
     },
     phala: {
+      billingIntervalHours: 1,
+      minBalanceCentsToLaunch: 100,
+    },
+    spheron: {
       billingIntervalHours: 1,
       minBalanceCentsToLaunch: 100,
     },
@@ -123,6 +128,11 @@ function buildPrisma(initialEscrows: FakeEscrow[]) {
     },
     phalaDeployment: {
       findMany: vi.fn().mockResolvedValue([]),
+    },
+    spheronDeployment: {
+      findMany: vi.fn().mockResolvedValue([]),
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
     organization: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -334,6 +344,209 @@ describe('ComputeBillingScheduler.processAkashEscrows — idempotency drift', ()
       globalThis.Date = originalDate
     } finally {
       Date.now = originalNow
+    }
+  })
+})
+
+// ===== Spheron =====
+//
+// Phase B contracts under test:
+//   1. Hourly idempotency key shape `spheron_hourly:<id>:<hourKey>` (NEVER
+//      daily — Phala precedent PRP §3.6).
+//   2. Phase 34 — `alreadyProcessed: true` advances local lastBilledAt +
+//      totalBilledCents BEFORE the early-return so the next cycle does NOT
+//      compute hoursToBill against a stale anchor and double-charge with a
+//      fresh hourly key.
+//   3. Hourly billing math: hoursToBill * hourlyRateCents.
+
+interface FakeSpheron {
+  id: string
+  providerDeploymentId: string | null
+  orgBillingId: string
+  organizationId: string | null
+  hourlyRateCents: number | null
+  totalBilledCents: number
+  lastBilledAt: Date | null
+  activeStartedAt: Date | null
+  createdAt: Date
+  status: string
+  provider: string
+  offerId: string
+  gpuType: string
+  gpuCount: number
+  region: string
+  instanceType: string
+}
+
+function buildSpheron(overrides: Partial<FakeSpheron> = {}): FakeSpheron {
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  return {
+    id: 'sph-1',
+    providerDeploymentId: 'spheron-vm-abc',
+    orgBillingId: 'org-1',
+    organizationId: 'org-1',
+    hourlyRateCents: 60,
+    totalBilledCents: 0,
+    lastBilledAt: twoHoursAgo,
+    activeStartedAt: twoHoursAgo,
+    createdAt: twoHoursAgo,
+    status: 'ACTIVE',
+    provider: 'spheron-ai',
+    offerId: 'off-1',
+    gpuType: 'A4000_PCIE',
+    gpuCount: 1,
+    region: 'NORWAY-1',
+    instanceType: 'DEDICATED',
+    ...overrides,
+  }
+}
+
+function buildSpheronPrisma(initial: FakeSpheron[]) {
+  const rows = [...initial]
+  return {
+    deploymentEscrow: {
+      findMany: vi.fn().mockResolvedValue([]),
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    phalaDeployment: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    spheronDeployment: {
+      findMany: vi.fn().mockImplementation(({ where }: { where?: { OR?: unknown[] } } = {}) => {
+        if (where?.OR) {
+          // alertUnbillableSpheronDeployments query — return nothing.
+          return Promise.resolve([])
+        }
+        return Promise.resolve(rows)
+      }),
+      update: vi.fn().mockImplementation(({ where, data }: { where: { id: string }; data: Partial<FakeSpheron> }) => {
+        const target = rows.find(r => r.id === where.id)
+        if (target) {
+          if (data.lastBilledAt !== undefined) target.lastBilledAt = data.lastBilledAt as Date
+          if (data.totalBilledCents !== undefined) target.totalBilledCents = data.totalBilledCents as number
+          if (data.status !== undefined) target.status = data.status as string
+        }
+        return Promise.resolve(target)
+      }),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    organization: { findMany: vi.fn().mockResolvedValue([]) },
+    deploymentPolicy: { findMany: vi.fn().mockResolvedValue([]) },
+    akashDeployment: { findMany: vi.fn().mockResolvedValue([]) },
+  } as any // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
+describe('ComputeBillingScheduler.processSpheronDebits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getOrgBalanceMock.mockResolvedValue({ balanceCents: 100_000 })
+    getOrgMarkupMock.mockResolvedValue({ marginRate: 0 })
+  })
+
+  it('debits hourly with the spheron_hourly:<id>:<hourKey> idempotency key', async () => {
+    const prisma = buildSpheronPrisma([buildSpheron()])
+
+    computeDebitMock.mockResolvedValue({
+      success: true,
+      balanceCents: 99_900,
+      alreadyProcessed: false,
+    })
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ noPause: true })
+
+    expect(computeDebitMock).toHaveBeenCalledTimes(1)
+    const call = computeDebitMock.mock.calls[0][0]
+    expect(call.provider).toBe('spheron')
+    expect(call.serviceType).toBe('spheron_vm')
+    expect(call.idempotencyKey).toMatch(/^spheron_hourly:sph-1:\d{4}-\d{2}-\d{2}T\d{2}$/)
+    expect(call.amountCents).toBe(120) // 2 hours * 60 cents/hr
+    expect(prisma.spheronDeployment.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('mirrors local DB on alreadyProcessed=true (Phase 34 — recurring path)', async () => {
+    // Mirror of the Akash idempotency-drift regression: if auth says
+    // alreadyProcessed but we don't advance lastBilledAt + totalBilledCents
+    // locally, the next cycle computes hoursToBill against a stale anchor
+    // and double-charges under a fresh hourly key.
+    const prisma = buildSpheronPrisma([buildSpheron()])
+
+    computeDebitMock.mockResolvedValue({
+      success: true,
+      balanceCents: 99_900,
+      alreadyProcessed: true,
+    })
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ noPause: true })
+
+    expect(computeDebitMock).toHaveBeenCalledTimes(1)
+    expect(prisma.spheronDeployment.update).toHaveBeenCalledTimes(1)
+    const updateArg = prisma.spheronDeployment.update.mock.calls[0][0]
+    expect(updateArg.where.id).toBe('sph-1')
+    expect(updateArg.data.lastBilledAt).toBeInstanceOf(Date)
+    // totalBilledCents advanced by the would-be charge (60c/hr * 2h)
+    expect(updateArg.data.totalBilledCents).toBe(120)
+  })
+
+  it('skips deployments inside the 1-hour billing interval (no force)', async () => {
+    const recent = new Date(Date.now() - 30 * 60 * 1000)
+    const prisma = buildSpheronPrisma([
+      buildSpheron({ lastBilledAt: recent, activeStartedAt: recent }),
+    ])
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ noPause: true })
+
+    expect(computeDebitMock).not.toHaveBeenCalled()
+    expect(prisma.spheronDeployment.update).not.toHaveBeenCalled()
+  })
+
+  it('does not double-bill across consecutive runs after an idempotency hit', async () => {
+    const prisma = buildSpheronPrisma([buildSpheron()])
+
+    computeDebitMock.mockResolvedValueOnce({
+      success: true,
+      balanceCents: 99_900,
+      alreadyProcessed: true,
+    })
+
+    const scheduler = new ComputeBillingScheduler(prisma)
+    await scheduler.runNow({ noPause: true })
+
+    // Advance clock 1h
+    const originalNow = Date.now
+    const originalDate = Date
+    try {
+      const future = originalNow() + 60 * 60 * 1000
+      Date.now = () => future
+      // @ts-expect-error override
+      globalThis.Date = class extends originalDate {
+        constructor(...args: unknown[]) {
+          if (args.length === 0) super(future)
+          else super(...(args as []))
+        }
+        static now() { return future }
+      }
+
+      computeDebitMock.mockResolvedValueOnce({
+        success: true,
+        balanceCents: 99_800,
+        alreadyProcessed: false,
+      })
+
+      await scheduler.runNow({ noPause: true })
+
+      // Second debit must be for 1h (60c) only — NOT 3h (180c) because
+      // the first run mirrored locally and advanced lastBilledAt.
+      const secondCall = computeDebitMock.mock.calls[1][0]
+      expect(secondCall.amountCents).toBe(60)
+      expect(secondCall.description).toMatch(/1h/)
+    } finally {
+      Date.now = originalNow
+      // @ts-expect-error restore
+      globalThis.Date = originalDate
     }
   })
 })
