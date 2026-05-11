@@ -2,7 +2,7 @@
 # Note: Using Debian-based images instead of Alpine for Prisma 6.x WASM compatibility
 
 # Stage 1: Dependencies
-FROM node:22-slim AS deps
+FROM node:26-slim AS deps
 WORKDIR /app/service-cloud-api
 
 # build-essential, python3, and make are required so node-gyp can compile
@@ -31,7 +31,7 @@ RUN pnpm install --frozen-lockfile
 RUN node -e "require('node-pty'); console.log('node-pty loaded OK')"
 
 # Stage 2: Builder
-FROM node:22-slim AS builder
+FROM node:26-slim AS builder
 WORKDIR /app/service-cloud-api
 
 RUN apt-get update && \
