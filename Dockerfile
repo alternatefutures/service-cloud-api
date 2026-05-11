@@ -58,7 +58,7 @@ RUN pnpm run build
 RUN pnpm prune --prod
 
 # Stage 3: Production Runner (Ubuntu 24.04 for GLIBC 2.39 - needed by provider-services)
-FROM ubuntu:24.04 AS runner
+FROM ubuntu:26.04 AS runner
 WORKDIR /app/service-cloud-api
 
 # Install Node.js 22 and system dependencies
