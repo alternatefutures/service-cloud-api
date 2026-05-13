@@ -38,6 +38,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type {
   DeploymentProvider,
+  DeploymentProviderDescriptor,
   DeployOptions,
   DeploymentResult,
   DeploymentStatusResult,
@@ -75,6 +76,36 @@ function mapStatus(nativeStatus: string): ProviderStatus {
   return SPHERON_STATUS_MAP[nativeStatus] ?? 'failed'
 }
 
+/**
+ * Spheron diverges from Akash/Phala: hourly billing accrues from the
+ * moment we POST to upstream, so CREATING/STARTING are user-visible as
+ * "this VM is running for me right now". Reflected in `liveStatuses`
+ * + the `activeSpheronDeployment` GraphQL field resolver.
+ */
+export const SPHERON_DESCRIPTOR: DeploymentProviderDescriptor = {
+  name: 'spheron',
+  prismaModel: 'spheronDeployment',
+  liveStatuses: ['CREATING', 'STARTING', 'ACTIVE'],
+  pendingStatuses: [], // CREATING/STARTING already live
+  failedStatuses: ['FAILED', 'PERMANENTLY_FAILED'],
+  terminalStatuses: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'],
+  // STOPPED Spheron rows still have a paid VM upstream (20-min minimum
+  // runtime preserves savedCloudInit for resume); FAILED rows may also
+  // need a close() to flush upstream. DELETED rows are already done.
+  needsCleanupStatuses: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'],
+  unifiedStatusMap: {
+    CREATING: 'INITIALIZING',
+    STARTING: 'DEPLOYING',
+    ACTIVE: 'ACTIVE',
+    FAILED: 'FAILED',
+    STOPPED: 'STOPPED',
+    DELETED: 'REMOVED',
+    PERMANENTLY_FAILED: 'PERMANENTLY_FAILED',
+  },
+  displayName: 'Spheron',
+  computeKind: 'Standard',
+}
+
 // Native Spheron statuses that mean the VM is intentionally gone — the
 // sweeper's `close_gone` path should run regardless of whether a queryable
 // row still exists upstream. `terminated-provider` is the SPOT-reclaim
@@ -88,6 +119,7 @@ const SPHERON_GONE_NATIVE_STATUSES = new Set<string>([
 export class SpheronProvider implements DeploymentProvider {
   readonly name = 'spheron'
   readonly displayName = 'Spheron'
+  readonly descriptor = SPHERON_DESCRIPTOR
 
   constructor(private prisma: PrismaClient) {}
 
@@ -727,6 +759,28 @@ export class SpheronProvider implements DeploymentProvider {
       configFormat: 'custom',
       billingModel: 'hourly',
     }
+  }
+
+  extractImage(deployment: Record<string, unknown>): string | null {
+    const compose = typeof deployment.composeContent === 'string'
+      ? deployment.composeContent
+      : null
+    if (!compose) return null
+    const match = compose.match(/image:\s*["']?([^\s"']+)/)
+    return match ? match[1] : null
+  }
+
+  describeUnifiedStatus(
+    deployment: { status: string; errorMessage?: string | null } & Record<string, unknown>,
+  ): string | null {
+    if (deployment.errorMessage) return String(deployment.errorMessage)
+    if (deployment.status === 'ACTIVE') {
+      const provider = typeof deployment.provider === 'string' ? deployment.provider : ''
+      const region = typeof deployment.region === 'string' ? deployment.region : ''
+      return `Running on ${provider || 'Spheron'}${region ? ` (${region})` : ''}`
+    }
+    if (deployment.status === 'STOPPED') return 'Stopped (low balance)'
+    return null
   }
 }
 

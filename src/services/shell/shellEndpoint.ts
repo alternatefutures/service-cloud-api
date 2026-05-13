@@ -21,7 +21,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IncomingMessage } from 'http'
 import type { PrismaClient } from '@prisma/client'
 import jwt from 'jsonwebtoken'
-import { getProvider } from '../providers/registry.js'
+import { findActiveDeploymentForService } from '../providers/registry.js'
 import type { ShellSession } from '../providers/types.js'
 import { createLogger } from '../../lib/logger.js'
 
@@ -281,47 +281,19 @@ export class ShellEndpoint {
       return
     }
 
-    // Resolve active deployment and its provider type
+    // Resolve the live deployment via the provider registry. Each provider's
+    // descriptor.liveStatuses defines the filter, so Akash/Phala match ACTIVE
+    // only and Spheron matches CREATING/STARTING/ACTIVE.
     const deploymentServiceId = service.parentServiceId || serviceId
+    const found = await findActiveDeploymentForService(this.prisma, deploymentServiceId)
 
-    const akashDep = await this.prisma.akashDeployment.findFirst({
-      where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
-      orderBy: { createdAt: 'desc' },
-    })
-
-    const phalaDep = !akashDep
-      ? await this.prisma.phalaDeployment.findFirst({
-          where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
-          orderBy: { createdAt: 'desc' },
-        })
-      : null
-
-    // Phase 50 added Spheron — without this branch `af ssh` reported
-    // "No active deployment found" for every Spheron VM even though the
-    // VM was up and reachable on its provider IP/port.
-    const spheronDep = !akashDep && !phalaDep
-      ? await this.prisma.spheronDeployment.findFirst({
-          where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
-          orderBy: { createdAt: 'desc' },
-        })
-      : null
-
-    const deployment = akashDep || phalaDep || spheronDep
-    const providerName = akashDep
-      ? 'akash'
-      : phalaDep
-        ? 'phala'
-        : spheronDep
-          ? 'spheron'
-          : null
-
-    if (!deployment || !providerName) {
+    if (!found) {
       sendJson(ws, { type: 'error', message: 'No active deployment found for this service' })
       ws.close(1008, 'No deployment')
       return
     }
 
-    const provider = getProvider(providerName)
+    const { provider, deployment } = found
     const capabilities = provider.getCapabilities()
 
     if (!capabilities.supportsShell || !provider.getShell) {
@@ -349,7 +321,7 @@ export class ShellEndpoint {
 
     trackSession(userId, ws)
     log.info(
-      { userId, serviceId, providerType: providerName, deploymentId: deployment.id },
+      { userId, serviceId, providerType: provider.name, deploymentId: deployment.id },
       'SHELL_OPEN'
     )
 
@@ -374,7 +346,7 @@ export class ShellEndpoint {
       untrackSession(userId, ws)
       const durationSec = Math.round((Date.now() - startTime) / 1000)
       log.info(
-        { userId, serviceId, providerType: providerName, reason, duration: durationSec },
+        { userId, serviceId, providerType: provider.name, reason, duration: durationSec },
         'SHELL_CLOSE'
       )
       if (ws.readyState === WebSocket.OPEN) {
