@@ -54,12 +54,15 @@ import { createLogger } from '../../lib/logger.js'
 import { DEFAULT_MONTHLY_MARGIN } from '../../config/pricing.js'
 import { getSpheronClient, type SpheronGpuOffer, type SpheronGpuOfferGroup } from './client.js'
 import { canonicalizeSpheronGpuType } from './canonicalize.js'
+import { clusterMatchesBucket } from './offerPicker.js'
 
 const log = createLogger('spheron-gpu-availability-endpoint')
 
 const PAGE_LIMIT = 100
 const MAX_PAGES = 5
 const RESPONSE_CACHE_TTL_MS = 60_000
+
+const VALID_REGION_BUCKETS = new Set(['us-east', 'us-west', 'eu', 'asia'])
 
 interface AggregatedGroup {
   value: string
@@ -69,6 +72,12 @@ interface AggregatedGroup {
   offerCount: number
   providersWithAvailability: number
   clustersWithAvailability: number
+  /**
+   * Phase 51 — providers in the requested region bucket. `null` when
+   * the caller didn't pass `?region=`. The merged dropdown uses this
+   * to disable rows that are available elsewhere but not here.
+   */
+  inRegionProviders: number | null
   minPriceUsdPerHour: number
   maxPriceUsdPerHour: number
   interconnectTypes: string[]
@@ -78,16 +87,20 @@ interface AggregatedGroup {
 interface CachedResponse {
   generatedAt: string
   marginRate: number
+  region: string | null
   count: number
   groups: AggregatedGroup[]
 }
 
-let _cache: { at: number; payload: CachedResponse } | null = null
+// Cache keyed by region bucket. `null` = no-region request.
+const _cache = new Map<string, { at: number; payload: CachedResponse }>()
 
-function cacheIsFresh(): CachedResponse | null {
-  if (!_cache) return null
-  if (Date.now() - _cache.at > RESPONSE_CACHE_TTL_MS) return null
-  return _cache.payload
+function cacheIsFresh(region: string | null): CachedResponse | null {
+  const key = region ?? '__any__'
+  const entry = _cache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.at > RESPONSE_CACHE_TTL_MS) return null
+  return entry.payload
 }
 
 /**
@@ -154,22 +167,32 @@ function applyMargin(usdPerHour: number): number {
  * Akash) ends up on a different row from an 80 GB A100. This mirrors the
  * locked design in `handoffs/2026-05-10_1330_spheron-gpu-dropdown-design-locked.md`
  * (split rows on VRAM disagreement).
+ *
+ * `regionFilter` (Phase 51) — when non-null, populates each row's
+ * `inRegionProviders` with the count of distinct providers offering
+ * the SKU in at least one cluster matching the bucket. Total counts
+ * are unaffected so the merged dropdown can show "available elsewhere
+ * but not in {region}" rows as disabled instead of hidden.
  */
-function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
+function aggregate(
+  groups: SpheronGpuOfferGroup[],
+  regionFilter: string | null,
+): AggregatedGroup[] {
   type AggKey = string
   const byKey = new Map<AggKey, {
     slug: string
     vramGi: number | null
     offers: SpheronGpuOffer[]
     providers: Set<string>
+    providersInRegion: Set<string>
     clusters: Set<string>
     interconnectTypes: Set<string>
     spheronGpuTypes: Set<string>
   }>()
 
   for (const group of groups) {
-    const groupSlug = canonicalizeSpheronGpuType(group.gpuType ?? '')
-    if (!groupSlug) continue
+    const slug = canonicalizeSpheronGpuType(group.gpuType ?? '')
+    if (!slug) continue
     for (const offer of group.offers) {
       if (!offer.available) continue
       if (!offer.supportsCloudInit) continue
@@ -178,11 +201,11 @@ function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
       const vramGi = Number.isFinite(offer.gpu_memory) && offer.gpu_memory > 0
         ? offer.gpu_memory
         : null
-      // Use the offer-derived slug if it disagrees with the group slug
-      // (rare — covers cases where a group bundles multiple SKUs that
-      // diverge after canonicalisation). Falls back to group slug.
-      const offerSlug = canonicalizeSpheronGpuType(offer.name ?? '') || groupSlug
-      const slug = offerSlug || groupSlug
+      // Bucket strictly by `group.gpuType` — that's Spheron's authoritative
+      // SKU token (e.g. "B200_SXM6", "L40S_PCIE") and canonicalises cleanly.
+      // Earlier code also tried `offer.name` ("1x L40S_PCIE - 1gpu-16vcpu-96gb
+      // (EU North 1) (Spot)") which never matches the suffix patterns and
+      // bled raw marketing strings into the dropdown labels.
       const key: AggKey = `${slug}::${vramGi ?? 'null'}`
       let entry = byKey.get(key)
       if (!entry) {
@@ -191,6 +214,7 @@ function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
           vramGi,
           offers: [],
           providers: new Set(),
+          providersInRegion: new Set(),
           clusters: new Set(),
           interconnectTypes: new Set(),
           spheronGpuTypes: new Set(),
@@ -199,6 +223,15 @@ function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
       }
       entry.offers.push(offer)
       if (offer.provider) entry.providers.add(offer.provider)
+      // An offer is "in region" if ANY of its clusters matches the
+      // bucket. Mirrors the picker's tolerance — a multi-cluster offer
+      // surfaces as available in every region it spans.
+      if (regionFilter && offer.provider) {
+        const inRegion = (offer.clusters ?? []).some(c =>
+          c ? clusterMatchesBucket(c, regionFilter) : false,
+        )
+        if (inRegion) entry.providersInRegion.add(offer.provider)
+      }
       for (const c of offer.clusters ?? []) {
         if (c) entry.clusters.add(c)
       }
@@ -221,6 +254,7 @@ function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
       offerCount: entry.offers.length,
       providersWithAvailability: entry.providers.size,
       clustersWithAvailability: entry.clusters.size,
+      inRegionProviders: regionFilter ? entry.providersInRegion.size : null,
       minPriceUsdPerHour: applyMargin(minRaw),
       maxPriceUsdPerHour: applyMargin(maxRaw),
       interconnectTypes: Array.from(entry.interconnectTypes).sort(),
@@ -238,7 +272,7 @@ function aggregate(groups: SpheronGpuOfferGroup[]): AggregatedGroup[] {
   return out
 }
 
-async function buildResponse(): Promise<CachedResponse> {
+async function buildResponse(region: string | null): Promise<CachedResponse> {
   const client = getSpheronClient()
   if (!client) {
     throw Object.assign(new Error('spheron-disabled'), { code: 'spheron-disabled' })
@@ -257,10 +291,11 @@ async function buildResponse(): Promise<CachedResponse> {
     if (page >= response.totalPages) break
   }
 
-  const aggregated = aggregate(groups)
+  const aggregated = aggregate(groups, region)
   return {
     generatedAt: new Date().toISOString(),
     marginRate: DEFAULT_MONTHLY_MARGIN,
+    region,
     count: aggregated.length,
     groups: aggregated,
   }
@@ -280,14 +315,19 @@ export async function handleSpheronGpuAvailabilityRequest(
   }
 
   try {
-    const cached = cacheIsFresh()
+    const url = new URL(req.url || '/', `http://${req.headers.host}`)
+    const rawRegion = url.searchParams.get('region')
+    const region =
+      rawRegion && VALID_REGION_BUCKETS.has(rawRegion) ? rawRegion : null
+
+    const cached = cacheIsFresh(region)
     if (cached) {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(cached))
       return
     }
-    const payload = await buildResponse()
-    _cache = { at: Date.now(), payload }
+    const payload = await buildResponse(region)
+    _cache.set(region ?? '__any__', { at: Date.now(), payload })
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(payload))
   } catch (err) {
@@ -309,5 +349,5 @@ export async function handleSpheronGpuAvailabilityRequest(
 
 /** Test-only — bust the in-memory cache between runs. */
 export function _resetSpheronGpuAvailabilityCache(): void {
-  _cache = null
+  _cache.clear()
 }

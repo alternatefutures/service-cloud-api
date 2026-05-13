@@ -58,6 +58,28 @@ export const healthQueries = {
       }
     }
 
+    // Phase 50 added Spheron-backed deployments. Without this branch the
+    // resolver returned null for every Spheron service → the UI's
+    // Provider Health card stayed blank even when the VM was running.
+    // Match the live Spheron statuses (`activeSpheronDeployment` returns
+    // CREATING/STARTING/ACTIVE) so health appears as soon as the VM is
+    // requested, not only after it goes ACTIVE.
+    const spheronDeployment = await context.prisma.spheronDeployment.findFirst({
+      where: {
+        serviceId: deploymentServiceId,
+        status: { in: ['CREATING', 'STARTING', 'ACTIVE'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    if (spheronDeployment) {
+      const { getProvider } = await import('../services/providers/registry.js')
+      const spheron = getProvider('spheron')
+      if (spheron.getHealth) {
+        return spheron.getHealth(spheronDeployment.id)
+      }
+    }
+
     return null
   },
 }

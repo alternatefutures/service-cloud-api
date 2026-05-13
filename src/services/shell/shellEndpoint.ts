@@ -296,8 +296,24 @@ export class ShellEndpoint {
         })
       : null
 
-    const deployment = akashDep || phalaDep
-    const providerName = akashDep ? 'akash' : phalaDep ? 'phala' : null
+    // Phase 50 added Spheron — without this branch `af ssh` reported
+    // "No active deployment found" for every Spheron VM even though the
+    // VM was up and reachable on its provider IP/port.
+    const spheronDep = !akashDep && !phalaDep
+      ? await this.prisma.spheronDeployment.findFirst({
+          where: { serviceId: deploymentServiceId, status: 'ACTIVE' },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null
+
+    const deployment = akashDep || phalaDep || spheronDep
+    const providerName = akashDep
+      ? 'akash'
+      : phalaDep
+        ? 'phala'
+        : spheronDep
+          ? 'spheron'
+          : null
 
     if (!deployment || !providerName) {
       sendJson(ws, { type: 'error', message: 'No active deployment found for this service' })
