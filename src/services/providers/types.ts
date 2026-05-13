@@ -183,6 +183,14 @@ export interface DeploymentProvider {
   /** Human-readable display name. */
   readonly displayName: string
 
+  /**
+   * Provider metadata + native status taxonomy. The registry uses this
+   * to drive the cross-provider helpers (`findActiveDeploymentForService`,
+   * `findRecentDeploymentsForService`, etc.) without per-call-site
+   * if/else chains.
+   */
+  readonly descriptor: DeploymentProviderDescriptor
+
   /** Whether this provider is currently configured and operational. */
   isAvailable(): boolean
 
@@ -243,6 +251,24 @@ export interface DeploymentProvider {
   getHealth(deploymentId: string): Promise<DeploymentHealthResult | null>
 
   /**
+   * Extract a primary container image reference from a deployment row,
+   * if one can be inferred from the provider's stored config blob
+   * (SDL for Akash, compose for Phala/Spheron). Used by the unified
+   * `allDeployments` resolver to surface "what's running" without
+   * per-provider casework in the resolver. Optional — defaults to null.
+   */
+  extractImage?(deployment: Record<string, unknown>): string | null
+
+  /**
+   * Render a friendly status message for the unified timeline. Each
+   * provider can return its own copy ("Running on Akash", "Spheron 20-min
+   * floor blocking"); falls back to deployment.errorMessage if omitted.
+   */
+  describeUnifiedStatus?(
+    deployment: { status: string; errorMessage?: string | null } & Record<string, unknown>,
+  ): string | null
+
+  /**
    * Get deployment logs.
    */
   getLogs(deploymentId: string, opts?: LogOptions): Promise<string>
@@ -286,6 +312,97 @@ export interface ProviderCapabilities {
   configFormat: 'sdl' | 'compose' | 'manifest' | 'custom'
   /** Billing model. */
   billingModel: 'escrow' | 'hourly' | 'per-block' | 'prepaid' | 'custom'
+}
+
+// ─── Provider descriptor (status sets + Prisma model) ────────────
+// Every provider declares its native status taxonomy and the Prisma
+// model that stores its deployments. The registry uses this to answer
+// "is service X live on any provider", "fetch the active deployment for
+// service X", and "map a native status to the unified
+// DeploymentLifecycle". Mirror new providers into
+// web-app/lib/providers/serviceState.ts and
+// package-cloud-cli/src/utils/serviceState.ts.
+
+/**
+ * Unified deployment lifecycle states surfaced in the UI / CLI.
+ * Every provider's native statuses map to one of these via
+ * `descriptor.unifiedStatusMap`. Extending this set forces every consumer
+ * to update its icon + label tables.
+ */
+export type DeploymentLifecycle =
+  | 'INITIALIZING'  // record created, no provider call yet
+  | 'QUEUED'        // waiting for upstream resource (bids, slot, etc.)
+  | 'DEPLOYING'     // provider has accepted, container coming up
+  | 'ACTIVE'        // running and billable
+  | 'STOPPED'       // intentionally paused (Phala stop, Spheron threshold pause)
+  | 'FAILED'        // provider rejected or container failed (recoverable)
+  | 'REMOVED'       // permanently deleted / lease closed
+  | 'PERMANENTLY_FAILED' // failed and cannot recover (e.g. failover cap exhausted)
+
+export interface DeploymentProviderDescriptor {
+  /** Provider key (matches `DeploymentProvider.name`). */
+  name: string
+
+  /**
+   * Name of the Prisma model that stores this provider's deployment rows.
+   * Used by registry helpers to do `prisma[descriptor.prismaModel].findFirst(...)`
+   * without an `if/else` chain.
+   */
+  prismaModel: 'akashDeployment' | 'phalaDeployment' | 'spheronDeployment'
+
+  /**
+   * Native statuses that mean "live & billable in the UI/billing sense".
+   * Spheron includes CREATING/STARTING because hourly billing accrues
+   * the moment we POST to upstream; Akash + Phala only bill once they
+   * reach ACTIVE. The `activeXDeployment` GraphQL field resolver
+   * filters its query by exactly this set.
+   */
+  liveStatuses: readonly string[]
+
+  /**
+   * Native statuses that mean "deployment is mid-flight, do not allow
+   * the user to mutate config / delete the service". Used by the
+   * `updateService` and `deleteService` guards.
+   */
+  pendingStatuses: readonly string[]
+
+  /**
+   * Native statuses that mean "permanently failed; recover by close +
+   * re-deploy". The sweeper's `close_gone` path syncs these.
+   */
+  failedStatuses: readonly string[]
+
+  /**
+   * Native statuses that mean "no longer running, no further action".
+   * Excluded from `findActiveDeploymentForService` and `liveServicesCount`.
+   */
+  terminalStatuses: readonly string[]
+
+  /**
+   * Statuses where the deployment row has been moved out of the "live"
+   * set but the upstream resource may still exist — for example, a Phala
+   * CVM in STOPPED state still consumes a slot until DELETE, and a FAILED
+   * Akash row can still have an on-chain lease that needs `close`-ing.
+   *
+   * Consumed by `deleteService` to best-effort `provider.close()` each
+   * orphan before destroying the service row, so adding a new provider
+   * doesn't leak upstream resources.
+   */
+  needsCleanupStatuses: readonly string[]
+
+  /**
+   * Map every known native status to the unified DeploymentLifecycle.
+   * Consumers (allDeployments resolver, web-app StatusBadge, CLI list)
+   * should consult this rather than maintaining their own switches.
+   */
+  unifiedStatusMap: Record<string, DeploymentLifecycle>
+
+  /**
+   * Display strings. `computeKind` is the Compute column value in the
+   * CLI + web-app workspace ("Standard" vs "Confidential").
+   */
+  displayName: string
+  computeKind: 'Standard' | 'Confidential'
 }
 
 // ─── Provider factory ────────────────────────────────────────────

@@ -15,6 +15,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type {
   DeploymentProvider,
+  DeploymentProviderDescriptor,
   DeployOptions,
   DeploymentResult,
   DeploymentStatusResult,
@@ -46,11 +47,36 @@ function mapStatus(nativeStatus: string): ProviderStatus {
   return PHALA_STATUS_MAP[nativeStatus] ?? 'failed'
 }
 
+export const PHALA_DESCRIPTOR: DeploymentProviderDescriptor = {
+  name: 'phala',
+  prismaModel: 'phalaDeployment',
+  liveStatuses: ['ACTIVE'],
+  pendingStatuses: ['CREATING', 'STARTING'],
+  failedStatuses: ['FAILED', 'PERMANENTLY_FAILED'],
+  terminalStatuses: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'],
+  // STOPPED CVMs still consume a Phala-side slot until DELETE; FAILED
+  // and PERMANENTLY_FAILED may also have stranded CVMs that close()
+  // will reap. DELETED rows are already cleaned up.
+  needsCleanupStatuses: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'],
+  unifiedStatusMap: {
+    CREATING: 'INITIALIZING',
+    STARTING: 'DEPLOYING',
+    ACTIVE: 'ACTIVE',
+    FAILED: 'FAILED',
+    STOPPED: 'STOPPED',
+    DELETED: 'REMOVED',
+    PERMANENTLY_FAILED: 'PERMANENTLY_FAILED',
+  },
+  displayName: 'Phala Cloud (TEE)',
+  computeKind: 'Confidential',
+}
+
 const log = createLogger('phala-provider')
 
 export class PhalaProvider implements DeploymentProvider {
   readonly name = 'phala'
   readonly displayName = 'Phala Cloud (TEE)'
+  readonly descriptor = PHALA_DESCRIPTOR
 
   constructor(private prisma: PrismaClient) {}
 
@@ -429,6 +455,23 @@ export class PhalaProvider implements DeploymentProvider {
       configFormat: 'compose',
       billingModel: 'hourly',
     }
+  }
+
+  extractImage(_deployment: Record<string, unknown>): string | null {
+    // Phala stores docker-compose YAML in PhalaDeployment.composeContent
+    // (column added in a later migration). Today the column isn't
+    // populated for all historical rows so we don't try to parse —
+    // null is honest until that's settled.
+    return null
+  }
+
+  describeUnifiedStatus(
+    deployment: { status: string; errorMessage?: string | null },
+  ): string | null {
+    if (deployment.errorMessage) return deployment.errorMessage
+    if (deployment.status === 'ACTIVE') return 'Running on Phala TEE'
+    if (deployment.status === 'STOPPED') return 'Stopped'
+    return null
   }
 }
 

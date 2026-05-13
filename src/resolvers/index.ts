@@ -8,6 +8,15 @@ import type { StorageType } from '../services/storage/factory.js'
 import { deploymentEvents } from '../services/events/index.js'
 import { subscriptionHealthMonitor } from '../services/monitoring/subscriptionHealthCheck.js'
 import { getBillingApiClient } from '../services/billing/billingApiClient.js'
+import {
+  countActiveDeploymentsForProjects,
+  countTotalDeploymentsForProjects,
+  findActiveOrPendingDeploymentForService,
+  findAllNonTerminalDeploymentsForService,
+  findRecentDeploymentsForProjects,
+  getAllProviders,
+} from '../services/providers/registry.js'
+import { AKASH_PENDING_STATUSES } from '../services/providers/akashProvider.js'
 import { chatResolvers } from './chat.js'
 import { feedbackMutations } from './feedback.js'
 import { domainQueries, domainMutations } from './domain.js'
@@ -48,7 +57,6 @@ import { healthQueries } from './health.js'
 import { StorageTracker } from '../services/billing/storageTracker.js'
 import type { Context } from './types.js'
 import { requireAuth, assertProjectAccess } from '../utils/authorization.js'
-import { getAkashOrchestrator } from '../services/akash/orchestrator.js'
 import { getOrgHourlyBurnCents } from './balanceCheck.js'
 
 export type { Context }
@@ -764,31 +772,18 @@ export const resolvers = {
         : '--'
 
       // ── Deployment Metrics ────────────────────────────────────────
-      const activePhalaCount = await context.prisma.phalaDeployment.count({
-        where: {
-          status: 'ACTIVE',
-          service: { projectId: { in: projectIds } },
-        },
-      })
-      const activeSpheronCount = await context.prisma.spheronDeployment.count({
-        where: {
-          status: 'ACTIVE',
-          service: { projectId: { in: projectIds } },
-        },
-      })
-
-      const totalAkash = await context.prisma.akashDeployment.count({
-        where: { service: { projectId: { in: projectIds } } },
-      })
-      const totalPhala = await context.prisma.phalaDeployment.count({
-        where: { service: { projectId: { in: projectIds } } },
-      })
-      const totalSpheron = await context.prisma.spheronDeployment.count({
-        where: { service: { projectId: { in: projectIds } } },
-      })
-
-      const activeCount = activeAkash.length + activePhalaCount + activeSpheronCount
-      const totalCount = totalAkash + totalPhala + totalSpheron
+      // Counts loop over the provider registry. Each provider's descriptor
+      // declares its liveStatuses (Akash + Phala = ACTIVE only,
+      // Spheron = CREATING/STARTING/ACTIVE because hourly billing is
+      // already accruing).
+      const activeCount = await countActiveDeploymentsForProjects(
+        context.prisma,
+        projectIds,
+      )
+      const totalCount = await countTotalDeploymentsForProjects(
+        context.prisma,
+        projectIds,
+      )
       const deploymentsFormatted = `${activeCount} active`
 
       // ── Spend Metrics (real ledger data from auth service) ────────
@@ -974,151 +969,50 @@ export const resolvers = {
         })
       }
 
-      // 3. Akash Deployments (compute containers)
-      const akashDeployments = await context.prisma.akashDeployment.findMany({
-        where: {
-          service: { projectId: { in: projectIds } },
-        },
-        include: {
-          service: { select: { name: true, slug: true, type: true, projectId: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      })
-
-      for (const dep of akashDeployments) {
-        const akashStatusMap: Record<string, string> = {
-          CREATING: 'INITIALIZING',
-          WAITING_BIDS: 'QUEUED',
-          SELECTING_BID: 'QUEUED',
-          CREATING_LEASE: 'DEPLOYING',
-          SENDING_MANIFEST: 'DEPLOYING',
-          DEPLOYING: 'DEPLOYING',
-          ACTIVE: 'ACTIVE',
-          FAILED: 'FAILED',
-          CLOSED: 'REMOVED',
-          PERMANENTLY_FAILED: 'FAILED',
-          SUSPENDED: 'STOPPED',
-        }
-
-        // Try to extract image from SDL
-        const imageMatch = dep.sdlContent.match(/image:\s*["']?([^\s"']+)/)
-        const image = imageMatch ? imageMatch[1] : null
-
+      // 3-N. Compute provider deployments — loop over the provider
+      // registry so adding a new backend doesn't require a new block here.
+      // Each provider's descriptor supplies the unifiedStatusMap, and the
+      // provider class supplies extractImage/describeUnifiedStatus. The
+      // resolver's job is only the per-row shape + author info.
+      const recentByProvider = await findRecentDeploymentsForProjects(
+        context.prisma,
+        projectIds,
+        limit,
+      )
+      for (const row of recentByProvider) {
+        const dep = row.deployment as {
+          id: string
+          serviceId: string
+          createdAt: Date
+          updatedAt: Date | null
+          name?: string
+          errorMessage?: string | null
+          service?: { name?: string; slug?: string | null; type?: string; projectId?: string }
+        } & Record<string, unknown>
+        const provider = getAllProviders().find(p => p.name === row.providerName)
+        const image = provider?.extractImage?.(dep) ?? null
+        const statusMessage = provider?.describeUnifiedStatus?.({
+          status: row.nativeStatus,
+          errorMessage: dep.errorMessage ?? null,
+          ...dep,
+        }) ?? dep.errorMessage ?? null
+        const fallbackType = row.providerName === 'akash' ? 'FUNCTION' : 'VM'
         unified.push({
           id: dep.id,
           shortId: dep.id.slice(-8),
-          status: akashStatusMap[dep.status] || dep.status,
-          kind: 'AKASH',
-          serviceName: dep.service?.name || 'Service',
+          status: row.unifiedStatus,
+          kind: row.providerName.toUpperCase(),
+          serviceName: dep.service?.name || dep.name || 'Service',
           serviceId: dep.serviceId,
           serviceSlug: dep.service?.slug || null,
-          serviceType: dep.service?.type || 'FUNCTION',
+          serviceType: dep.service?.type || fallbackType,
           projectId: dep.service?.projectId || null,
-          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
+          projectName: dep.service?.projectId
+            ? projectMap.get(dep.service.projectId) || null
+            : null,
           source: 'docker',
           image,
-          statusMessage: dep.errorMessage || (dep.status === 'ACTIVE' ? 'Running on Akash' : null),
-          createdAt: dep.createdAt,
-          updatedAt: dep.updatedAt,
-          author: authorInfo,
-        })
-      }
-
-      // 4. Phala Deployments (TEE containers)
-      const phalaDeployments = await context.prisma.phalaDeployment.findMany({
-        where: {
-          service: { projectId: { in: projectIds } },
-        },
-        include: {
-          service: { select: { name: true, slug: true, type: true, projectId: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      })
-
-      for (const dep of phalaDeployments) {
-        const phalaStatusMap: Record<string, string> = {
-          CREATING: 'INITIALIZING',
-          STARTING: 'DEPLOYING',
-          ACTIVE: 'ACTIVE',
-          FAILED: 'FAILED',
-          STOPPED: 'STOPPED',
-          DELETED: 'REMOVED',
-          PERMANENTLY_FAILED: 'FAILED',
-        }
-
-        unified.push({
-          id: dep.id,
-          shortId: dep.id.slice(-8),
-          status: phalaStatusMap[dep.status] || dep.status,
-          kind: 'PHALA',
-          serviceName: dep.service?.name || dep.name,
-          serviceId: dep.serviceId,
-          serviceSlug: dep.service?.slug || null,
-          serviceType: dep.service?.type || 'VM',
-          projectId: dep.service?.projectId || null,
-          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
-          source: 'docker',
-          image: null,
-          statusMessage: dep.errorMessage || (dep.status === 'ACTIVE' ? 'Running on Phala TEE' : dep.status === 'STOPPED' ? 'Stopped' : null),
-          createdAt: dep.createdAt,
-          updatedAt: dep.updatedAt,
-          author: authorInfo,
-        })
-      }
-
-      // 5. Spheron Deployments (GPU VMs via cloudInit + SSH)
-      const spheronDeployments = await context.prisma.spheronDeployment.findMany({
-        where: {
-          service: { projectId: { in: projectIds } },
-        },
-        include: {
-          service: { select: { name: true, slug: true, type: true, projectId: true } },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      })
-
-      for (const dep of spheronDeployments) {
-        const spheronStatusMap: Record<string, string> = {
-          CREATING: 'INITIALIZING',
-          STARTING: 'DEPLOYING',
-          ACTIVE: 'ACTIVE',
-          FAILED: 'FAILED',
-          STOPPED: 'STOPPED',
-          DELETED: 'REMOVED',
-          PERMANENTLY_FAILED: 'FAILED',
-        }
-
-        // Extract image from compose YAML when available — same shape as
-        // the Akash row's `image:` regex so the unified list is consistent.
-        let image: string | null = null
-        if (dep.composeContent) {
-          const imageMatch = dep.composeContent.match(/image:\s*["']?([^\s"']+)/)
-          image = imageMatch ? imageMatch[1] : null
-        }
-
-        unified.push({
-          id: dep.id,
-          shortId: dep.id.slice(-8),
-          status: spheronStatusMap[dep.status] || dep.status,
-          kind: 'SPHERON',
-          serviceName: dep.service?.name || dep.name,
-          serviceId: dep.serviceId,
-          serviceSlug: dep.service?.slug || null,
-          serviceType: dep.service?.type || 'VM',
-          projectId: dep.service?.projectId || null,
-          projectName: dep.service?.projectId ? (projectMap.get(dep.service.projectId) || null) : null,
-          source: 'docker',
-          image,
-          statusMessage:
-            dep.errorMessage ||
-            (dep.status === 'ACTIVE'
-              ? `Running on ${dep.provider} (${dep.region})`
-              : dep.status === 'STOPPED'
-              ? 'Stopped (low balance)'
-              : null),
+          statusMessage,
           createdAt: dep.createdAt,
           updatedAt: dep.updatedAt,
           author: authorInfo,
@@ -1774,16 +1668,9 @@ export const resolvers = {
       // Block edits while any deployment is mid-flight on Akash. ACTIVE/FAILED/
       // CLOSED/SUSPENDED/PERMANENTLY_FAILED are fine — the change applies on
       // the next redeploy. Mirrors how Railway queues source changes.
-      const inFlight: string[] = [
-        'CREATING',
-        'WAITING_BIDS',
-        'SELECTING_BID',
-        'CREATING_LEASE',
-        'SENDING_MANIFEST',
-        'DEPLOYING',
-      ]
+      // Pending status set lives on AKASH_DESCRIPTOR.
       const blockingDeployment = service.akashDeployments.find(d =>
-        inFlight.includes(d.status as unknown as string)
+        AKASH_PENDING_STATUSES.includes(d.status as unknown as string)
       )
       if (blockingDeployment) {
         throw new GraphQLError(
@@ -2202,21 +2089,6 @@ export const resolvers = {
         where: { id },
         include: {
           project: { select: { userId: true, organizationId: true } },
-          akashDeployments: {
-            where: { status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'] } },
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-          },
-          phalaDeployments: {
-            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] } },
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-          },
-          spheronDeployments: {
-            where: { status: { notIn: ['DELETED', 'STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] } },
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-          },
         },
       })
 
@@ -2226,101 +2098,52 @@ export const resolvers = {
 
       assertProjectAccess(context, (service as any).project, 'Not authorized to delete this service')
 
-      // Guard: block deletion if any provider has an active/in-progress deployment
-      const activeAkash = service.akashDeployments[0]
-      if (activeAkash) {
+      // Guard: block deletion if any provider has a non-terminal deployment.
+      // Each provider's descriptor.terminalStatuses defines what counts as
+      // "done"; everything else blocks delete and the user must close
+      // first.
+      const nonTerminal = await findAllNonTerminalDeploymentsForService(
+        context.prisma,
+        id,
+      )
+      if (nonTerminal.length > 0) {
+        const dep = nonTerminal[0]
         throw new GraphQLError(
-          `Cannot delete "${service.name}" — it has an active Akash deployment (${activeAkash.status}). Close the deployment first.`
+          `Cannot delete "${service.name}" — it has an active ${dep.provider.displayName} deployment (${dep.deployment.status}). Close the deployment first.`
         )
       }
 
-      const activePhala = service.phalaDeployments[0]
-      if (activePhala) {
-        throw new GraphQLError(
-          `Cannot delete "${service.name}" — it has an active Phala deployment (${activePhala.status}). Stop or delete the deployment first.`
-        )
-      }
-
-      const activeSpheron = service.spheronDeployments[0]
-      if (activeSpheron) {
-        throw new GraphQLError(
-          `Cannot delete "${service.name}" — it has an active Spheron deployment (${activeSpheron.status}). Delete the deployment first.`
-        )
-      }
-
-      // Best-effort: close any orphaned on-chain deployments before deleting
-      const orphanedAkash = await context.prisma.akashDeployment.findMany({
-        where: {
-          serviceId: id,
-          status: { in: ['FAILED', 'PERMANENTLY_FAILED'] },
-        },
-        select: { id: true, dseq: true },
-      })
-      for (const dep of orphanedAkash) {
-        if (dep.dseq && Number(dep.dseq) > 0) {
+      // Best-effort: close orphaned deployments before destroying the
+      // service row. Each provider's `close()` is idempotent (no-op when
+      // already terminal) and handles its own quirks (Akash on-chain
+      // close, Phala CVM delete, Spheron 20-min minimum-runtime defer).
+      // The descriptor.needsCleanupStatuses set determines which rows
+      // get cleaned — adding a new provider only requires populating
+      // that field on its descriptor.
+      for (const provider of getAllProviders()) {
+        const { descriptor } = provider
+        if (descriptor.needsCleanupStatuses.length === 0) continue
+        const model = (context.prisma as unknown as Record<string, {
+          findMany: (args: unknown) => Promise<Array<{ id: string }>>
+        }>)[descriptor.prismaModel]
+        const orphans = await model.findMany({
+          where: { serviceId: id, status: { in: descriptor.needsCleanupStatuses } },
+          select: { id: true },
+        })
+        for (const orphan of orphans) {
           try {
-            const orchestrator = getAkashOrchestrator(context.prisma)
-            await orchestrator.closeDeployment(Number(dep.dseq))
-          } catch {
-            // Non-fatal — the dseq may already be closed on-chain
+            await provider.close(orphan.id)
+          } catch (err) {
+            // Non-fatal — the upstream resource may already be gone,
+            // or the provider has a deferred cleanup path (e.g. Spheron
+            // 20-min floor → sweeper retries).
+            console.warn(
+              `[deleteService] best-effort cleanup failed for ${provider.name} deployment ${orphan.id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            )
           }
         }
-        await context.prisma.akashDeployment.update({
-          where: { id: dep.id },
-          data: { status: 'CLOSED', closedAt: new Date() },
-        })
-      }
-
-      // Best-effort: delete stopped/orphaned Phala CVMs before deleting service.
-      // Stopping a Phala CVM does not delete it, so service deletion must clean
-      // up STOPPED rows too.
-      const orphanedPhala = await context.prisma.phalaDeployment.findMany({
-        where: {
-          serviceId: id,
-          status: { in: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] },
-        },
-        select: { id: true, appId: true },
-      })
-      for (const dep of orphanedPhala) {
-        if (dep.appId && dep.appId !== 'pending') {
-          try {
-            const { getPhalaOrchestrator } = await import('../services/phala/index.js')
-            const orchestrator = getPhalaOrchestrator(context.prisma)
-            await orchestrator.deletePhalaDeployment(dep.appId)
-          } catch {
-            // Non-fatal — the CVM may already be deleted
-          }
-        }
-        await context.prisma.phalaDeployment.update({
-          where: { id: dep.id },
-          data: { status: 'DELETED' },
-        })
-      }
-
-      // Same hygiene pass for Spheron — STOPPED rows still have a paid VM
-      // upstream until the sweeper or this DELETE clears them.
-      const orphanedSpheron = await context.prisma.spheronDeployment.findMany({
-        where: {
-          serviceId: id,
-          status: { in: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] },
-        },
-        select: { id: true, providerDeploymentId: true },
-      })
-      for (const dep of orphanedSpheron) {
-        if (dep.providerDeploymentId) {
-          try {
-            const { getSpheronOrchestrator } = await import('../services/spheron/index.js')
-            const orchestrator = getSpheronOrchestrator(context.prisma)
-            await orchestrator.closeDeployment(dep.providerDeploymentId)
-          } catch {
-            // Non-fatal — the VM may already be deleted, or the 20-min floor
-            // is blocking; the sweeper will catch up.
-          }
-        }
-        await context.prisma.spheronDeployment.update({
-          where: { id: dep.id },
-          data: { status: 'DELETED' },
-        })
       }
 
       await context.prisma.service.delete({ where: { id } })
@@ -2418,6 +2241,24 @@ export const resolvers = {
     },
   },
 
+  // The `Deployment` union lets a service expose its live deployment without
+  // the consumer branching on provider. `__resolveType` discriminates by
+  // Prisma row shape: `dseq` is unique to Akash, `appId` to Phala, and
+  // `offerId` / `providerDeploymentId` to Spheron. New providers extend the
+  // union with a new shape check here plus a new variant in the typeDefs
+  // union.
+  Deployment: {
+    __resolveType: (obj: Record<string, unknown>) => {
+      if (obj == null) return null
+      if (obj.dseq != null) return 'AkashDeployment'
+      if (obj.appId != null) return 'PhalaDeployment'
+      if (obj.offerId != null || obj.providerDeploymentId != null) {
+        return 'SpheronDeployment'
+      }
+      return null
+    },
+  },
+
   Service: {
     site: async (parent: any, _: unknown, context: Context) => {
       if (parent.type !== 'SITE') return null
@@ -2430,6 +2271,35 @@ export const resolvers = {
       return context.prisma.aFFunction.findUnique({
         where: { serviceId: parent.id },
       })
+    },
+    /**
+     * activeDeployment — provider-agnostic accessor for the live
+     * deployment. Returns the first non-terminal deployment across the
+     * provider registry (companion services resolve via parentServiceId,
+     * matching the legacy `activeXDeployment` fields).
+     */
+    activeDeployment: async (parent: any, _: unknown, context: Context) => {
+      const serviceId = parent.parentServiceId || parent.id
+      const found = await findActiveOrPendingDeploymentForService(
+        context.prisma,
+        serviceId,
+      )
+      if (!found) return null
+      // Akash rows carry BigInt `dseq` / `depositUakt` which would
+      // serialise as objects in GraphQL — mirror the per-provider
+      // formatter the legacy `activeAkashDeployment` resolver uses.
+      const dep = found.deployment as Record<string, unknown>
+      if (found.provider.name === 'akash') {
+        return {
+          ...dep,
+          dseq: (dep.dseq as { toString(): string }).toString(),
+          depositUakt:
+            dep.depositUakt != null
+              ? (dep.depositUakt as { toString(): string }).toString()
+              : null,
+        }
+      }
+      return dep
     },
     /**
      * applicationHealth — live read from the in-memory ring buffer maintained

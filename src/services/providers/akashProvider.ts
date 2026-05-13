@@ -16,6 +16,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type {
   DeploymentProvider,
+  DeploymentProviderDescriptor,
   DeployOptions,
   DeploymentResult,
   DeploymentStatusResult,
@@ -55,9 +56,54 @@ function mapStatus(nativeStatus: string): ProviderStatus {
   return AKASH_STATUS_MAP[nativeStatus] ?? 'failed'
 }
 
+/**
+ * Akash-native pending statuses — every step from "we submitted the
+ * TX" through "manifest pushed". The `activeAkashDeployment` GraphQL
+ * field resolver matches `ACTIVE` only; this set is for the `updateService`
+ * + `deleteService` guards that block mutations mid-flight.
+ */
+export const AKASH_PENDING_STATUSES: readonly string[] = [
+  'CREATING',
+  'WAITING_BIDS',
+  'SELECTING_BID',
+  'CREATING_LEASE',
+  'SENDING_MANIFEST',
+  'DEPLOYING',
+]
+
+export const AKASH_DESCRIPTOR: DeploymentProviderDescriptor = {
+  name: 'akash',
+  prismaModel: 'akashDeployment',
+  liveStatuses: ['ACTIVE'],
+  pendingStatuses: AKASH_PENDING_STATUSES,
+  failedStatuses: ['FAILED', 'PERMANENTLY_FAILED'],
+  terminalStatuses: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'],
+  // Akash CLOSED rows are already off-chain; FAILED/PERMANENTLY_FAILED
+  // rows may still have a dangling lease that close() will reap.
+  // SUSPENDED is deliberately excluded — those rows are resumable and
+  // owners may want to re-activate post-suspend.
+  needsCleanupStatuses: ['FAILED', 'PERMANENTLY_FAILED'],
+  unifiedStatusMap: {
+    CREATING: 'INITIALIZING',
+    WAITING_BIDS: 'QUEUED',
+    SELECTING_BID: 'QUEUED',
+    CREATING_LEASE: 'DEPLOYING',
+    SENDING_MANIFEST: 'DEPLOYING',
+    DEPLOYING: 'DEPLOYING',
+    ACTIVE: 'ACTIVE',
+    FAILED: 'FAILED',
+    CLOSED: 'REMOVED',
+    PERMANENTLY_FAILED: 'PERMANENTLY_FAILED',
+    SUSPENDED: 'STOPPED',
+  },
+  displayName: 'Akash Network',
+  computeKind: 'Standard',
+}
+
 export class AkashProvider implements DeploymentProvider {
   readonly name = 'akash'
   readonly displayName = 'Akash Network'
+  readonly descriptor = AKASH_DESCRIPTOR
 
   constructor(private prisma: PrismaClient) {}
 
@@ -408,6 +454,20 @@ export class AkashProvider implements DeploymentProvider {
       configFormat: 'sdl',
       billingModel: 'escrow',
     }
+  }
+
+  extractImage(deployment: Record<string, unknown>): string | null {
+    const sdl = typeof deployment.sdlContent === 'string' ? deployment.sdlContent : ''
+    const match = sdl.match(/image:\s*["']?([^\s"']+)/)
+    return match ? match[1] : null
+  }
+
+  describeUnifiedStatus(
+    deployment: { status: string; errorMessage?: string | null },
+  ): string | null {
+    if (deployment.errorMessage) return deployment.errorMessage
+    if (deployment.status === 'ACTIVE') return 'Running on Akash'
+    return null
   }
 }
 

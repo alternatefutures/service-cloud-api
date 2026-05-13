@@ -2636,4 +2636,27 @@ export const typeDefs = /* GraphQL */ `
     lastBuildStatus: String
     lastBuildAt: Date
   }
+
+  # ============================================
+  # PROVIDER-AGNOSTIC DEPLOYMENT UNION
+  # ============================================
+  # A single service is only ever backed by one provider at a time. This
+  # union lets the web-app / CLI fetch the live deployment without
+  # branching on provider — adding a new provider means a new variant in
+  # this union (and matching descriptor + adapter on the cloud-api side),
+  # not a new \`activeXDeployment\` field per consumer.
+  union Deployment = AkashDeployment | PhalaDeployment | SpheronDeployment
+
+  extend type Service {
+    """
+    Provider-agnostic accessor for the live deployment.
+
+    Returns the first non-terminal deployment across the provider registry,
+    using each provider's descriptor.liveStatuses + pendingStatuses set.
+    Mirrors the semantics of \`activeAkashDeployment\` / \`activePhalaDeployment\`
+    / \`activeSpheronDeployment\` (kept for backward compatibility); new
+    code should prefer this field.
+    """
+    activeDeployment: Deployment
+  }
 `
