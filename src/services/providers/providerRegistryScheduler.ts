@@ -55,19 +55,24 @@ export class ProviderRegistryScheduler {
       return
     }
 
-    // Every hour at :15 (offset from billing at :00)
-    this.cronJob = cron.schedule('15 * * * *', async () => {
+    // Every 15 minutes at :00/:15/:30/:45 — Phase 51 mitigation. The hourly
+    // cadence (Phase 24) was hiding a 0–60-min staleness window: a provider
+    // sells out at :16, our snapshot says "still 8 H100 free" until :15
+    // next hour, the dropdown advertises capacity that won't bid, the user
+    // gets a confusing "no bids" timeout. 15-min cuts the worst-case to
+    // ~16 min and pairs with the bid-probe gating in the BFF route.
+    this.cronJob = cron.schedule('*/15 * * * *', async () => {
       try {
         await this.scanProviders()
       } catch (err) {
         log.error(
           { err: err instanceof Error ? err.message : err },
-          'Hourly scan failed'
+          'Scheduled scan failed'
         )
       }
     })
 
-    log.info('Started — scans every hour at :15')
+    log.info('Started — scans every 15 minutes')
 
     // Run once immediately on startup (non-blocking)
     this.scanProviders().catch(err => {

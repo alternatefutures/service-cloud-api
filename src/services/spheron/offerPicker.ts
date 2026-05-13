@@ -44,23 +44,51 @@ import {
  * Phase 46 curated region buckets mapped to keyword regexes that match
  * Spheron upstream cluster strings.
  *
- * Real cluster strings observed in Phase H discovery (2026-04-21):
- *   - data-crunch: "Finland 3", "Iceland 1"
- *   - sesterce:    "amsterdam-netherlands-2"
- *   - voltage-park: "us-east-virginia-1"
- *   - massed-compute: "Texas-1", "California-1"
+ * Cluster strings observed live (Phase H discovery 2026-04-21 + Phase 51
+ * re-probe 2026-05-13):
+ *   - data-crunch:    "Finland 3", "Iceland 1"
+ *   - sesterce:       "amsterdam-netherlands-2", "kansascity-usa-1",
+ *                     "desmoines-usa-1", "culpeper-usa-1", "warsaw-poland-1",
+ *                     "montreal-canada-2"
+ *   - voltage-park:   "us-east-virginia-1"
+ *   - massed-compute: "Texas-1", "California-1", "us-central-2", "us-central-3"
+ *   - spheron-es:     "EU North 1", "EU West 1", "US Central 1"
+ *   - spheron-ai:     "CANADA-1"
  *
  * Update this map when a new cluster string is observed. False negatives
  * (cluster doesn't match any bucket) → that cluster is treated as "global"
  * and only included when no region filter is set. False positives (cluster
  * matches the wrong bucket) → user gets the wrong region; cheaper to fix
  * by adding a more specific regex than to silently relax the filter.
+ *
+ * Canada → us-east bucket: most live Canadian clusters today are eastern
+ * (Montreal, Toronto, Quebec). When Spheron surfaces a Vancouver/Calgary
+ * cluster we'll add it to us-west explicitly; for now the generic
+ * `\bcanada\b` and bare `\bca\b` (cluster-name token) default to us-east
+ * to avoid silently dropping them on every region-filtered query.
  */
+// Common AWS-style compound region tokens we accept on either side of
+// the more specific city/country names. Listed once and inlined so the
+// per-bucket regex stays at a single place to update.
+const COMPOUND_DIR = '(?:north|south|east|west|central|northeast|northwest|southeast|southwest)'
+
 const REGION_BUCKETS: Record<string, RegExp> = {
-  'us-east': /\b(virginia|new[-_\s]*york|nyc|new[-_\s]*jersey|nj|atlanta|miami|maryland|north[-_\s]*carolina|nc|us[-_]?east|texas|austin|dallas|chicago|illinois)\b/i,
-  'us-west': /\b(california|cali|oregon|portland|washington[-_\s]*state|wa\b|san[-_\s]*francisco|sf|los[-_\s]*angeles|\bla\b|phoenix|arizona|las[-_\s]*vegas|nevada|us[-_]?west)\b/i,
-  'eu': /\b(amsterdam|netherlands|germany|frankfurt|finland|iceland|stockholm|sweden|ireland|dublin|london|britain|uk\b|paris|france|spain|madrid|milan|italy|warsaw|poland|switzerland|swiss|denmark|copenhagen|norway|oslo|estonia|portugal|lisbon|austria|vienna|belgium|brussels|europe|euro?)\b/i,
-  'asia': /\b(singapore|sg\b|japan|tokyo|osaka|seoul|korea|india|mumbai|bangalore|chennai|hong[-_\s]*kong|hk\b|taiwan|taipei|jakarta|indonesia|bangkok|thailand|malaysia|sydney|melbourne|australia|aus\b|asia|apac)\b/i,
+  'us-east': new RegExp(
+    `\\b(virginia|new[-_\\s]*york|nyc|new[-_\\s]*jersey|nj|atlanta|miami|maryland|north[-_\\s]*carolina|nc|us[-_\\s]?east|us[-_\\s]?central|texas|austin|dallas|chicago|illinois|kansas[-_\\s]?city|des[-_\\s]?moines|culpeper|canada|montreal|toronto|quebec|ottawa)\\b`,
+    'i',
+  ),
+  'us-west': new RegExp(
+    `\\b(california|cali|oregon|portland|washington[-_\\s]*state|wa\\b|san[-_\\s]*francisco|sf|los[-_\\s]*angeles|\\bla\\b|phoenix|arizona|las[-_\\s]*vegas|nevada|us[-_\\s]?west|vancouver|calgary|edmonton)\\b`,
+    'i',
+  ),
+  'eu': new RegExp(
+    `\\b(amsterdam|netherlands|germany|frankfurt|finland|iceland|stockholm|sweden|ireland|dublin|london|britain|uk\\b|paris|france|spain|madrid|milan|italy|warsaw|poland|switzerland|swiss|denmark|copenhagen|norway|oslo|estonia|portugal|lisbon|austria|vienna|belgium|brussels|europe|euro?|eu[-_\\s]?${COMPOUND_DIR})\\b`,
+    'i',
+  ),
+  'asia': new RegExp(
+    `\\b(singapore|sg\\b|japan|tokyo|osaka|seoul|korea|india|mumbai|bangalore|chennai|hong[-_\\s]*kong|hk\\b|taiwan|taipei|jakarta|indonesia|bangkok|thailand|malaysia|sydney|melbourne|australia|aus\\b|asia|apac|ap[-_\\s]?${COMPOUND_DIR})\\b`,
+    'i',
+  ),
 }
 
 const VALID_BUCKETS = new Set(Object.keys(REGION_BUCKETS))
