@@ -42,7 +42,7 @@
     "@infisical/sdk": "^4.0.6",
     "@kubernetes/client-node": "^1.4.0",
     "@lighthouse-web3/sdk": "^0.4.3",
-    "@opentelemetry/auto-instrumentations-node": "^0.71.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.76.0",
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.213.0",
     "@opentelemetry/resources": "^2.6.0",
     "@opentelemetry/sdk-node": "^0.213.0",
