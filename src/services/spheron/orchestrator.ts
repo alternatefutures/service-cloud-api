@@ -170,6 +170,50 @@ export interface DockerHealthSnapshot {
   warning?: string
 }
 
+// ─── Synchronous-POST rejection error ────────────────────────────────
+
+/**
+ * Phase 50.1 (2026-05-15) — typed error thrown by
+ * `deployServiceSpheron` when the synchronous first POST to Spheron is
+ * rejected upstream.
+ *
+ * Carries the diagnostic context the resolver needs to map the failure
+ * to a `GraphQLError` with `extensions.code: 'NO_CAPACITY'` (so the web-
+ * app auto-router can fall back to Akash). The orchestrator has already
+ * marked the DB row FAILED (and blocklisted the SKU when applicable)
+ * before throwing — the resolver does NOT need to clean up.
+ *
+ * `isStockShortage` distinguishes the most common case (Spheron 400
+ * "Not Enough Stock") from generic POST failures (5xx, auth, validation
+ * unrelated to inventory). Resolvers should currently treat ALL
+ * `SpheronCreateRejectedError`s as `NO_CAPACITY` for the auto-router —
+ * an Akash fallback is always preferable to a generic GraphQL error for
+ * the Standard-mode flow.
+ */
+export class SpheronCreateRejectedError extends Error {
+  readonly deploymentId: string
+  readonly gpuType?: string
+  readonly isStockShortage: boolean
+  readonly upstreamError?: Error
+
+  constructor(
+    message: string,
+    ctx: {
+      deploymentId: string
+      gpuType?: string
+      isStockShortage: boolean
+      upstreamError?: Error
+    },
+  ) {
+    super(message)
+    this.name = 'SpheronCreateRejectedError'
+    this.deploymentId = ctx.deploymentId
+    this.gpuType = ctx.gpuType
+    this.isStockShortage = ctx.isStockShortage
+    this.upstreamError = ctx.upstreamError
+  }
+}
+
 // ─── Orchestrator class ──────────────────────────────────────────────
 
 export class SpheronOrchestrator {
@@ -268,7 +312,88 @@ export class SpheronOrchestrator {
     // surface throws on failure so the step's try/catch can route to
     // HANDLE_FAILURE.
     const client = this.requireClient()
-    const created = await client.createDeployment(upstreamInput)
+    let created
+    try {
+      created = await client.createDeployment(upstreamInput)
+    } catch (err) {
+      // Synchronous first-POST failure (e.g. Spheron 400 "Not Enough Stock",
+      // 401, 5xx not retryable, network timeout).
+      //
+      // Phase 50.1 fix (2026-05-15): the previous behaviour left the
+      // CREATING row in the DB and re-threw, so:
+      //   1. The web-app received a generic GraphQLError with NO
+      //      `extensions.code` — the auto-router couldn't recognise the
+      //      failure and didn't fall back to Akash.
+      //   2. The CREATING row stayed orphan in the DB, and the next
+      //      `resumeStuckDeployments` (on cloud-api restart) re-POSTed
+      //      it — hammering Spheron with already-known-bad requests.
+      //
+      // Now we:
+      //   (a) Persist the upstream message to the row so it's observable.
+      //   (b) Mark the row FAILED so resumeStuckDeployments skips it.
+      //   (c) Blocklist the SKU on stock errors so the dropdown + picker
+      //       hide it for ~15 min (see stockBlocklist.ts).
+      //   (d) Throw a typed `SpheronCreateRejectedError` carrying the
+      //       upstream details so the resolver can map it to
+      //       `extensions.code: 'NO_CAPACITY'` and the auto-router falls
+      //       back to Akash.
+      //
+      // We import dynamically to avoid a top-of-file cycle between the
+      // orchestrator and its dependents (the blocklist is also imported
+      // by the picker, which is sometimes imported by this file).
+      const { matchesStockShortage, markStockExhausted } = await import('./stockBlocklist.js')
+      const { SpheronApiError } = await import('./client.js')
+
+      let detailedMessage = err instanceof Error ? err.message : 'Spheron POST failed'
+      if (err instanceof SpheronApiError && err.details) {
+        try {
+          const detailJson = typeof err.details === 'string'
+            ? err.details
+            : JSON.stringify(err.details)
+          detailedMessage = `${detailedMessage} — details: ${detailJson.slice(0, 600)}`
+        } catch {
+          /* ignore stringify edge case */
+        }
+      }
+
+      const isStockShortage = matchesStockShortage(detailedMessage)
+      if (isStockShortage && opts.gpuType) {
+        markStockExhausted(opts.gpuType, detailedMessage)
+      }
+
+      try {
+        await this.prisma.spheronDeployment.update({
+          where: { id: row.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: detailedMessage,
+          },
+        })
+      } catch (dbErr) {
+        log.warn(
+          { deploymentId: row.id, err: dbErr },
+          'deployServiceSpheron: failed to mark row FAILED after POST rejection',
+        )
+      }
+
+      log.error(
+        {
+          serviceId,
+          deploymentId: row.id,
+          gpuType: opts.gpuType,
+          isStockShortage,
+          upstreamMessage: detailedMessage.slice(0, 400),
+        },
+        'deployServiceSpheron: synchronous POST rejected',
+      )
+
+      throw new SpheronCreateRejectedError(detailedMessage, {
+        deploymentId: row.id,
+        gpuType: opts.gpuType,
+        isStockShortage,
+        upstreamError: err instanceof Error ? err : undefined,
+      })
+    }
 
     // Step 3 — round-trip the upstream id (Phase 34 contract).
     await this.prisma.spheronDeployment.update({

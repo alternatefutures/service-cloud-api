@@ -30,6 +30,11 @@
 import type { PrismaClient, SpheronDeploymentStatus } from '@prisma/client'
 
 import { getSpheronClient, SpheronApiError } from '../spheron/client.js'
+import {
+  matchesStockShortage,
+  markStockExhausted,
+  getBlockReason,
+} from '../spheron/stockBlocklist.js'
 import { publishJob, isQStashEnabled } from './qstashClient.js'
 import { deploymentEvents } from '../events/deploymentEvents.js'
 import {
@@ -52,6 +57,25 @@ const SPHERON_TERMINAL_STATES = new Set<string>([
   'ACTIVE', 'FAILED', 'STOPPED', 'DELETED', 'PERMANENTLY_FAILED',
 ])
 
+/**
+ * Errors that should bypass MAX_RETRY_COUNT and go straight to
+ * PERMANENTLY_FAILED. Each is matched as a case-insensitive substring of
+ * the upstream error message.
+ *
+ * Stock-shortage patterns ('not enough stock', 'unable to launch',
+ * 'sold out', 'out of stock') were added 2026-05-15 after the
+ * `af-alternate-cyclic-bay-357-server` incident: the upstream catalog
+ * advertised RTX-A4000 availability that no provider could actually
+ * fulfil, and the prior retry classifier burned MAX_RETRY_COUNT attempts
+ * hammering the same 400 response. Stock failures are persistent for the
+ * lifetime of the blocklist entry (~15 min); retrying within that window
+ * is guaranteed-futile.
+ *
+ * Keep this list aligned with `stockBlocklist.STOCK_SHORTAGE_REGEX` — every
+ * stock-shortage pattern must appear here OR `matchesStockShortage` (used
+ * below) must short-circuit before the substring check, so the two are
+ * always consistent.
+ */
 const NON_RETRYABLE_ERRORS = [
   'insufficient balance',
   'no available capacity',
@@ -59,6 +83,14 @@ const NON_RETRYABLE_ERRORS = [
   'team not found',
   'invalid offer',
   'offer not available',
+  // Stock shortage — see `stockBlocklist.matchesStockShortage` for the
+  // authoritative regex; these substrings are the lowest-common-denominator
+  // tokens for the substring matcher below.
+  'not enough stock',
+  'unable to launch',
+  'sold out',
+  'out of stock',
+  'insufficient capacity',
 ]
 
 function emitProgress(
@@ -157,6 +189,40 @@ export async function handleDeployVm(prisma: PrismaClient, deploymentId: string)
     'Submitting deploy request to Spheron...'
   )
 
+  // Stock-blocklist short-circuit (Phase 50.1 fix, 2026-05-15).
+  //
+  // If this SKU was rejected for capacity in the last ~15 min, the next
+  // POST will almost certainly fail with the same upstream 400. Skip the
+  // POST and route directly to HANDLE_FAILURE — that path matches the
+  // NON_RETRYABLE_ERRORS list and emits PERMANENTLY_FAILED in one round-
+  // trip instead of consuming MAX_RETRY_COUNT attempts. Critical on
+  // process restart: `resumeStuckDeployments` re-fires DEPLOY_VM for any
+  // CREATING row, and without this guard a single drained SKU floods
+  // Spheron with retries every cloud-api restart.
+  //
+  // Only checked when there's no providerDeploymentId yet (i.e. we
+  // haven't successfully POSTed). Idempotent re-entry below handles
+  // already-POSTed rows.
+  if (!deployment.providerDeploymentId) {
+    const blockReason = getBlockReason(deployment.gpuType)
+    if (blockReason) {
+      const errMsg = `Spheron SKU ${deployment.gpuType} is temporarily out of stock. Latest upstream message: ${blockReason}`
+      log.info(
+        { deploymentId, gpuType: deployment.gpuType },
+        'DEPLOY_VM: short-circuiting to HANDLE_FAILURE — SKU is currently blocklisted',
+      )
+      try {
+        await enqueueNext(
+          '/queue/spheron/step',
+          { step: 'HANDLE_FAILURE', deploymentId, errorMessage: errMsg } satisfies SpheronHandleFailurePayload,
+        )
+      } catch {
+        await failDirectly(prisma, deploymentId, errMsg)
+      }
+      return
+    }
+  }
+
   // Idempotent re-entry: if we already have a providerDeploymentId, skip
   // the POST and re-enter the polling loop. This catches the QStash retry
   // case where the prior attempt POSTed successfully but crashed before
@@ -232,6 +298,15 @@ export async function handleDeployVm(prisma: PrismaClient, deploymentId: string)
         /* ignore */
       }
     }
+
+    // Blocklist the SKU on any stock-shortage upstream response. This
+    // hides the SKU from both the offer picker and the dropdown for the
+    // blocklist TTL (~15 min) so subsequent deploys / page-loads don't
+    // re-discover the same dead inventory. See `stockBlocklist.ts`.
+    if (matchesStockShortage(errMsg) && deployment.gpuType) {
+      markStockExhausted(deployment.gpuType, errMsg)
+    }
+
     log.error(
       {
         deploymentId,
@@ -655,6 +730,22 @@ export async function handleSpheronFailure(
     })
     if (userCancelled) {
       log.info(`Skipping retry for ${deploymentId} — user stopped/deleted a sibling Spheron deployment`)
+
+      // Close the upstream VM before abandoning. The non-retryable and retry
+      // branches both call closeDeployment; this branch used to skip it,
+      // leaving a paid VM running on Spheron while our DB said
+      // PERMANENTLY_FAILED — a billing leak.
+      if (deployment.providerDeploymentId) {
+        try {
+          await orchestrator.closeDeployment(deployment.providerDeploymentId)
+        } catch (delErr) {
+          log.warn(
+            { providerDeploymentId: deployment.providerDeploymentId, err: delErr },
+            'Failed to delete Spheron VM in user-cancelled abandon path',
+          )
+        }
+      }
+
       await prisma.spheronDeployment.update({
         where: { id: deploymentId },
         data: { status: 'PERMANENTLY_FAILED' as SpheronDeploymentStatus },

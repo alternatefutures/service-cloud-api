@@ -95,17 +95,38 @@ describe('buildCloudInit', () => {
     expect(out.runcmd?.at(-1)).toBe('cd /opt/af && docker compose --env-file .env up -d')
   })
 
-  it('writes compose at 0644 and .env at 0600 (security contract)', () => {
+  it('inlines compose + env writes via base64 in runcmd, never uses writeFiles', () => {
+    // Spheron flattens writeFiles AFTER runcmd → bring-up runs before files
+    // exist → set -e aborts. We avoid the trap by emitting NO writeFiles and
+    // putting the file writes inside runcmd, ordered before the bring-up.
     const out = buildCloudInit({
       composeContent: compose,
       operatingSystem: 'Ubuntu 22.04',
       envVars: { SECRET: 'shh' },
     })
-    const composeFile = out.writeFiles?.find(f => f.path === '/opt/af/docker-compose.yml')
-    const envFile = out.writeFiles?.find(f => f.path === '/opt/af/.env')
-    expect(composeFile?.permissions).toBe('0644')
-    expect(envFile?.permissions).toBe('0600')
-    expect(envFile?.content).toBe('SECRET=shh\n')
+    expect(out.writeFiles).toBeUndefined()
+
+    const cmds = out.runcmd ?? []
+    const mkdir = cmds.indexOf('mkdir -p /opt/af')
+    const composeWrite = cmds.findIndex(c => c.includes('| base64 -d > /opt/af/docker-compose.yml'))
+    const composeChmod = cmds.indexOf('chmod 0644 /opt/af/docker-compose.yml')
+    const envWrite = cmds.findIndex(c => c.includes('| base64 -d > /opt/af/.env'))
+    const envChmod = cmds.indexOf('chmod 0600 /opt/af/.env')
+    const composeUp = cmds.indexOf('cd /opt/af && docker compose --env-file .env up -d')
+
+    expect(mkdir).toBeGreaterThanOrEqual(0)
+    expect(composeWrite).toBeGreaterThan(mkdir)
+    expect(composeChmod).toBeGreaterThan(composeWrite)
+    expect(envWrite).toBeGreaterThan(composeWrite)
+    expect(envChmod).toBeGreaterThan(envWrite)
+    expect(composeUp).toBeGreaterThan(envChmod)
+
+    // Roundtrip the base64 to prove the actual file bodies match what the
+    // caller asked for — including secrets in the .env.
+    const composeB64 = cmds[composeWrite].split(' ')[1]
+    const envB64 = cmds[envWrite].split(' ')[1]
+    expect(Buffer.from(composeB64, 'base64').toString('utf8')).toBe(compose)
+    expect(Buffer.from(envB64, 'base64').toString('utf8')).toBe('SECRET=shh\n')
   })
 
   it('lays down an empty .env file even when no envVars are provided', () => {
@@ -114,18 +135,22 @@ describe('buildCloudInit', () => {
       composeContent: compose,
       operatingSystem: 'Ubuntu 22.04',
     })
-    const envFile = out.writeFiles?.find(f => f.path === '/opt/af/.env')
-    expect(envFile).toBeDefined()
-    expect(envFile?.content).toBe('')
+    const cmds = out.runcmd ?? []
+    const envWrite = cmds.find(c => c.includes('| base64 -d > /opt/af/.env'))
+    expect(envWrite).toBeDefined()
+    const b64 = envWrite!.split(' ')[1]
+    // Base64 of empty string is empty string.
+    expect(Buffer.from(b64, 'base64').toString('utf8')).toBe('')
   })
 
-  it('omits writeFiles + compose-up when composeContent is empty', () => {
+  it('omits compose-up entirely when composeContent is empty', () => {
     const out = buildCloudInit({
       composeContent: '',
       operatingSystem: 'Ubuntu 22.04',
     })
     expect(out.writeFiles).toBeUndefined()
     expect(out.runcmd?.some(cmd => cmd.includes('docker compose'))).toBe(false)
+    expect(out.runcmd?.some(cmd => cmd.includes('/opt/af'))).toBe(false)
     // Docker is still installed as a courtesy so the user can `docker run` themselves.
     expect(out.runcmd).toContain('systemctl enable --now docker')
   })

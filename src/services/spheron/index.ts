@@ -40,6 +40,7 @@ export {
   getSpheronOrchestrator,
   resetSpheronOrchestrator,
   getSpheronSshKeyPath,
+  SpheronCreateRejectedError,
   type DeployServiceSpheronOptions,
   type DockerHealthSnapshot,
 } from './orchestrator.js'
@@ -57,3 +58,11 @@ export {
   canonicalizeSpheronGpuType,
   canonicalizeAkashSlug,
 } from './canonicalize.js'
+
+export {
+  matchesStockShortage,
+  markStockExhausted,
+  isStockExhausted,
+  getBlockReason,
+  clearBlock,
+} from './stockBlocklist.js'

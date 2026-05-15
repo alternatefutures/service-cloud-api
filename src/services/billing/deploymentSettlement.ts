@@ -1,8 +1,14 @@
 import type { PrismaClient } from '@prisma/client'
 import { getBillingApiClient } from './billingApiClient.js'
 import { akashPricePerBlockToUsdPerDay, applyMargin } from '../../config/pricing.js'
+import { getMinimumRuntimeFloorMs } from '../../config/billing.js'
 import { createLogger } from '../../lib/logger.js'
 import { settleViaLedger } from './settlementLedger.js'
+import {
+  getAkashWorkloadKind,
+  getPhalaWorkloadKind,
+  getSpheronWorkloadKind,
+} from './workloadKind.js'
 
 const log = createLogger('deployment-settlement')
 
@@ -68,6 +74,11 @@ export async function settleAkashEscrowToTime(
         select: {
           policyId: true,
           dseq: true,
+          // gpuModel drives the workload-kind lookup (GPU rows get the
+          // 20-min floor; CPU rows resolve to floor = 0). Resolved
+          // post-lease by the provider probe, so it's the source of truth
+          // by the time settlement runs.
+          gpuModel: true,
           service: {
             select: {
               slug: true,
@@ -103,8 +114,19 @@ export async function settleAkashEscrowToTime(
     return 0
   }
 
-  const lastChargedAt = escrow.lastBilledAt || escrow.createdAt
-  const elapsedMs = Math.max(0, settledAt.getTime() - lastChargedAt.getTime())
+  // Apply the workload-kind floor. For Akash GPU rows this mirrors the
+  // Spheron/Phala-GPU floor so cross-provider GPU billing is uniform; for
+  // CPU rows the floor is 0 and the calculation collapses to the plain
+  // `settledAt − lastBilledAt` form.
+  const akashWorkloadKind = getAkashWorkloadKind(escrow.akashDeployment ?? {})
+  const akashFloorMs = getMinimumRuntimeFloorMs(akashWorkloadKind)
+  const lifetimeAnchor = escrow.createdAt
+  const rawLifetimeMs = Math.max(0, settledAt.getTime() - lifetimeAnchor.getTime())
+  const chargeableLifetimeMs = Math.max(rawLifetimeMs, akashFloorMs)
+  const alreadyChargedMs = escrow.lastBilledAt
+    ? Math.max(0, escrow.lastBilledAt.getTime() - lifetimeAnchor.getTime())
+    : 0
+  const elapsedMs = Math.max(0, chargeableLifetimeMs - alreadyChargedMs)
   const additionalCents = calculateProratedAkashCents(
     escrow.dailyRateCents,
     elapsedMs
@@ -112,6 +134,19 @@ export async function settleAkashEscrowToTime(
 
   if (additionalCents <= 0) {
     return 0
+  }
+
+  if (chargeableLifetimeMs > rawLifetimeMs) {
+    log.info(
+      {
+        akashDeploymentId,
+        rawLifetimeMs,
+        chargeableLifetimeMs,
+        floorMs: akashFloorMs,
+        workloadKind: akashWorkloadKind,
+      },
+      'Minimum-runtime floor applied to Akash final settlement'
+    )
   }
 
   const nextConsumedCents = escrow.depositCents > 0
@@ -198,6 +233,7 @@ async function settleAkashWithoutEscrow(
       policyId: true,
       pricePerBlock: true,
       dailyRateCentsCharged: true,
+      gpuModel: true,
       service: {
         select: {
           slug: true,
@@ -224,11 +260,30 @@ async function settleAkashWithoutEscrow(
     return 0
   }
 
+  // Same workload-kind floor as the escrow path. No `lastBilledAt`
+  // exists on this code path (it's the rare "escrow row missing"
+  // fallback), so chargeableLifetimeMs IS the elapsedMs.
+  const akashWorkloadKind = getAkashWorkloadKind(deployment)
+  const akashFloorMs = getMinimumRuntimeFloorMs(akashWorkloadKind)
   const billedFrom = deployment.deployedAt || deployment.createdAt
-  const elapsedMs = Math.max(0, settledAt.getTime() - billedFrom.getTime())
+  const rawLifetimeMs = Math.max(0, settledAt.getTime() - billedFrom.getTime())
+  const elapsedMs = Math.max(rawLifetimeMs, akashFloorMs)
   const additionalCents = calculateProratedAkashCents(dailyRateCents, elapsedMs)
   if (additionalCents <= 0) {
     return 0
+  }
+
+  if (elapsedMs > rawLifetimeMs) {
+    log.info(
+      {
+        akashDeploymentId,
+        rawLifetimeMs,
+        elapsedMs,
+        floorMs: akashFloorMs,
+        workloadKind: akashWorkloadKind,
+      },
+      'Minimum-runtime floor applied to Akash no-escrow final settlement'
+    )
   }
 
   try {
@@ -308,7 +363,22 @@ async function resolveAkashDailyRateCentsWithoutEscrow(
 }
 
 /**
- * Bill Phala usage through the provided timestamp with minute-level precision.
+ * Bill Phala usage through the provided timestamp with minute-level
+ * precision.
+ *
+ * **GPU minimum-runtime floor.** When the row is a GPU CVM (`cvmSize` like
+ * `h200.*`), the same floor that applies to Spheron also applies here,
+ * sourced from `MINIMUM_RUNTIME_FLOOR_MS.gpu`. TDX-only CVMs (`tdx.*`)
+ * resolve to workload-kind `cvm` whose floor is 0, so floor-less behaviour
+ * is preserved for them.
+ *
+ * Calculation (when floor applies):
+ *   chargeableLifetimeMs = max(billedAt − lifetimeAnchor, floorMs)
+ *   alreadyChargedMs     = lastBilledAt ? lastBilledAt − lifetimeAnchor : 0
+ *   elapsedMs            = max(0, chargeableLifetimeMs − alreadyChargedMs)
+ *
+ * The floor only fires on the FIRST settlement (lifetime < floor); once
+ * an hourly debit has run, lifetime > 1h ≫ floor and the floor is moot.
  */
 export async function processFinalPhalaBilling(
   prisma: PrismaClient,
@@ -327,6 +397,7 @@ export async function processFinalPhalaBilling(
       createdAt: true,
       totalBilledCents: true,
       cvmSize: true,
+      gpuModel: true,
       policyId: true,
     },
   })
@@ -335,9 +406,22 @@ export async function processFinalPhalaBilling(
     return 0
   }
 
-  const lastBilled =
-    deployment.lastBilledAt || deployment.activeStartedAt || deployment.createdAt
-  const elapsedMs = Math.max(0, billedAt.getTime() - lastBilled.getTime())
+  const workloadKind = getPhalaWorkloadKind(deployment)
+  const floorMs = getMinimumRuntimeFloorMs(workloadKind)
+
+  const lifetimeAnchor =
+    deployment.activeStartedAt || deployment.createdAt
+  const rawLifetimeMs = Math.max(0, billedAt.getTime() - lifetimeAnchor.getTime())
+  const chargeableLifetimeMs = Math.max(rawLifetimeMs, floorMs)
+
+  const alreadyChargedMs = deployment.lastBilledAt
+    ? Math.max(0, deployment.lastBilledAt.getTime() - lifetimeAnchor.getTime())
+    : 0
+
+  // When the floor is 0 (CVM/CPU), this collapses to the pre-Phase-53
+  // semantics: max(0, billedAt − lastBilled). Verified by the existing
+  // tdx-tier tests in deploymentSettlement.test.ts.
+  const elapsedMs = Math.max(0, chargeableLifetimeMs - alreadyChargedMs)
   const amountCents = calculateProratedPhalaCents(
     deployment.hourlyRateCents,
     elapsedMs
@@ -345,6 +429,20 @@ export async function processFinalPhalaBilling(
 
   if (amountCents <= 0) {
     return 0
+  }
+
+  const minimumRuntimeApplied = chargeableLifetimeMs > rawLifetimeMs
+  if (minimumRuntimeApplied) {
+    log.info(
+      {
+        phalaDeploymentId,
+        rawLifetimeMs,
+        chargeableLifetimeMs,
+        floorMs,
+        workloadKind,
+      },
+      'Minimum-runtime floor applied to Phala final settlement'
+    )
   }
 
   try {
@@ -409,30 +507,21 @@ export async function processFinalPhalaBilling(
 }
 
 /**
- * Spheron's server-side minimum-runtime floor. Spheron charges the platform
- * `max(actualMinutes, 20) × hourlyRate` regardless of when DELETE is invoked
- * (the API itself blocks DELETE inside this window — see
- * `SpheronApiError.isMinimumRuntimeNotMet()` and the
- * `reconcileSpheronUpstreamCleanups` sweeper pass). The user-facing charge
- * MUST mirror that floor or the platform eats the difference on every
- * sub-20-min deploy.
- */
-const SPHERON_MIN_RUNTIME_MS = 20 * 60_000
-
-/**
  * Bill Spheron usage through the provided timestamp with minute-level
  * precision. Mirrors `processFinalPhalaBilling` (same hourly-rate math via
  * `calculateProratedPhalaCents`) with one Spheron-specific delta:
  *
- *   **20-minute server-side minimum-runtime floor.** Spheron charges the
- *   platform `max(lifetimeMinutes, 20) × hourlyRate` whether the user's VM
- *   ran for 5 minutes or 19. We pass that floor through verbatim so we
- *   don't eat the gap. The floor only ever fires on the FIRST settlement
- *   (lifetime < 20m); once an hourly debit has run, lifetime > 1h ≫ 20m
- *   and the floor is moot. Calculation:
- *     chargeableLifetimeMs = max(billedAt − activeStartedAt, 20m)
+ *   **GPU minimum-runtime floor.** Sourced from
+ *   `MINIMUM_RUNTIME_FLOOR_MS.gpu` in `config/billing.ts` — currently
+ *   20 minutes, mirroring Spheron's server-side contract (DELETE inside
+ *   the window returns 400; Spheron bills the platform `max(actualMinutes,
+ *   20) × hourlyRate` regardless). Applied to ALL Spheron rows because
+ *   Spheron sells GPU only. Calculation:
+ *     chargeableLifetimeMs = max(billedAt − activeStartedAt, floorMs)
  *     alreadyChargedMs     = lastBilledAt ? lastBilledAt − activeStartedAt : 0
  *     elapsedMs            = max(0, chargeableLifetimeMs − alreadyChargedMs)
+ *   The floor only fires on the FIRST settlement (lifetime < floor); once
+ *   an hourly debit has run, lifetime > 1h ≫ floor and the floor is moot.
  *
  * Other differences vs Phala:
  *   - `provider: 'SPHERON'` on the ledger row + auth wire payload.
@@ -480,7 +569,9 @@ export async function processFinalSpheronBilling(
   const lifetimeAnchor =
     deployment.activeStartedAt || deployment.createdAt
   const rawLifetimeMs = Math.max(0, billedAt.getTime() - lifetimeAnchor.getTime())
-  const chargeableLifetimeMs = Math.max(rawLifetimeMs, SPHERON_MIN_RUNTIME_MS)
+  const workloadKind = getSpheronWorkloadKind(deployment)
+  const floorMs = getMinimumRuntimeFloorMs(workloadKind)
+  const chargeableLifetimeMs = Math.max(rawLifetimeMs, floorMs)
 
   const alreadyChargedMs = deployment.lastBilledAt
     ? Math.max(0, deployment.lastBilledAt.getTime() - lifetimeAnchor.getTime())
@@ -503,9 +594,10 @@ export async function processFinalSpheronBilling(
         spheronDeploymentId,
         rawLifetimeMs,
         chargeableLifetimeMs,
-        floorMs: SPHERON_MIN_RUNTIME_MS,
+        floorMs,
+        workloadKind,
       },
-      'Spheron 20-min minimum-runtime floor applied to final settlement'
+      'Minimum-runtime floor applied to Spheron final settlement'
     )
   }
 

@@ -37,6 +37,7 @@ import {
   canonicalizeAkashSlug,
   canonicalizeSpheronGpuType,
 } from './canonicalize.js'
+import { isStockExhausted } from './stockBlocklist.js'
 
 // ─── Region bucket map (Phase 46 buckets → cluster keyword regex) ────
 
@@ -276,6 +277,13 @@ export async function pickSpheronOffer(opts: PickOfferOptions): Promise<PickedOf
     })
 
     for (const group of response.data) {
+      // Skip SKUs that recently rejected a deploy with a stock-shortage
+      // upstream response. Spheron's `available: true` is catalog state,
+      // not real-time inventory — we'd otherwise pick the same drained
+      // offer and hand the user another `NO_CAPACITY`. The blocklist TTL
+      // (~15 min) lets us auto-recover once stock turns over.
+      // Phase 50.1 (2026-05-15) — see `stockBlocklist.ts` for details.
+      if (group.gpuType && isStockExhausted(group.gpuType)) continue
       for (const offer of group.offers) {
         if (!offer.available) continue
         if (!offer.supportsCloudInit) continue
