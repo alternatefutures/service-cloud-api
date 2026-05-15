@@ -22,6 +22,7 @@ import {
   getSpheronOrchestrator,
   pickSpheronOffer,
   NoSpheronCapacityError,
+  SpheronCreateRejectedError,
   type DeployServiceSpheronOptions,
 } from '../services/spheron/index.js'
 import { parseServiceVolumes } from '../services/akash/orchestrator.js'
@@ -247,6 +248,15 @@ export const spheronFieldResolvers = {
     activeSince: async (parent: any, _: unknown, context: Context) => {
       const earliest = await resolveSpheronActiveSince(context.prisma, parent.id)
       return earliest ?? parent.activeStartedAt ?? null
+    },
+    workloadKind: async (parent: any) => {
+      const { getSpheronWorkloadKind } = await import('../services/billing/workloadKind.js')
+      return getSpheronWorkloadKind(parent)
+    },
+    minimumBillableRuntimeMinutes: async (parent: any) => {
+      const { getSpheronWorkloadKind } = await import('../services/billing/workloadKind.js')
+      const { getMinimumRuntimeFloorMinutes } = await import('../config/billing.js')
+      return getMinimumRuntimeFloorMinutes(getSpheronWorkloadKind(parent))
     },
   },
   Service: {
@@ -695,6 +705,26 @@ export const spheronMutations = {
         },
       })
       if (error instanceof GraphQLError) throw error
+      // Phase 50.1 (2026-05-15): synchronous-POST rejection signals
+      // NO_CAPACITY to the web-app auto-router so Standard-mode deploys
+      // fall back to Akash transparently. Orchestrator has already
+      // marked the row FAILED and blocklisted the SKU (if applicable);
+      // resolver just needs to emit the right extensions.code.
+      if (error instanceof SpheronCreateRejectedError) {
+        throw new GraphQLError(
+          error.isStockShortage
+            ? `Spheron ${error.gpuType ?? 'GPU'} is out of stock — falling back to Akash.`
+            : `Spheron rejected the deploy: ${msg}`,
+          {
+            extensions: {
+              code: 'NO_CAPACITY',
+              provider: 'spheron',
+              reason: error.isStockShortage ? 'stock_shortage' : 'create_rejected',
+              gpuType: error.gpuType,
+            },
+          },
+        )
+      }
       throw new GraphQLError(`Spheron deployment failed: ${msg}`)
     }
   },

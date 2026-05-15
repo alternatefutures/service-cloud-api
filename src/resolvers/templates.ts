@@ -1000,9 +1000,29 @@ export const templateMutations = {
       }
       return deployment
     } catch (error: any) {
-      throw new GraphQLError(
-        `Spheron deployment failed: ${error?.message || 'Unknown error'}`,
-      )
+      const msg = error?.message || 'Unknown error'
+      // Phase 50.1 (2026-05-15): synchronous-POST rejection signals
+      // NO_CAPACITY to the web-app auto-router so Standard-mode template
+      // deploys fall back to Akash transparently. The orchestrator has
+      // already marked the row FAILED and blocklisted the SKU; resolver
+      // just emits the right extensions.code.
+      const { SpheronCreateRejectedError } = await import('../services/spheron/index.js')
+      if (error instanceof SpheronCreateRejectedError) {
+        throw new GraphQLError(
+          error.isStockShortage
+            ? `Spheron ${error.gpuType ?? 'GPU'} is out of stock — falling back to Akash.`
+            : `Spheron rejected the deploy: ${msg}`,
+          {
+            extensions: {
+              code: 'NO_CAPACITY',
+              provider: 'spheron',
+              reason: error.isStockShortage ? 'stock_shortage' : 'create_rejected',
+              gpuType: error.gpuType,
+            },
+          },
+        )
+      }
+      throw new GraphQLError(`Spheron deployment failed: ${msg}`)
     }
   },
 

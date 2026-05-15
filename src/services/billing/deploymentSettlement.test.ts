@@ -486,4 +486,174 @@ describe('deploymentSettlement', () => {
     expect(computeDebitMock).not.toHaveBeenCalled()
     expect(prisma.spheronDeployment.update).not.toHaveBeenCalled()
   })
+
+  // ===== Cross-provider minimum-runtime floor =====
+  //
+  // Spheron's existing 5/40/70-min tests already cover the canonical
+  // floor cases. The cases below verify two additional contracts the
+  // workload-kind SOT introduced:
+  //
+  //   - Phala GPU CVMs (h200.*) inherit the same floor as Spheron.
+  //     The existing Phala tests use `tdx.*` sizes and pass
+  //     `cvmSize: 'tdx.large'`, which resolve to workload kind
+  //     `cvm` (floor = 0) — so they continue to pass without changes.
+  //   - Akash escrow GPU rows inherit the same floor. CPU Akash rows
+  //     resolve to `cpu` (floor = 0) → unchanged.
+
+  it('Phala: applies GPU floor to h200 CVMs on sub-floor closes', async () => {
+    const billedAt = new Date('2026-05-14T00:05:00.000Z')
+    const activeStartedAt = new Date('2026-05-14T00:00:00.000Z')
+    const prisma = {
+      phalaDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'phala-h200',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 0,
+          cvmSize: 'h200.small',
+          gpuModel: 'h200',
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalPhalaBilling(
+      prisma as unknown as PrismaClient,
+      'phala-h200',
+      billedAt,
+    )
+
+    // 60c/hr * 20/60hr = 20c (floored from a 5-min actual lifetime).
+    expect(charged).toBe(20)
+  })
+
+  it('Phala: TDX-only CVMs (cvm workload kind) keep the pre-Phase-53 no-floor behaviour', async () => {
+    const billedAt = new Date('2026-05-14T00:05:00.000Z')
+    const activeStartedAt = new Date('2026-05-14T00:00:00.000Z')
+    const prisma = {
+      phalaDeployment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'phala-tdx',
+          orgBillingId: 'org-billing-1',
+          hourlyRateCents: 60,
+          lastBilledAt: null,
+          activeStartedAt,
+          createdAt: activeStartedAt,
+          totalBilledCents: 0,
+          cvmSize: 'tdx.medium',
+          gpuModel: null,
+          policyId: null,
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await processFinalPhalaBilling(
+      prisma as unknown as PrismaClient,
+      'phala-tdx',
+      billedAt,
+    )
+
+    // 60c/hr * 5/60hr = 5c — the raw 5-min lifetime, no floor.
+    expect(charged).toBe(5)
+  })
+
+  it('Akash: applies GPU floor to GPU escrow rows on sub-floor closes', async () => {
+    // Lifetime 5 min on a $1.44/day rate — pre-Phase-53 this would
+    // bill ceil(1.44 * 5 / (24*60)) = 1c. With the GPU floor (20m)
+    // applied, billing rises to ceil(1.44 * 20 / (24*60)) = 2c.
+    const settledAt = new Date('2026-05-14T00:05:00.000Z')
+    const createdAt = new Date('2026-05-14T00:00:00.000Z')
+    const prisma = {
+      deploymentEscrow: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'escrow-gpu',
+          akashDeploymentId: 'akash-gpu',
+          orgBillingId: 'org-billing-1',
+          status: 'ACTIVE',
+          lastBilledAt: null,
+          createdAt,
+          dailyRateCents: 1440,
+          consumedCents: 0,
+          depositCents: 0,
+          marginRate: 0.2,
+          akashDeployment: {
+            policyId: null,
+            dseq: BigInt(99999),
+            gpuModel: 'h100',
+            service: {
+              slug: 'gpu-svc',
+              name: 'GPU Service',
+              templateId: 'gpu-tpl',
+              project: { userId: 'user-1' },
+            },
+          },
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await settleAkashEscrowToTime(
+      prisma as unknown as PrismaClient,
+      'akash-gpu',
+      settledAt,
+    )
+
+    // 1440c/day * 20/1440min = 20c (the 20-min floor).
+    expect(charged).toBe(20)
+  })
+
+  it('Akash: CPU escrow rows keep the pre-Phase-53 no-floor behaviour', async () => {
+    const settledAt = new Date('2026-05-14T00:05:00.000Z')
+    const createdAt = new Date('2026-05-14T00:00:00.000Z')
+    const prisma = {
+      deploymentEscrow: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'escrow-cpu',
+          akashDeploymentId: 'akash-cpu',
+          orgBillingId: 'org-billing-1',
+          status: 'ACTIVE',
+          lastBilledAt: null,
+          createdAt,
+          dailyRateCents: 1440,
+          consumedCents: 0,
+          depositCents: 0,
+          marginRate: 0.2,
+          akashDeployment: {
+            policyId: null,
+            dseq: BigInt(11111),
+            gpuModel: null,
+            service: {
+              slug: 'cpu-svc',
+              name: 'CPU Service',
+              templateId: 'cpu-tpl',
+              project: { userId: 'user-1' },
+            },
+          },
+        }),
+        update: vi.fn(),
+      },
+      deploymentPolicy: { update: vi.fn() },
+    }
+    stubLedger(prisma)
+
+    const charged = await settleAkashEscrowToTime(
+      prisma as unknown as PrismaClient,
+      'akash-cpu',
+      settledAt,
+    )
+
+    // 1440c/day * 5min = 5c — the raw lifetime, no floor.
+    expect(charged).toBe(5)
+  })
 })

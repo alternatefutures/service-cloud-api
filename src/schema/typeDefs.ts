@@ -606,6 +606,19 @@ export const typeDefs = /* GraphQL */ `
     Diverges from "region" only when failover relaxed the constraint.
     """
     resolvedRegion: String
+    """
+    Workload kind for billing-policy lookups.
+    "gpu" | "cvm" | "cpu". Drives the minimum-runtime floor and any
+    future per-kind billing rules. Resolver: getAkashWorkloadKind(row).
+    """
+    workloadKind: String!
+    """
+    Minimum-billable-runtime floor in whole minutes for this
+    deployment's workload kind. 0 when no floor applies. The web/CLI
+    termination dialog uses this to warn the user that closing inside
+    the floor still costs the full floor of credit.
+    """
+    minimumBillableRuntimeMinutes: Int!
   }
 
   enum AkashDeploymentStatus {
@@ -679,6 +692,10 @@ export const typeDefs = /* GraphQL */ `
     AkashDeployment + PhalaDeployment can use a uniform shape.
     """
     region: String
+    """See AkashDeployment.workloadKind."""
+    workloadKind: String!
+    """See AkashDeployment.minimumBillableRuntimeMinutes."""
+    minimumBillableRuntimeMinutes: Int!
   }
 
   enum PhalaDeploymentStatus {
@@ -759,6 +776,10 @@ export const typeDefs = /* GraphQL */ `
     pause/resume bounces.
     """
     activeSince: Date
+    """See AkashDeployment.workloadKind. Always "gpu" for Spheron."""
+    workloadKind: String!
+    """See AkashDeployment.minimumBillableRuntimeMinutes."""
+    minimumBillableRuntimeMinutes: Int!
   }
 
   enum SpheronDeploymentStatus {

@@ -868,6 +868,15 @@ export const akashFieldResolvers = {
       const earliest = await resolveAkashActiveSince(context.prisma, parent.id)
       return earliest ?? parent.deployedAt ?? null
     },
+    workloadKind: async (parent: any) => {
+      const { getAkashWorkloadKind } = await import('../services/billing/workloadKind.js')
+      return getAkashWorkloadKind(parent)
+    },
+    minimumBillableRuntimeMinutes: async (parent: any) => {
+      const { getAkashWorkloadKind } = await import('../services/billing/workloadKind.js')
+      const { getMinimumRuntimeFloorMinutes } = await import('../config/billing.js')
+      return getMinimumRuntimeFloorMinutes(getAkashWorkloadKind(parent))
+    },
   },
 
   // Add akashDeployments resolver to Service type

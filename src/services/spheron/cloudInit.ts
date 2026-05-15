@@ -3,8 +3,33 @@
  *
  * Spheron VMs ship as plain Ubuntu — there is no native container orchestration.
  * To run our compose-based templates on them we hand-roll Docker bring-up via
- * cloud-init (`writeFiles` + `runcmd`). This module is the single place that
- * decision lives.
+ * cloud-init (`runcmd` only — see ordering note below). This module is the
+ * single place that decision lives.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * Spheron `writeFiles` ordering bug (root-caused on datacrunch fin-02):
+ *
+ * Spheron's deployment service does NOT pass cloud-config through to the VM
+ * verbatim. It transforms `runcmd` + `writeFiles` into a single base64-encoded
+ * `/root/startup.sh` and a shimmed `runcmd` that just `bash`'es that script.
+ * The transformation flattens both arrays in the wrong order: every entry of
+ * `runcmd` runs FIRST, then every `writeFiles` entry is rendered as a
+ * `cat > $path <<'EOF' ... EOF` block AFTER. With `set -e` at the top of the
+ * generated script, our `cd /opt/af && docker compose up -d` line aborts the
+ * whole script (directory not yet created) — and the file writes never
+ * execute. Cloud-init's `scripts_user` reports FAILED, /opt/af stays empty,
+ * `docker ps` returns 0 containers forever, our 240-attempt cloudinit probe
+ * times out at ~20 min, the deployment is marked PERMANENTLY_FAILED while the
+ * VM keeps running and Spheron keeps billing us.
+ *
+ * Fix: stop using `writeFiles` entirely for `/opt/af/docker-compose.yml` and
+ * `/opt/af/.env`. Inline both writes as `base64 -d`-from-stdin lines INSIDE
+ * `runcmd`, ordered explicitly BEFORE the `docker compose up` line. Spheron's
+ * transformer preserves intra-`runcmd` order, so this ordering survives the
+ * transformation. Base64 is used (rather than a heredoc) so we don't have to
+ * worry about EOF-marker collisions, YAML quoting of multi-line strings, or
+ * the fact that some upstream providers' transformers re-wrap heredoc bodies.
+ * ──────────────────────────────────────────────────────────────────────────
  *
  * Locked decision (per AF_HANDOFF — Spheron Phase A, 2026-04-21 → 2026-05-06):
  *   "Smart-pick: prefer pre-installed Docker, fall back to apt"
@@ -155,32 +180,21 @@ export function renderEnvFile(envVars: Record<string, string> | undefined): stri
  */
 export function buildCloudInit(input: BuildCloudInitInput): SpheronCloudInit {
   const preinstalled = isDockerPreinstalled(input.operatingSystem)
-
-  const writeFiles: NonNullable<SpheronCloudInit['writeFiles']> = []
-
-  if (input.composeContent && input.composeContent.trim().length > 0) {
-    writeFiles.push({
-      path: COMPOSE_PATH,
-      content: input.composeContent,
-      owner: 'root:root',
-      permissions: '0644',
-    })
-    // Always lay down a .env, even if empty, so `--env-file .env` doesn't
-    // fall over with ENOENT inside the runcmd.
-    writeFiles.push({
-      path: ENV_PATH,
-      content: renderEnvFile(input.envVars),
-      owner: 'root:root',
-      permissions: '0600',
-    })
-  }
+  const hasCompose = !!(input.composeContent && input.composeContent.trim().length > 0)
+  const envContent = hasCompose ? renderEnvFile(input.envVars) : ''
 
   // Build runcmd in a precise order:
   //   1. (optional) apt install Docker — ONLY when not preinstalled
   //   2. systemctl enable --now docker — idempotent on both branches
   //   3. (optional) ufw allow <port>/tcp — ONLY when exposePorts present
-  //   4. (optional) docker compose up -d — ONLY when composeContent present
+  //   4. (optional) materialize /opt/af/docker-compose.yml + .env from base64
+  //      AND `docker compose up -d` — ONLY when composeContent present
   //   5. (optional) extraRuncmd — caller-supplied post-bring-up lines
+  //
+  // Steps 4's writes used to live in cloud-init `writeFiles`. They no longer
+  // do — see the file header for the Spheron writeFiles ordering bug.
+  // Inlining via `base64 -d` keeps the writes inside `runcmd` so Spheron's
+  // flatten-and-reorder transformer can't sequence them after the bring-up.
   const runcmd: string[] = []
 
   if (!preinstalled) {
@@ -192,9 +206,7 @@ export function buildCloudInit(input: BuildCloudInitInput): SpheronCloudInit {
     runcmd.push('DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 ca-certificates')
   }
 
-  // Idempotent — safe on both preinstalled and apt-installed paths. Quoted to
-  // keep cloud-init's YAML parser from interpreting the `--now` flag as a
-  // sequence anchor (rare, but cheap insurance).
+  // Idempotent — safe on both preinstalled and apt-installed paths.
   runcmd.push('systemctl enable --now docker')
 
   // Open the firewall for each exposed container port BEFORE bringing up
@@ -210,7 +222,25 @@ export function buildCloudInit(input: BuildCloudInitInput): SpheronCloudInit {
     runcmd.push(`ufw allow ${port}/tcp || true`)
   }
 
-  if (input.composeContent && input.composeContent.trim().length > 0) {
+  if (hasCompose) {
+    // Base64-encode the file bodies so we can write them with single-line
+    // `runcmd` entries and avoid every quoting / heredoc-EOF / YAML-multiline
+    // pitfall. Spheron's transformer preserves intra-`runcmd` ordering, so
+    // listing the writes BEFORE the bring-up guarantees the files exist when
+    // `docker compose up` runs.
+    const composeB64 = Buffer.from(input.composeContent ?? '', 'utf8').toString('base64')
+    const envB64 = Buffer.from(envContent, 'utf8').toString('base64')
+
+    runcmd.push('mkdir -p /opt/af')
+    runcmd.push(`echo ${composeB64} | base64 -d > ${COMPOSE_PATH}`)
+    runcmd.push(`chown root:root ${COMPOSE_PATH}`)
+    runcmd.push(`chmod 0644 ${COMPOSE_PATH}`)
+    // Always lay down a .env (possibly empty) so `--env-file .env` doesn't
+    // ENOENT inside the bring-up command.
+    runcmd.push(`echo ${envB64} | base64 -d > ${ENV_PATH}`)
+    runcmd.push(`chown root:root ${ENV_PATH}`)
+    // 0600 — env may carry secrets. See file header security note.
+    runcmd.push(`chmod 0600 ${ENV_PATH}`)
     // `--env-file` is required because docker-compose v2 only auto-loads .env
     // from the same dir as the compose file IF the working dir matches; we
     // pass it explicitly so a different cwd at boot doesn't silently drop env.
@@ -227,11 +257,11 @@ export function buildCloudInit(input: BuildCloudInitInput): SpheronCloudInit {
   // for nothing.
   const packages = preinstalled ? undefined : ['docker.io', 'docker-compose-v2', 'ca-certificates']
 
+  // No `writeFiles` ever — see file header for the Spheron ordering bug.
   // Trim empty fields so the JSON we send to Spheron is minimal — easier to
   // diff against `savedCloudInit` for forensic resume tests.
   const out: SpheronCloudInit = {}
   if (packages) out.packages = packages
-  if (writeFiles.length > 0) out.writeFiles = writeFiles
   if (runcmd.length > 0) out.runcmd = runcmd
   return out
 }

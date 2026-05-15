@@ -243,6 +243,15 @@ export const phalaFieldResolvers = {
       const earliest = await resolvePhalaActiveSince(context.prisma, parent.id)
       return earliest ?? parent.activeStartedAt ?? null
     },
+    workloadKind: async (parent: any) => {
+      const { getPhalaWorkloadKind } = await import('../services/billing/workloadKind.js')
+      return getPhalaWorkloadKind(parent)
+    },
+    minimumBillableRuntimeMinutes: async (parent: any) => {
+      const { getPhalaWorkloadKind } = await import('../services/billing/workloadKind.js')
+      const { getMinimumRuntimeFloorMinutes } = await import('../config/billing.js')
+      return getMinimumRuntimeFloorMinutes(getPhalaWorkloadKind(parent))
+    },
   },
   Service: {
     phalaDeployments: async (parent: any, _: unknown, context: Context) => {

@@ -55,6 +55,7 @@ import { DEFAULT_MONTHLY_MARGIN } from '../../config/pricing.js'
 import { getSpheronClient, type SpheronGpuOffer, type SpheronGpuOfferGroup } from './client.js'
 import { canonicalizeSpheronGpuType } from './canonicalize.js'
 import { clusterMatchesBucket } from './offerPicker.js'
+import { isStockExhausted, onBlocklistChange } from './stockBlocklist.js'
 
 const log = createLogger('spheron-gpu-availability-endpoint')
 
@@ -94,6 +95,16 @@ interface CachedResponse {
 
 // Cache keyed by region bucket. `null` = no-region request.
 const _cache = new Map<string, { at: number; payload: CachedResponse }>()
+
+// Bust the cache whenever the stock blocklist changes so the dropdown
+// reflects the latest blocklist state immediately. Without this, a SKU
+// that gets blocked between two refreshes stays visible for up to one
+// `RESPONSE_CACHE_TTL_MS` window (60 s). The lazy registration here
+// runs once per process; tests that re-import the module pick up a
+// fresh subscription.
+onBlocklistChange(() => {
+  _cache.clear()
+})
 
 function cacheIsFresh(region: string | null): CachedResponse | null {
   const key = region ?? '__any__'
@@ -193,6 +204,11 @@ function aggregate(
   for (const group of groups) {
     const slug = canonicalizeSpheronGpuType(group.gpuType ?? '')
     if (!slug) continue
+    // Phase 50.1 (2026-05-15): hide SKUs that recently failed to deploy
+    // for capacity reasons. Same logic as offerPicker — Spheron's catalog
+    // `available` flag is not real-time inventory; the blocklist closes
+    // that gap for ~15 min after any "Not Enough Stock" upstream response.
+    if (group.gpuType && isStockExhausted(group.gpuType)) continue
     for (const offer of group.offers) {
       if (!offer.available) continue
       if (!offer.supportsCloudInit) continue

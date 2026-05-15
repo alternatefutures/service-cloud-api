@@ -122,6 +122,74 @@ describe('handleDeployVm — idempotent re-entry on existing providerDeploymentI
   })
 })
 
+describe('handleDeployVm — stock blocklist short-circuit (Phase 50.1)', () => {
+  // The blocklist guard exists to stop `resumeStuckDeployments` from
+  // re-POSTing a CREATING row whose SKU just failed for capacity. Without
+  // this, every cloud-api restart hammers Spheron with already-known-
+  // bad requests for ~15 min (until the block TTL clears).
+  it('routes directly to HANDLE_FAILURE when gpuType is blocklisted', async () => {
+    isQStashEnabledMock.mockReturnValue(true)
+    publishJobMock.mockResolvedValueOnce(undefined)
+
+    const { markStockExhausted, _resetStockBlocklist } = await import('../spheron/stockBlocklist.js')
+    _resetStockBlocklist()
+    markStockExhausted('A4000_PCIE', 'Not Enough Stock of RTX-A4000')
+
+    const prisma = makePrisma({
+      id: 'dep-1',
+      status: 'CREATING',
+      retryCount: 0,
+      providerDeploymentId: null,
+      gpuType: 'A4000_PCIE',
+      savedDeployInput: { name: 'svc-1' },
+    })
+    await handleDeployVm(prisma, 'dep-1')
+
+    // The POST never happens — update for providerDeploymentId is skipped.
+    expect(prisma.spheronDeployment.update).not.toHaveBeenCalled()
+
+    // HANDLE_FAILURE is enqueued with a clear blocklist message.
+    expect(publishJobMock).toHaveBeenCalledTimes(1)
+    const [route, payload] = publishJobMock.mock.calls[0] ?? []
+    expect(route).toBe('/queue/spheron/step')
+    expect(payload).toMatchObject({
+      step: 'HANDLE_FAILURE',
+      deploymentId: 'dep-1',
+    })
+    expect((payload as { errorMessage: string }).errorMessage).toMatch(/A4000_PCIE/)
+    expect((payload as { errorMessage: string }).errorMessage).toMatch(/temporarily out of stock/i)
+
+    _resetStockBlocklist()
+  })
+
+  it('does NOT short-circuit when the row already has a providerDeploymentId (idempotent re-entry wins)', async () => {
+    isQStashEnabledMock.mockReturnValue(true)
+    publishJobMock.mockResolvedValueOnce(undefined)
+
+    const { markStockExhausted, _resetStockBlocklist } = await import('../spheron/stockBlocklist.js')
+    _resetStockBlocklist()
+    markStockExhausted('A4000_PCIE', 'Not Enough Stock')
+
+    const prisma = makePrisma({
+      id: 'dep-1',
+      status: 'STARTING',
+      retryCount: 0,
+      providerDeploymentId: 'sph-already-there',
+      gpuType: 'A4000_PCIE',
+      savedDeployInput: { name: 'svc-1' },
+    })
+    await handleDeployVm(prisma, 'dep-1')
+
+    // Idempotent path: enqueue POLL_STATUS, not HANDLE_FAILURE. The
+    // POST already happened upstream so the blocklist is irrelevant —
+    // we just need to resume polling.
+    const [, payload] = publishJobMock.mock.calls[0] ?? []
+    expect((payload as { step: string }).step).toBe('POLL_STATUS')
+
+    _resetStockBlocklist()
+  })
+})
+
 /**
  * The retry-name compounding regex isn't exported (it's an inline literal in
  * the function body). Mirror it verbatim here so the test pins the exact
