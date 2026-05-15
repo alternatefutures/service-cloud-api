@@ -74,8 +74,8 @@ interface AggregatedGroup {
   providersWithAvailability: number
   clustersWithAvailability: number
   /**
-   * Phase 51 — providers in the requested region bucket. `null` when
-   * the caller didn't pass `?region=`. The merged dropdown uses this
+   * Providers in the requested region bucket. `null` when the caller
+   * didn't pass `?region=`. The merged dropdown uses this
    * to disable rows that are available elsewhere but not here.
    */
   inRegionProviders: number | null
@@ -179,7 +179,7 @@ function applyMargin(usdPerHour: number): number {
  * locked design in `handoffs/2026-05-10_1330_spheron-gpu-dropdown-design-locked.md`
  * (split rows on VRAM disagreement).
  *
- * `regionFilter` (Phase 51) — when non-null, populates each row's
+ * `regionFilter` — when non-null, populates each row's
  * `inRegionProviders` with the count of distinct providers offering
  * the SKU in at least one cluster matching the bucket. Total counts
  * are unaffected so the merged dropdown can show "available elsewhere
@@ -204,8 +204,8 @@ function aggregate(
   for (const group of groups) {
     const slug = canonicalizeSpheronGpuType(group.gpuType ?? '')
     if (!slug) continue
-    // Phase 50.1 (2026-05-15): hide SKUs that recently failed to deploy
-    // for capacity reasons. Same logic as offerPicker — Spheron's catalog
+    // Hide SKUs that recently failed to deploy for capacity reasons. Same
+    // logic as offerPicker — Spheron's catalog
     // `available` flag is not real-time inventory; the blocklist closes
     // that gap for ~15 min after any "Not Enough Stock" upstream response.
     if (group.gpuType && isStockExhausted(group.gpuType)) continue

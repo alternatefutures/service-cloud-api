@@ -20,7 +20,7 @@
  *   - 10s timeout on the check via the SpheronClient's own request
  *     timeout — the monitor never blocks shutdown for more than 10s.
  *
- * Locked decision (per AF_HANDOFF — Spheron Phase A):
+ * Locked decision:
  *   - The threshold is configurable via `SPHERON_MIN_BALANCE_USD`. Default
  *     50 USD chosen as ~5x the cheapest hour-of-deploy + a comfortable
  *     buffer for parallel user deploys.

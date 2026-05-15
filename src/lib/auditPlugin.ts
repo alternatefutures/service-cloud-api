@@ -1,5 +1,5 @@
 /**
- * GraphQL audit plugin (Phase 44 / D4).
+ * GraphQL audit plugin.
  *
  * Emits one row in `AuditEvent` per executed Mutation operation. This
  * single plugin replaces ~100 hand-rolled `audit()` call sites we'd

@@ -61,8 +61,8 @@ export const GPU_SDL_PRICING_CEILING_UACT = 1_000_000
 export const NON_GPU_SDL_PRICING_CEILING_UACT = 1_000
 
 /**
- * Phase 46 — emit the `placement.attributes` block when a curated region is
- * selected. Returns either an empty string (no constraint) or a YAML chunk
+ * Emit the `placement.attributes` block when a curated region is selected.
+ * Returns either an empty string (no constraint) or a YAML chunk
  * with the right indentation to slot in *before* `signedBy:` and `pricing:`
  * inside the `placement.dcloud:` block:
  *
@@ -188,8 +188,8 @@ export function generateSDLFromTemplate(
   // ── GPU resource block ────────────────────────────────────────
   const gpuBlock = gpu ? buildGpuProfileBlock(gpu) : ''
 
-  // Phase 46 — optional `attributes.region` slot. Empty string when no
-  // region was selected, so the YAML output is identical to the
+  // Optional `attributes.region` slot. Empty string when no region was
+  // selected, so the YAML output is identical to the
   // pre-Phase-46 behavior for the default "Any" path.
   const attributesBlock = buildPlacementAttributesBlock(config?.region)
 

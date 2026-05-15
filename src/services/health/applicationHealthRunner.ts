@@ -1,35 +1,16 @@
 /**
- * Application Health Runner (Phase 42)
+ * Application Health Runner.
  *
- * Walks every Service that has a `healthProbe` configured and an ACTIVE
- * deployment, fires an HTTP probe against the deployment's first global
- * URI, and stores the result in an in-memory ring buffer (last 20 per
- * service). The result is exposed via the GraphQL `Service.applicationHealth`
- * field so the dashboard can render a live badge + timeline.
+ * Walks every Service with a `healthProbe` configured and an ACTIVE
+ * deployment (Akash, Phala, or Spheron), fires HTTP probes, stores the
+ * last 20 results per service, and exposes them via
+ * `Service.applicationHealth` for the dashboard badge + timeline.
  *
- * Why "application" health vs the existing `getHealth`:
- *   - `AkashProvider.getHealth` only knows whether the *container* is ready
- *     (`available_replicas > 0`). It can't tell whether the app inside the
- *     container is actually responding.
- *   - This runner fires real HTTP requests (configurable path + expected
- *     status), so we can detect cases where the container is up but the
- *     server is hung, panicked, listening on the wrong port, etc.
- *
- * Design notes:
- *   - One process-wide timer at 30s tick. Per-probe `intervalSec` controls
- *     throttling (we just skip probes whose `lastChecked + intervalSec`
- *     hasn't elapsed). This avoids N timers and N abort controllers.
- *   - Per-probe AbortController with `timeoutSec` (default 5s). All inflight
- *     probes are cancelled on `stop()` so the process doesn't hang on
- *     graceful shutdown.
- *   - In-memory only. Phase 43 (auto-failover) will read these snapshots
- *     to discriminate "container died" vs "app died" failures. Persisting
- *     to Postgres is deferred — the audit log already captures every
- *     state-flip via Phase 44.
- *   - Probe URI resolution: prefer the SDL service entry matching
- *     `Service.sdlServiceName`, else first key in `serviceUrls`. First URI
- *     in that entry. Optional `port` override applies for forwarded-port
- *     entries (`host:port` form) — we replace the port, never the host.
+ * Distinct from provider `getHealth` (replica count); this checks whether
+ * the *application* responds — useful for hung/panicked processes or wrong
+ * port. One 30s tick scheduler with per-probe interval throttling and
+ * AbortController-cancelled fetches. Results are in-memory; the audit log
+ * captures state-flips for persistence.
  */
 
 import type { PrismaClient } from '@prisma/client'
@@ -185,20 +166,18 @@ export class ApplicationHealthRunner {
   }
 
   /**
-   * Find every service with a configured probe AND an ACTIVE Akash deployment
-   * with at least one URI. Phala is excluded for now — its URI surfaces via
-   * a different field and we'll wire it in a follow-up if needed.
+   * Find every service with a configured probe and an ACTIVE deployment on
+   * any provider that exposes a URI we can reach. Akash → `serviceUrls`
+   * (provider-side global URIs), Phala → `appUrl`, Spheron → `ipAddress`
+   * + first port from the service's port table.
    */
   private async loadCandidates(prisma: PrismaClient): Promise<Array<{
     serviceId: string
     uri: string
     probe: HealthProbeConfig
   }>> {
-    // Prisma's "not null" filter on Json columns requires the
-    // JsonNullValueFilter sentinel — without it TypeScript widens the type
-    // and the relation `select` below stops working. The `Prisma.JsonNull`
-    // sentinel matches DB-NULL exactly, so `NOT: { equals: JsonNull }`
-    // returns rows where healthProbe is set.
+    // `Prisma.JsonNull` sentinel matches DB-NULL exactly; `NOT: { equals: JsonNull }`
+    // returns services with a healthProbe configured.
     const services = await prisma.service.findMany({
       where: {
         NOT: { healthProbe: { equals: Prisma.JsonNull } },
@@ -206,12 +185,30 @@ export class ApplicationHealthRunner {
       select: {
         id: true,
         sdlServiceName: true,
+        containerPort: true,
         healthProbe: true,
+        ports: {
+          select: { containerPort: true, publicPort: true },
+          orderBy: { containerPort: 'asc' },
+          take: 1,
+        },
         akashDeployments: {
           where: { status: 'ACTIVE' },
           orderBy: { createdAt: 'desc' },
           take: 1,
           select: { serviceUrls: true },
+        },
+        phalaDeployments: {
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { appUrl: true },
+        },
+        spheronDeployments: {
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { ipAddress: true },
         },
       },
     })
@@ -220,9 +217,27 @@ export class ApplicationHealthRunner {
     for (const svc of services) {
       const probe = this.coerceProbe(svc.healthProbe)
       if (!probe) continue
-      const dep = svc.akashDeployments[0]
-      if (!dep) continue
-      const uri = pickProbeUri(dep.serviceUrls, svc.sdlServiceName, probe.port)
+
+      let uri: string | null = null
+      const akash = svc.akashDeployments[0]
+      if (akash) {
+        uri = pickProbeUri(akash.serviceUrls, svc.sdlServiceName, probe.port)
+      }
+      if (!uri) {
+        const phala = svc.phalaDeployments[0]
+        if (phala?.appUrl) uri = phala.appUrl
+      }
+      if (!uri) {
+        const spheron = svc.spheronDeployments[0]
+        if (spheron?.ipAddress) {
+          const port = probe.port
+            ?? svc.ports[0]?.publicPort
+            ?? svc.ports[0]?.containerPort
+            ?? svc.containerPort
+            ?? 80
+          uri = `${spheron.ipAddress}:${port}`
+        }
+      }
       if (!uri) continue
       out.push({ serviceId: svc.id, uri, probe })
     }
@@ -393,8 +408,8 @@ export function buildProbeUrl(uri: string, path: string): URL | null {
   try {
     if (uri.includes('://')) {
       const base = new URL(uri)
-      // Replace the path entirely — we never want to compose user paths
-      // with whatever Akash returned.
+      // Replace the path entirely — never compose user paths with the URI
+      // the provider returned (host might already carry a path).
       return new URL(normalizedPath, `${base.protocol}//${base.host}`)
     }
     // host:port form (forwarded ports). Default to http — TLS rarely

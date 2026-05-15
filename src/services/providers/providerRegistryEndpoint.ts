@@ -78,8 +78,8 @@ export async function handleProviderRegistryRequest(
         gpuTotal: p.gpuTotal,
         gpuRam: p.gpuRam ?? null,
         gpuInterface: p.gpuInterface ?? null,
-        // Phase 46 region taxonomy. Required by the BFF region-aware GPU
-        // dropdown in the web-app — without it the route can't tally
+        // Region taxonomy required by the BFF region-aware GPU dropdown
+        // in the web-app — without it the route can't tally
         // per-region availability without a second DB read.
         region: p.region ?? null,
         country: p.country ?? null,

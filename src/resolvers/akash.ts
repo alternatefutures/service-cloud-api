@@ -406,8 +406,8 @@ export const akashMutations = {
       dailyCostCents: estimatedDailyCostCents,
     })
 
-    // Phase 44 audit: stamp the "deployment requested" event up front.
-    // Fired before the orchestrator call so a crash during submission still
+    // Stamp the "deployment requested" audit event up front, fired before
+    // the orchestrator call so a crash during submission still
     // leaves a record of the user's intent. Success/failure of the submit
     // itself becomes a distinct event in D2.
     audit(context.prisma, {
@@ -429,7 +429,7 @@ export const akashMutations = {
       },
     })
 
-    // Phase 46 — validate the optional region against the curated set so we
+    // Validate the optional region against the curated set so we
     // fail fast at the API surface instead of letting a typo silently bake
     // a useless `attributes:` block into the SDL. Null/undefined = "Any".
     const { isRegionId } = await import('../services/regions/mapping.js')
@@ -648,6 +648,12 @@ export const akashMutations = {
       ).catch((err) => {
         log.warn({ err, deploymentId: id }, 'Concurrency decrement failed (SUSPENDED→CLOSED)')
       })
+      try {
+        const { getSubdomainProxy } = await import('../services/proxy/subdomainProxy.js')
+        getSubdomainProxy()?.invalidateSlug(deployment.service.slug)
+      } catch (err) {
+        log.warn({ err, slug: deployment.service.slug }, 'Subdomain proxy invalidation failed (SUSPENDED→CLOSED)')
+      }
       return formatDeployment(updated)
     }
 
@@ -736,6 +742,15 @@ export const akashMutations = {
     ).catch((err) => {
       log.warn({ err, deploymentId: id }, 'Concurrency decrement failed (manual close)')
     })
+
+    // Drop the proxy backend cache so the next *.apps/*.agents request to
+    // this slug re-resolves and 503s instead of routing to the dead lease.
+    try {
+      const { getSubdomainProxy } = await import('../services/proxy/subdomainProxy.js')
+      getSubdomainProxy()?.invalidateSlug(deployment.service.slug)
+    } catch (err) {
+      log.warn({ err, slug: deployment.service.slug }, 'Subdomain proxy invalidation failed (manual close)')
+    }
 
     // Cancel any in-progress sibling/retry deployments for the same service
     const IN_PROGRESS = ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING'] as const

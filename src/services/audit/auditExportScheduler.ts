@@ -1,5 +1,5 @@
 /**
- * Audit Export Scheduler (Phase 44 / D3a)
+ * Audit Export Scheduler
  *
  * Runs the daily JSONL export at 00:30 UTC. The 30-minute offset
  * after midnight intentionally lets the billing tick (00:00 UTC)

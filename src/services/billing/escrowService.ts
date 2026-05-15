@@ -282,13 +282,23 @@ export class EscrowService {
     const newConsumed = escrow.consumedCents + consumptionCents
     const remaining = escrow.depositCents - newConsumed
 
+    // Advance lastBilledAt by exactly hoursToBill * 1h (capped at now) so
+    // fractional time rolls forward to the next cycle. Setting lastBilledAt
+    // = now would silently drop the partial-hour residual and let the
+    // pre-funded escrow drift vs the PAYG hour-aligned debit cadence.
+    const advanceMs = hoursToBill * 60 * 60 * 1000
+    const candidateLastBilled = new Date(lastBilled.getTime() + advanceMs)
+    const nextLastBilledAt = candidateLastBilled.getTime() > now.getTime()
+      ? now
+      : candidateLastBilled
+
     if (remaining < 0) {
       return this.prisma.deploymentEscrow.update({
         where: { id: escrowId },
         data: {
           consumedCents: escrow.depositCents,
           status: 'DEPLETED',
-          lastBilledAt: now,
+          lastBilledAt: nextLastBilledAt,
         },
       })
     }
@@ -297,7 +307,7 @@ export class EscrowService {
       where: { id: escrowId },
       data: {
         consumedCents: newConsumed,
-        lastBilledAt: now,
+        lastBilledAt: nextLastBilledAt,
       },
     })
   }
@@ -414,7 +424,7 @@ export class EscrowService {
 
     log.info({ deploymentId: akashDeploymentId, refundedCents: remaining }, 'Refunded escrow for deployment')
 
-    // Phase 44: single audit hook for every refund path (SUSPENDED close,
+    // Single audit hook for every refund path (SUSPENDED close,
     // provider-close sweeper, ghost close, orphaned-escrow reconcile, policy
     // enforcer, resume handler). Intentionally placed at the tail of the
     // method so failures above don't produce misleading "ok" events.

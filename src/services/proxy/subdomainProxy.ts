@@ -142,13 +142,10 @@ function isPrivateIP(ip: string): boolean {
 }
 
 /**
- * Resolves a target URL's hostname to an IP and validates it's not internal.
- *
- * Returns the original URL if safe, null if blocked.
- * We preserve the original hostname (rather than IP-pinning) because some
- * backends (Phala CDN, etc.) rely on Host-header routing. The DNS TOCTOU
- * window is acceptable here since target URLs come from our own database,
- * not user input.
+ * Resolve the target URL's hostname and reject if the resolved IP is in
+ * private/loopback/link-local space. Returns the original URL on success
+ * (we do NOT IP-pin — Host-header routing matters for Phala CDN and S3-style
+ * backends; targets come from our own DB so the DNS TOCTOU is acceptable).
  */
 async function resolveAndValidateTarget(targetUrl: string): Promise<string | null> {
   try {
@@ -270,7 +267,7 @@ export class SubdomainProxy {
     const { tier, slug } = parsed
     const cacheKey = `${tier}:${slug}`
 
-    // Check cache first (cached targets are already IP-pinned and validated)
+    // Cached targets have already been DNS-resolved and rejected if private.
     let cached = this.cache.get(cacheKey)
     if (!cached) {
       const backend = await this.lookupBackend(slug, tier)
@@ -279,8 +276,7 @@ export class SubdomainProxy {
         return true
       }
 
-      // Resolve DNS and validate BEFORE caching — prevents caching internal targets
-      // and pins the IP to eliminate TOCTOU between check and proxy connect
+      // Resolve DNS and reject private IPs BEFORE caching the entry.
       const pinnedTarget = await resolveAndValidateTarget(backend.target)
       if (!pinnedTarget) {
         log.warn({ slug, tier, target: backend.target }, 'SSRF blocked: internal target')
@@ -381,8 +377,8 @@ export class SubdomainProxy {
    * Spheron note: VMs only natively expose port 22; user services run on
    * the container's port behind UFW. The cloudInit builder opens
    * `service.containerPort` via `ufw allow <port>/tcp` so the proxy can
-   * reach it directly. HTTPS termination is the user's problem (deferred
-   * Caddy sidecar — Phase 2).
+   * reach it directly. HTTPS termination is the user's problem (Caddy
+   * sidecar deferred).
    */
   private async lookupBackend(
     slug: string,
@@ -580,4 +576,25 @@ export class SubdomainProxy {
         res.end(JSON.stringify({ error: 'Unknown Error' }))
     }
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Module-level singleton accessor
+//
+// Lifecycle code (close handlers, slug renames, failover promotion) calls
+// `getSubdomainProxy()?.invalidateSlug(...)` to drop the cached backend so
+// the next request re-resolves against the DB. The accessor is optional —
+// the proxy is only constructed inside the HTTP server entrypoint, so unit
+// tests / CLI scripts that import lifecycle code see `null` and skip the
+// invalidation cleanly.
+// ──────────────────────────────────────────────────────────────────────────
+
+let activeSubdomainProxy: SubdomainProxy | null = null
+
+export function setSubdomainProxy(proxy: SubdomainProxy): void {
+  activeSubdomainProxy = proxy
+}
+
+export function getSubdomainProxy(): SubdomainProxy | null {
+  return activeSubdomainProxy
 }

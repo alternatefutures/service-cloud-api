@@ -268,7 +268,7 @@ export class PhalaProvider implements DeploymentProvider {
       // sync the row to CLOSED if it ever ends up in the active set
       // (e.g. test fixture, race between findMany and findUnique, or any
       // future widening of getActiveDeploymentIds). Mirrors the Akash
-      // terminal-status mapping after Phase 49.
+      // terminal-status mapping.
       return {
         provider: 'phala',
         overall: deployment.status === 'DELETED' ? 'unknown' : 'gone',
@@ -321,8 +321,8 @@ export class PhalaProvider implements DeploymentProvider {
       const orchestrator = getPhalaOrchestrator(this.prisma)
       const cvmStatus = await orchestrator.getCvmStatus(deployment.appId)
 
-      // 2026-05-03 (Phase 49b) — getCvmStatus blanket-catches all errors and
-      // returns null, which previously left orphan CVMs (deleted out-of-band
+      // getCvmStatus blanket-catches all errors and returns null, which
+      // previously left orphan CVMs (deleted out-of-band
       // on Phala's side) classified as 'unknown' forever, leaking hourly
       // billing. Use the dedicated existence probe to distinguish "CVM is
       // genuinely gone at the provider" from "CLI threw transiently". Only

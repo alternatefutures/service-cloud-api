@@ -616,11 +616,29 @@ export class InvoiceService {
       y = 50
     }
 
-    // Get current wallet balance and escrow totals
-    try {
-      const activeEscrows = await this.prisma.deploymentEscrow.findMany({
-        where: { status: 'ACTIVE' },
+    // Account summary MUST be scoped to the invoice's customer/org or it
+    // leaks platform-wide totals into a single tenant's PDF. Resolve orgIds
+    // the same way addComputeLineItems does, and gate every aggregate query
+    // by `organizationId IN (...)`.
+    const summaryCustomer = await this.prisma.customer.findUnique({
+      where: { id: invoice.customerId },
+      select: { userId: true },
+    })
+    const summaryOrgIds: string[] = []
+    if (summaryCustomer?.userId) {
+      const memberships = await this.prisma.organizationMember.findMany({
+        where: { userId: summaryCustomer.userId },
+        select: { organizationId: true },
       })
+      summaryOrgIds.push(...memberships.map((m) => m.organizationId))
+    }
+
+    try {
+      const activeEscrows = summaryOrgIds.length > 0
+        ? await this.prisma.deploymentEscrow.findMany({
+            where: { status: 'ACTIVE', organizationId: { in: summaryOrgIds } },
+          })
+        : []
 
       const totalEscrowCents = activeEscrows.reduce(
         (sum, e) => sum + (e.depositCents - e.consumedCents),
@@ -632,18 +650,30 @@ export class InvoiceService {
         0
       )
 
-      const phalaActive = await this.prisma.phalaDeployment.findMany({
-        where: { status: 'ACTIVE', hourlyRateCents: { not: null } },
-      })
+      const phalaActive = summaryOrgIds.length > 0
+        ? await this.prisma.phalaDeployment.findMany({
+            where: {
+              status: 'ACTIVE',
+              hourlyRateCents: { not: null },
+              organizationId: { in: summaryOrgIds },
+            },
+          })
+        : []
 
       const phalaDailyCostCents = phalaActive.reduce(
         (sum, p) => sum + (p.hourlyRateCents || 0) * 24,
         0
       )
 
-      const spheronActive = await this.prisma.spheronDeployment.findMany({
-        where: { status: 'ACTIVE', hourlyRateCents: { not: null } },
-      })
+      const spheronActive = summaryOrgIds.length > 0
+        ? await this.prisma.spheronDeployment.findMany({
+            where: {
+              status: 'ACTIVE',
+              hourlyRateCents: { not: null },
+              organizationId: { in: summaryOrgIds },
+            },
+          })
+        : []
 
       const spheronDailyCostCents = spheronActive.reduce(
         (sum, s) => sum + (s.hourlyRateCents || 0) * 24,

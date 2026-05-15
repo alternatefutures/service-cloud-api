@@ -33,6 +33,8 @@ export async function handleAdminDeploymentStats(
       total_akash: bigint
       active_phala: bigint
       total_phala: bigint
+      active_spheron: bigint
+      total_spheron: bigint
     }>>`
       SELECT
         p."userId" as user_id,
@@ -40,11 +42,14 @@ export async function handleAdminDeploymentStats(
         COUNT(DISTINCT CASE WHEN ad.status = 'ACTIVE' THEN ad.id END)::bigint as active_akash,
         COUNT(DISTINCT ad.id)::bigint as total_akash,
         COUNT(DISTINCT CASE WHEN pd.status = 'ACTIVE' THEN pd.id END)::bigint as active_phala,
-        COUNT(DISTINCT pd.id)::bigint as total_phala
+        COUNT(DISTINCT pd.id)::bigint as total_phala,
+        COUNT(DISTINCT CASE WHEN sd.status = 'ACTIVE' THEN sd.id END)::bigint as active_spheron,
+        COUNT(DISTINCT sd.id)::bigint as total_spheron
       FROM "Project" p
       LEFT JOIN "Service" s ON s."projectId" = p.id
       LEFT JOIN "AkashDeployment" ad ON ad."serviceId" = s.id
       LEFT JOIN "PhalaDeployment" pd ON pd."serviceId" = s.id
+      LEFT JOIN "SpheronDeployment" sd ON sd."serviceId" = s.id
       GROUP BY p."userId"
     `
 
@@ -55,6 +60,8 @@ export async function handleAdminDeploymentStats(
       totalAkash: Number(row.total_akash),
       activePhala: Number(row.active_phala),
       totalPhala: Number(row.total_phala),
+      activeSpheron: Number(row.active_spheron),
+      totalSpheron: Number(row.total_spheron),
     }))
 
     res.writeHead(200, { 'Content-Type': 'application/json' })

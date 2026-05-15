@@ -1,5 +1,5 @@
 /**
- * Phase 46 — Region refresh.
+ * Region refresh.
  *
  * Resolves every AKASH `ComputeProvider`'s region and persists it back to
  * the row. Runs on its own cadence (default 30 min, configurable via env)

@@ -1,38 +1,30 @@
 /**
- * Spheron DeploymentProvider Adapter
+ * Spheron DeploymentProvider adapter.
  *
- * Wraps `SpheronOrchestrator` (services/spheron/orchestrator.ts) and
- * `SpheronClient` behind the platform-wide `DeploymentProvider` interface.
- * Mirrors `phalaProvider.ts` line-for-line (Phala is the closer analogue
- * than Akash because both are hourly-billed, single-API providers) with
- * three Spheron-specific differences:
+ * Wraps `SpheronOrchestrator` and `SpheronClient` behind the platform
+ * `DeploymentProvider` interface. Three notable differences from the Phala
+ * sibling (otherwise the closest analogue — both hourly-billed, single-API):
  *
- *   1. **No native stop.** Spheron only supports deploy + DELETE — `stop()`
- *      throws. Resume after low-balance pause = re-deploy from
- *      `savedCloudInit` + `savedDeployInput` (handled by Phase B
- *      `resumeHandler`).
+ *   1. No native stop. Spheron only exposes deploy + DELETE; `stop()`
+ *      throws. Resume after low-balance pause re-deploys from
+ *      `savedCloudInit` + `savedDeployInput` via `resumeHandler`.
  *
- *   2. **SSH-based health probe.** No "get app status" REST endpoint that
- *      reports container health — `getHealth` consults the Spheron API for
- *      VM-level status, then SSH-probes `docker ps` for container-level
- *      health when the VM is ACTIVE. Mirrors `getDockerHealthViaSsh`.
+ *   2. SSH-based container health. No upstream "get app status" endpoint —
+ *      `getHealth` consults Spheron for VM status, then SSH-probes
+ *      `docker ps` for container health when the VM is ACTIVE.
  *
- *   3. **`'gone'` mapping.** Per Phase 49 + 49b, the sweeper-close signal
- *      is `'gone'` (lease confirmed dead at provider). Spheron returns
- *      `'gone'` from getHealth for: API 404, native status `terminated` /
- *      `terminated-provider` / `failed`, AND DB-side terminal
- *      (`FAILED`, `PERMANENTLY_FAILED`) — mirroring the Phala fix in
- *      Phase 49b loophole 1. `'unhealthy'` is reserved for "VM running
- *      but containers crashed" and is NEVER a sweeper-close signal.
+ *   3. `'gone'` mapping. The sweeper-close signal is `'gone'` (lease
+ *      confirmed dead). Spheron returns `'gone'` for API 404, native
+ *      status `terminated` / `terminated-provider` / `failed`, and DB-side
+ *      terminal (`FAILED`, `PERMANENTLY_FAILED`). `'unhealthy'` is
+ *      reserved for "VM running but containers crashed" and is NEVER a
+ *      sweeper-close signal.
  *
- * Status mapping (Spheron native → ProviderStatus):
- *   CREATING            → 'creating'
- *   STARTING            → 'starting'
- *   ACTIVE              → 'active'
- *   FAILED              → 'failed'
- *   STOPPED             → 'stopped'
- *   DELETED             → 'deleted'
- *   PERMANENTLY_FAILED  → 'failed'
+ * Status map (native → ProviderStatus):
+ *   CREATING/STARTING/ACTIVE → creating/starting/active
+ *   FAILED/PERMANENTLY_FAILED → failed
+ *   STOPPED → stopped
+ *   DELETED → deleted
  */
 
 import type { PrismaClient } from '@prisma/client'
@@ -78,9 +70,9 @@ function mapStatus(nativeStatus: string): ProviderStatus {
 
 /**
  * Spheron diverges from Akash/Phala: hourly billing accrues from the
- * moment we POST to upstream, so CREATING/STARTING are user-visible as
- * "this VM is running for me right now". Reflected in `liveStatuses`
- * + the `activeSpheronDeployment` GraphQL field resolver.
+ * moment we POST upstream, so CREATING/STARTING are user-visible as
+ * "this VM is running for me right now". Reflected in `liveStatuses` and
+ * the `activeSpheronDeployment` GraphQL resolver.
  */
 export const SPHERON_DESCRIPTOR: DeploymentProviderDescriptor = {
   name: 'spheron',
@@ -129,24 +121,18 @@ export class SpheronProvider implements DeploymentProvider {
 
   async getActiveDeploymentIds(): Promise<string[]> {
     const active = await this.prisma.spheronDeployment.findMany({
-      where: { status: 'ACTIVE' },
+      where: { status: { in: [...SPHERON_DESCRIPTOR.liveStatuses] } },
       select: { id: true },
     })
     return active.map(d => d.id)
   }
 
   /**
-   * The DeploymentProvider.deploy entry point. Today the resolver path
-   * routes through `templates.ts` (Phase C) which calls
-   * `orchestrator.deployServiceSpheron` directly with the full set of
-   * Spheron-specific opts (offerId, gpuType, region, instanceType, etc.).
-   *
-   * The generic `deploy(serviceId, options)` shape can't carry the
-   * Spheron offer selection, so this method intentionally throws — Phase C
-   * resolvers MUST use `deployFromTemplateToSpheron` / direct
-   * orchestrator calls. Mirrors the Phala adapter's runtime guard
-   * (`if (!options.composeContent) throw…`) but harder: the contract is
-   * "use the typed entry point".
+   * The generic `deploy(serviceId, options)` shape cannot carry Spheron
+   * offer selection (offerId, gpuType, region, instanceType, etc.), so
+   * this method intentionally throws. Resolvers MUST call
+   * `deployFromTemplateToSpheron` or `orchestrator.deployServiceSpheron`
+   * directly with the typed options.
    */
   async deploy(_serviceId: string, _options: DeployOptions): Promise<DeploymentResult> {
     throw new Error(
@@ -175,9 +161,9 @@ export class SpheronProvider implements DeploymentProvider {
 
     const deletedAt = new Date()
 
-    // Phase 31 contract — settle ALL outstanding billing BEFORE the
-    // upstream DELETE. If the local row was ACTIVE, the hourly accrual
-    // has been ticking and the user owes a final prorated chunk.
+    // Settle ALL outstanding billing BEFORE the upstream DELETE. If the
+    // local row was ACTIVE the hourly accrual has been ticking and the
+    // user owes a final prorated chunk.
     if (deployment.status === 'ACTIVE') {
       await processFinalSpheronBilling(
         this.prisma,
@@ -192,8 +178,8 @@ export class SpheronProvider implements DeploymentProvider {
     // {canTerminate:false, timeRemaining:N}. We mark the local row DELETED
     // (settled, hidden from user) but leave upstreamDeletedAt=null so the
     // staleDeploymentSweeper retries DELETE every 5 minutes until it sticks
-    // (or isAlreadyGone). Phase B billing math charges max(actual, 20)
-    // minutes so what we paid Spheron matches what we charged the user.
+    // (or isAlreadyGone). Billing charges max(actual, 20) minutes so what
+    // we paid Spheron matches what we charged the user.
     let upstreamDeletedAt: Date | null = null
     let minimumRuntimeDeferral: { timeRemainingMinutes: number } | null = null
 
@@ -277,7 +263,7 @@ export class SpheronProvider implements DeploymentProvider {
   }
 
   /**
-   * Phase 31 / 49 / 49b — the most contract-sensitive method.
+   * The most contract-sensitive method on the adapter.
    *
    * Verdict matrix:
    *   DB DELETED                         → 'unknown' (already settled — sweeper must NOT act)
@@ -295,8 +281,8 @@ export class SpheronProvider implements DeploymentProvider {
    *     SSH ok, some crashed             → 'unhealthy' (NOT a sweeper-close signal)
    *   DB ACTIVE + transient API error    → probe upstream; 'gone' on confirmed 404, else 'unknown'
    *
-   * NEVER returns `'healthy'` on catch / transient — that's the original
-   * Phase 31 bug that masked dead Phala CVMs from the reconciler.
+   * NEVER returns `'healthy'` on catch / transient — that previously
+   * masked dead CVMs from the reconciler.
    */
   async getHealth(deploymentId: string): Promise<DeploymentHealthResult | null> {
     const deployment = await this.prisma.spheronDeployment.findUnique({
@@ -314,8 +300,7 @@ export class SpheronProvider implements DeploymentProvider {
       // DELETED → 'unknown' (already settled; active-set filter excludes
       // DELETED rows anyway). FAILED / PERMANENTLY_FAILED → 'gone' so the
       // sweeper's close_gone path can sync to CLOSED if it ever ends up
-      // in the active set. Mirrors the Phase 49b Phala/Akash terminal
-      // mapping.
+      // in the active set. Mirrors the Phala/Akash terminal mapping.
       return {
         provider: 'spheron',
         overall: deployment.status === 'DELETED' ? 'unknown' : 'gone',
@@ -392,9 +377,9 @@ export class SpheronProvider implements DeploymentProvider {
     try {
       const upstream = await orchestrator.getDeploymentStatus(upstreamId)
 
-      // Transient API failure — getDeploymentStatus already logged.
-      // Phase 49b: try the existence probe to upgrade 'unknown' → 'gone'
-      // when we have evidence the VM is really deleted.
+      // Transient API failure — getDeploymentStatus already logged. Try
+      // the existence probe to upgrade 'unknown' → 'gone' when we have
+      // evidence the VM is really deleted.
       if (upstream === null) {
         const probe = await orchestrator.probeDeploymentExistence(upstreamId)
         if (probe === 'gone') {
@@ -514,7 +499,7 @@ export class SpheronProvider implements DeploymentProvider {
         //   - Compose still coming up (apt install + image pull) → 'starting'
         //   - Compose finished and crashed out → 'unhealthy'
         // We can't distinguish reliably from `docker ps` alone (no
-        // `docker ps -a` parsing yet — Phase B may add it). Most workloads
+        // `docker ps -a` parsing yet). Most workloads use
         // restart-policy=on-failure, so an empty `docker ps` after some
         // grace period implies failure. For now we report 'unhealthy' if
         // the deployment has been ACTIVE > 10 min and 'starting' otherwise.
@@ -751,7 +736,7 @@ export class SpheronProvider implements DeploymentProvider {
       // SSH-tunneled `docker logs --follow` (services/spheron/orchestrator.streamLogsViaSsh).
       supportsLogStreaming: true,
       supportsTEE: false,
-      // Volumes API exists upstream but is deferred to Phase 2.
+      // Volumes API exists upstream but is deferred.
       supportsPersistentStorage: true,
       supportsWebSocket: true,
       supportsShell: true,

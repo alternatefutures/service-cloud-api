@@ -756,6 +756,15 @@ export const phalaMutations = {
       log.info(`Closed sibling Phala deployment ${sib.id} (user cancelled ${id})`)
     }
 
+    // Drop the proxy backend cache so the next *.apps/*.agents request to
+    // this slug re-resolves and 503s instead of routing to the dead CVM.
+    try {
+      const { getSubdomainProxy } = await import('../services/proxy/subdomainProxy.js')
+      getSubdomainProxy()?.invalidateSlug(deployment.service.slug)
+    } catch (err) {
+      log.warn({ err, slug: deployment.service.slug }, 'Subdomain proxy invalidation failed (Phala delete)')
+    }
+
     return updated
   },
 }

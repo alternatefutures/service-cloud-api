@@ -38,8 +38,8 @@ const SERVICE_POLL_MAX_ATTEMPTS = 24
 export const DEFAULT_DEPOSIT_UACT = 1_000_000
 
 /**
- * Phase 38 — persistent volume attached to a raw Docker image. Mirrors the
- * shape used by `template.persistentStorage` so the SDL builders stay in sync.
+ * Persistent volume attached to a raw Docker image. Mirrors the shape used
+ * by `template.persistentStorage` so the SDL builders stay in sync.
  * Shape is also enforced by the `updateService` resolver before persistence,
  * but we re-validate at SDL build time as a defence-in-depth check (a
  * malformed entry slipping through makes Akash reject the entire deploy with
@@ -1306,8 +1306,8 @@ export class AkashOrchestrator {
       }
       baseImage?: string
       /**
-       * Phase 46 — optional curated region bucket ("us-east" | "us-west" |
-       * "eu" | "asia"). When set, the SDL emits `placement.attributes.region`
+       * Optional curated region bucket ("us-east" | "us-west" | "eu" |
+       * "asia"). When set, the SDL emits `placement.attributes.region`
        * and only providers publishing that attribute will bid. Empty bids
        * route through `AWAITING_REGION_RESPONSE` instead of failing. Null/
        * undefined = "Any (cheapest globally)" — today's default behavior.
@@ -1366,8 +1366,8 @@ export class AkashOrchestrator {
       }
     }
 
-    // Prepare SDL content. Phase 46: pass region through so the SDL
-    // generator can emit `placement.attributes.region` when applicable.
+    // Prepare SDL content. Pass region through so the SDL generator can
+    // emit `placement.attributes.region` when applicable.
     // The flag `AF_REGIONS_SDL` (default ON) gates emission so an
     // incident can disable region-attribute filtering without a redeploy
     // — the deploy still happens, just without the placement attribute.
@@ -1404,8 +1404,8 @@ export class AkashOrchestrator {
         depositUakt: BigInt(deposit),
         status: 'CREATING',
         retryCount: 0,
-        // Phase 46 — persist user intent. resolvedRegion is filled in
-        // post-lease by the lease creation handler from the winning
+        // Persist user intent. resolvedRegion is filled in post-lease by
+        // the lease creation handler from the winning
         // provider's `ComputeProvider.region`.
         region: options.region ?? null,
       },
@@ -1470,11 +1470,11 @@ export class AkashOrchestrator {
     templateId?: string | null
     containerPort?: number | null
     dockerImage?: string | null
-    // Phase 38 — persistent volumes for raw Docker images. Json column on
-    // Service. Templates own their own volumes via template.persistentStorage.
+    // Persistent volumes for raw Docker images. Json column on Service.
+    // Templates own their own volumes via template.persistentStorage.
     volumes?: unknown
-    // Phase 39 / GitHub-source flavor — used to pick a sensible default port
-    // when the user (or builder) didn't set one. See port-fallback below.
+    // Service-flavor / GitHub-source — used to pick a sensible default
+    // port when the user (or builder) didn't set one. See port-fallback below.
     flavor?: string | null
     gitProvider?: string | null
     site?: { id: string } | null
@@ -1787,8 +1787,8 @@ export class AkashOrchestrator {
               ${gpu.vendor}:${modelLine}`
     }
 
-    // Phase 38 — emit `params.storage.<name>` mounts and named storage entries
-    // matching the template generator (templates/sdl.ts:buildStorageProfileBlock).
+    // Emit `params.storage.<name>` mounts and named storage entries matching
+    // the template generator (templates/sdl.ts:buildStorageProfileBlock).
     // Akash requires named storage entries to declare `persistent: true` and
     // `class: beta3` so the provider picks a backing volume that survives pod
     // restarts.

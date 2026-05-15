@@ -1,23 +1,14 @@
 /**
- * Phase 46 — Region GraphQL resolvers.
+ * Region GraphQL resolver. Single query: `regions(provider: ComputeProviderType): [Region!]!`
  *
- * Single query: `regions(provider: ComputeProviderType): [Region!]!`
+ * AKASH: one row per curated bucket (us-east, us-west, eu, asia) with live
+ * verified/online counts + median GPU/CPU prices.
+ * PHALA / SPHERON: sentinel single-region row; clients swap the picker for
+ * an explicit single-region message.
  *
- * For Akash: returns one row per curated bucket (us-east, us-west, eu, asia)
- * with live counts + median GPU/CPU prices. Strict gate — a region is
- * `available: true` only when both `verifiedCount >= 1` AND
- * `recentBidCount(24h) >= 1`. Picker UIs render unavailable buckets as
- * `(no capacity right now)` instead of hiding them, so users see we tried.
- *
- * For Phala: returns one sentinel row, `available: false`,
- * `label: "Phala Cloud (single-region)"`. Web/CLI surfaces detect this and
- * swap the picker out for an explicit message — see AF_IMPLEMENTATION_PHALA.md.
- *
- * The query is cheap (single Prisma `groupBy` over `compute_provider`,
- * single `groupBy` over `gpu_bid_observation` filtered to last 24h). At
- * realistic provider counts (~100 AKASH providers, ~4 buckets) it lands
- * sub-millisecond. No cache layer required at v1; can be added if it ever
- * stops being trivial.
+ * Picker is metadata for a dropdown, not on the deploy critical path: every
+ * external price/geometry fetch is wrapped in a 1s race against its static
+ * fallback so cold-start does not block the UI.
  */
 
 import type { PrismaClient } from '@prisma/client'
@@ -26,17 +17,6 @@ import { REGIONS, REGION_IDS, type RegionId } from '../services/regions/mapping.
 import { getAkashChainGeometry, getAktUsdPrice, AKT_USD_PRICE_FALLBACK } from '../config/pricing.js'
 import { BLOCKS_PER_HOUR } from '../config/akash.js'
 
-/**
- * Phase 46 — picker latency budget.
- *
- * `getAktUsdPrice()` and `getAkashChainGeometry()` each fall back through
- * external APIs (akash console, CoinGecko) before reaching their static
- * fallbacks. Cold-start on a fresh pod can blow ~15s before either
- * returns. The picker should never wait that long; it's metadata for a
- * dropdown, not the deploy critical path. We wrap each call in a 1-second
- * race and fall through to the static fallbacks if they don't beat it.
- * Once the upstream caches warm (≤5 min later), we get live values.
- */
 const PRICE_FETCH_TIMEOUT_MS = 1_000
 
 function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -48,7 +28,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   ])
 }
 
-type ProviderType = 'AKASH' | 'PHALA'
+type ProviderType = 'AKASH' | 'PHALA' | 'SPHERON'
 
 type RegionConfidence = 'GREEN' | 'YELLOW' | 'RED'
 
@@ -75,19 +55,11 @@ const RECENT_BID_WINDOW_HOURS = 24
 const SUFFICIENT_PROVIDERS_FOR_GREEN = 3
 
 /**
- * Phase 46 — picker availability gate.
+ * Picker availability gate.
  *
- * Default (env unset or "0"): a region is selectable iff `verifiedCount >= 1`.
- * Bid count still drives the `confidence` color (RED if no recent bids,
- * YELLOW for a few, GREEN for many) so users get a quality signal without
- * being locked out.
- *
- * Strict mode (`AF_REGIONS_REQUIRE_BIDS=1`): also requires
- * `recentBidCount >= 1`. Use this once the GPU bid probe and provider
- * ingest are reliably producing data — otherwise it creates a 6-hour
- * chicken-and-egg on every fresh install / new region (the probe only
- * runs every 6h and only probes GPU SKUs, so CPU-only regions stay locked
- * forever in strict mode).
+ * Default (`AF_REGIONS_REQUIRE_BIDS` unset/0): selectable iff verifiedCount ≥ 1.
+ * Strict (`AF_REGIONS_REQUIRE_BIDS=1`): also requires recentBidCount ≥ 1.
+ * Bid count always drives the `confidence` color regardless of mode.
  */
 const REQUIRE_BIDS_FOR_AVAILABILITY =
   process.env.AF_REGIONS_REQUIRE_BIDS === '1'
@@ -157,14 +129,14 @@ function pickConfidence(
 }
 
 /**
- * Sentinel row for `regions(provider: PHALA)`. The frontend UI/CLI both
- * detect `id === 'phala-single-region'` and render the explicit message
- * instead of the picker.
+ * Sentinel row for single-region providers (Phala, Spheron). Frontend
+ * detects the id and renders an explicit single-region message instead of
+ * the bucket picker.
  */
-function phalaSentinel(): RegionRow {
+function singleRegionSentinel(id: string, label: string): RegionRow {
   return {
-    id: 'phala-single-region',
-    label: 'Phala Cloud (single-region)',
+    id,
+    label,
     available: false,
     verifiedCount: 0,
     onlineCount: 0,
@@ -272,17 +244,10 @@ async function loadRecentBids(prisma: PrismaClient): Promise<RecentBidsByRegion>
   return { count, pricesPerGpu, cpuPrices }
 }
 
-/**
- * Build per-region price block. `gpuModelHint` (if provided) lets the UI
- * compute "median for the GPU I'm actually deploying" — it bumps that
- * model into the response even if the curated GPU_PRICE_MODELS list doesn't
- * include it.
- */
 function buildPrices(
   regionId: RegionId,
   bids: RecentBidsByRegion,
   ctx: PriceContext,
-  gpuModelHint?: string | null
 ): RegionMedianPrices {
   const perGpu = bids.pricesPerGpu.get(regionId) ?? new Map<string, bigint[]>()
   const cpuList = bids.cpuPrices.get(regionId) ?? []
@@ -293,21 +258,13 @@ function buildPrices(
     return pricePerBlockUactToUsdPerHour(bigintMedian(list), ctx)
   }
 
-  const result: RegionMedianPrices = {
+  return {
     cpu1Core: pricePerBlockUactToUsdPerHour(bigintMedian(cpuList), ctx),
     h100: medianForModel('h100'),
     h200: medianForModel('h200'),
     rtx4090: medianForModel('rtx4090'),
     a100: medianForModel('a100'),
   }
-
-  // Attach the user-hint model if it isn't already in the curated set.
-  // (We don't add new keys to the GraphQL type — instead the UI passes
-  // the same hint and reads the matching field. If the hint is for a
-  // model we don't have an explicit field for, it's the UI's job to
-  // fall back to "—".)
-  void gpuModelHint
-  return result
 }
 
 export const regionsQueries = {
@@ -319,7 +276,11 @@ export const regionsQueries = {
     const provider: ProviderType = args?.provider ?? 'AKASH'
 
     if (provider === 'PHALA') {
-      return [phalaSentinel()]
+      return [singleRegionSentinel('phala-single-region', 'Phala Cloud (single-region)')]
+    }
+
+    if (provider === 'SPHERON') {
+      return [singleRegionSentinel('spheron-single-region', 'Spheron (offer-based regions)')]
     }
 
     if (provider !== 'AKASH') {
@@ -366,7 +327,7 @@ export const regionsQueries = {
         verifiedCount,
         onlineCount,
         recentBidCount,
-        medianPrices: buildPrices(id, bids, priceCtx, args?.gpuModelHint),
+        medianPrices: buildPrices(id, bids, priceCtx),
         confidence: pickConfidence(verifiedCount, onlineCount, recentBidCount),
       })
     }

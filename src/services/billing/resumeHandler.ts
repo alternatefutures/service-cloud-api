@@ -350,7 +350,7 @@ export async function handleComputeResumeCheck(
             // envVars are intentionally NOT replayed — `envKeys` records
             // only the keys, not the values. Resume preserves the same
             // recipe shape but a true env-value resume would need secret
-            // storage outside Spheron (Phase 2).
+            // storage outside Spheron.
             envVars: undefined,
             orgBillingId,
             organizationId,
@@ -361,7 +361,7 @@ export async function handleComputeResumeCheck(
           },
         )
 
-        // Phase 49b lease-chain — link the new row to the STOPPED row so
+        // Lease-chain link — connect the new row to the STOPPED row so
         // the user-visible "Running for Xh" timer keeps walking back to
         // the original first-active moment. Best-effort: a failure here
         // doesn't break the resume itself, just degrades the timer.

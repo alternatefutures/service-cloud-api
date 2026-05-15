@@ -1,5 +1,5 @@
 /**
- * Audit Log Writer (Phase 44 / D1)
+ * Audit Log Writer
  *
  * Fire-and-forget persistence of business events into the `AuditEvent`
  * table. The identical table exists in service-auth (see

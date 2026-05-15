@@ -15,7 +15,7 @@
  *      (`BETA_HOURLY_CAP_ALLOWLIST` — CSV of organizationIds that bypass
  *      the hourly cap; concurrency cap still applies, sized by tier).
  *
- * Concurrency tiering (new in Phase 36):
+ * Concurrency tiering:
  *   - TRIALING / unknown → `MAX_ACTIVE_DEPLOYMENTS_TRIAL` (default 10)
  *   - ACTIVE / PAST_DUE  → `MAX_ACTIVE_DEPLOYMENTS_PAID`  (default 25)
  *

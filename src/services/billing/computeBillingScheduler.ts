@@ -132,9 +132,9 @@ export class ComputeBillingScheduler {
 
     const startTime = Date.now()
     // Shared trace id for every audit event produced by this tick. Makes it
-    // trivial to fetch "everything that happened in cycle X" from the audit
-    // log (Phase 44). Child processors (processAkashEscrows etc.) can adopt
-    // it once D2 wires a scheduler-scoped AsyncLocalStorage.
+    // trivial to fetch "everything that happened in cycle X" from the
+    // audit log. Child processors (processAkashEscrows etc.) can adopt
+    // it once a scheduler-scoped AsyncLocalStorage is wired up.
     const tickTraceId = randomUUID()
     log.info({ tickTraceId }, 'Starting hourly billing cycle')
 
@@ -225,7 +225,7 @@ export class ComputeBillingScheduler {
         'Cycle complete'
       )
 
-      // Phase 44 audit: one event per tick carrying the full stats blob.
+      // Audit: one event per tick carrying the full stats blob.
       // status=warn when any provider errored but the cycle otherwise
       // completed; status=error lives in the catch block below.
       const hadErrors =
@@ -864,7 +864,7 @@ export class ComputeBillingScheduler {
 
         if (amountCents <= 0) continue
 
-        // Hourly idempotency key (NEVER daily — see Phase 34 / Phala bug
+        // Hourly idempotency key (NEVER daily — see Phala billing bug
         // PRP §3.6). Key is bound to the slot the user is being charged
         // for so coalesce-billing on missed cycles works.
         const slotStart = new Date(
@@ -897,8 +897,8 @@ export class ComputeBillingScheduler {
           },
         })
 
-        // Phase 34 — mirror locally on every code path. Advance lastBilledAt
-        // by exactly hoursToBill*1h (NOT to `now`), capped at `now`, so the
+        // Mirror locally on every code path. Advance lastBilledAt by
+        // exactly hoursToBill*1h (NOT to `now`), capped at `now`, so the
         // fractional tail rolls forward to the next cycle / final
         // settlement instead of being silently discarded. Update
         // totalBilledCents BEFORE the alreadyProcessed branch so a prior
@@ -1521,8 +1521,8 @@ export class ComputeBillingScheduler {
       try {
         const stoppedAt = new Date()
 
-        // Phase 31 — settle billing BEFORE the upstream DELETE. This
-        // applies the 20-min minimum-runtime floor for sub-20-min
+        // Settle billing BEFORE the upstream DELETE. This applies the
+        // 20-min minimum-runtime floor for sub-20-min
         // deploys (see processFinalSpheronBilling).
         await processFinalSpheronBilling(
           this.prisma,
@@ -1645,6 +1645,10 @@ export class ComputeBillingScheduler {
 
     if (pausedServices.length > 0) {
       try {
+        // Idempotency key bucketed by UTC date so the scheduler can re-run
+        // within the same day without spamming a duplicate pause email.
+        // Different orgs / pause sets get different keys naturally.
+        const todayUtc = new Date().toISOString().slice(0, 10)
         await billingApi.notify({
           orgId,
           type: 'low_balance_pause',
@@ -1652,6 +1656,7 @@ export class ComputeBillingScheduler {
           balanceCents,
           dailyCostCents,
           pausedServices,
+          idempotencyKey: `low_balance_pause:${orgId}:${todayUtc}`,
         })
       } catch (error) {
         log.error({ orgId, err: error }, 'Failed to send pause notification')

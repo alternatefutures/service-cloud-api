@@ -188,7 +188,7 @@ async function handleInstallationEvent(
     // (installation id, sender's GitHub account id, sender's GitHub
     // login). Mapping any of those to an AF Organization without an
     // explicit user action is exactly the cross-tenant claim shape that
-    // Phase 47 (2026-04-27) closed.
+    // we now reject at the API surface.
     //
     // To make the auto-claim safe we'd need:
     //   - `User.githubId` (or `User.githubLogin`) populated via GitHub

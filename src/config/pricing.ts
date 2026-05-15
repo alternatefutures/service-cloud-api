@@ -79,8 +79,7 @@ export const COMPUTE_PRICING = {
 // SPHERON — INTENTIONALLY NO STATIC RATES
 // ============================================
 //
-// Locked decision (see admin/cloud/docs/AF_HANDOFF_2026-05-06_SPHERON_PHASE_A.md
-// §"Phase B.5"): Spheron pricing is **live-only**. Resolvers query
+// Locked decision: Spheron pricing is **live-only**. Resolvers query
 // `client.listGpuOffers()` at deploy time, snapshot the chosen offer's
 // `price` onto `SpheronDeployment.originalHourlyRateCents` (pre-margin) and
 // `hourlyRateCents` (post-margin), and never reference a config-file rate.

@@ -5,23 +5,20 @@
  * catalog, given a service's GPU + region constraints. Used by both
  * `deployToSpheron` and `deployFromTemplateToSpheron` resolvers.
  *
- * Locked decisions (Spheron Phase A / Phase C, 2026-05-06):
- *   - DEDICATED only in v1 (SPOT reserved for the SPOT phase).
- *   - `supportsCloudInit: true` is non-negotiable — our entire bring-up
- *     flow assumes Spheron will run our cloudInit payload.
- *   - Region buckets follow the Phase 46 curation:
- *     us-east | us-west | eu | asia. Per Phase C decision, when the caller
- *     sets a region the picker is STRICT — no offers in that bucket = throw
- *     `NoSpheronCapacityError`. The web-app's auto-router then falls back
- *     to Akash. (We never silently relax the region constraint; that would
- *     surprise users who picked "EU only" for compliance reasons.)
- *   - GPU model match is case-insensitive substring against the offer's
+ * Decisions:
+ *   - DEDICATED only (SPOT reserved for a future spot phase).
+ *   - `supportsCloudInit: true` is non-negotiable — bring-up assumes the
+ *     provider will run our cloudInit payload.
+ *   - Region buckets: us-east | us-west | eu | asia. When the caller sets a
+ *     region the picker is STRICT — no offers in that bucket throws
+ *     `NoSpheronCapacityError`. The web-app auto-router then falls back to
+ *     Akash. (We never silently relax the region; users who picked "EU only"
+ *     for compliance would be surprised.)
+ *   - GPU model match: case-insensitive substring against the offer's
  *     `gpuType` AND the group's `gpuModel` / `displayName`. If
  *     `acceptableGpuModels` is empty/unset we accept any GPU (price-first).
- *   - Cheapest-first sort. If the upstream provider returns ties, the
- *     order is determined by upstream — we don't tiebreak further (the
- *     Phase C "Spheron-first absolute" auto-route decision means we don't
- *     need a sub-tiebreaker to avoid double-prefer behavior).
+ *   - Cheapest-first sort. Upstream tie order is preserved — we don't
+ *     sub-tiebreak.
  *
  * No DB / no HTTP itself — given a `SpheronClient` instance, returns the
  * pick or throws. Pure orchestration logic for testability.
@@ -39,14 +36,13 @@ import {
 } from './canonicalize.js'
 import { isStockExhausted } from './stockBlocklist.js'
 
-// ─── Region bucket map (Phase 46 buckets → cluster keyword regex) ────
+// ─── Region bucket map (curated buckets → cluster keyword regex) ────
 
 /**
- * Phase 46 curated region buckets mapped to keyword regexes that match
- * Spheron upstream cluster strings.
+ * Curated region buckets mapped to keyword regexes that match Spheron
+ * upstream cluster strings.
  *
- * Cluster strings observed live (Phase H discovery 2026-04-21 + Phase 51
- * re-probe 2026-05-13):
+ * Cluster strings observed live (last re-probe 2026-05-13):
  *   - data-crunch:    "Finland 3", "Iceland 1"
  *   - sesterce:       "amsterdam-netherlands-2", "kansascity-usa-1",
  *                     "desmoines-usa-1", "culpeper-usa-1", "warsaw-poland-1",
@@ -114,8 +110,8 @@ export function clusterMatchesBucket(cluster: string, bucket: string | null | un
 
 /**
  * Thrown when no offer in the live catalog matches the caller's
- * constraints. The web-app's auto-router catches this and falls back to
- * Akash (per Phase C tiebreaker decision: Spheron-first, Akash fallback).
+ * constraints. The web-app auto-router catches this and falls back to
+ * Akash (Spheron-first, Akash fallback).
  */
 export class NoSpheronCapacityError extends Error {
   readonly reason: string
@@ -282,7 +278,7 @@ export async function pickSpheronOffer(opts: PickOfferOptions): Promise<PickedOf
       // not real-time inventory — we'd otherwise pick the same drained
       // offer and hand the user another `NO_CAPACITY`. The blocklist TTL
       // (~15 min) lets us auto-recover once stock turns over.
-      // Phase 50.1 (2026-05-15) — see `stockBlocklist.ts` for details.
+      // See `stockBlocklist.ts` for details.
       if (group.gpuType && isStockExhausted(group.gpuType)) continue
       for (const offer of group.offers) {
         if (!offer.available) continue

@@ -38,9 +38,9 @@ const STALE_THRESHOLD_MIN = STALE_THRESHOLD_MS / 60_000
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000   // 5 minutes
 const LIVENESS_MIN_AGE_MS = 10 * 60 * 1000 // only check deployments ACTIVE for >10 min
 
-// Phase 46 — AWAITING_REGION_RESPONSE rows are the user-visible "no bids in
-// region X" pause state. The UI/CLI surface alternative regions and a retry
-// option; if the user does nothing, the sweeper auto-cancels after 5 min so
+// AWAITING_REGION_RESPONSE rows are the user-visible "no bids in region X"
+// pause state. The UI/CLI surface alternative regions and a retry option;
+// if the user does nothing, the sweeper auto-cancels after 5 min so
 // the deployment doesn't linger as a half-state forever. Shorter than
 // STALE_THRESHOLD_MS because the row hasn't actually allocated chain or
 // escrow resources yet — just a temp dseq + DB row, both cheap to drop.
@@ -51,6 +51,10 @@ const AKASH_INTERMEDIATE_STATES = [
 ] as const
 
 const PHALA_INTERMEDIATE_STATES = [
+  'CREATING', 'STARTING',
+] as const
+
+const SPHERON_INTERMEDIATE_STATES = [
   'CREATING', 'STARTING',
 ] as const
 
@@ -175,6 +179,80 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
   } catch (err) {
     log.error(err as Error, 'Error sweeping Phala deployments')
   }
+
+  // Spheron: same pattern as Phala. Mid-flight rows that never reached
+  // ACTIVE are marked FAILED. Best-effort upstream DELETE here; the
+  // 20-min minimum-runtime floor is handled by the upstream-cleanup
+  // retry pass (`reconcileSpheronUpstreamCleanups`).
+  try {
+    const staleSpheron = await prisma.spheronDeployment.findMany({
+      where: {
+        status: { in: [...SPHERON_INTERMEDIATE_STATES] },
+        updatedAt: { lt: cutoff },
+      },
+      select: {
+        id: true,
+        status: true,
+        updatedAt: true,
+        retryCount: true,
+        providerDeploymentId: true,
+        organizationId: true,
+      },
+    })
+
+    const client = getSpheronClient()
+    for (const dep of staleSpheron) {
+      log.warn(`Spheron deployment ${dep.id} stuck in ${dep.status} since ${dep.updatedAt.toISOString()} — marking FAILED`)
+
+      let upstreamDeletedAt: Date | null = null
+      if (client && dep.providerDeploymentId) {
+        try {
+          await client.deleteDeployment(dep.providerDeploymentId)
+          upstreamDeletedAt = new Date()
+          log.info(
+            { spheronDeploymentId: dep.id, providerDeploymentId: dep.providerDeploymentId },
+            'Spheron VM DELETE succeeded during stale sweep',
+          )
+        } catch (delErr) {
+          if (delErr instanceof SpheronApiError && delErr.isAlreadyGone()) {
+            upstreamDeletedAt = new Date()
+          } else if (delErr instanceof SpheronApiError && delErr.isMinimumRuntimeNotMet()) {
+            // Defer upstream cleanup — `reconcileSpheronUpstreamCleanups`
+            // will retry once the floor elapses. Local row still goes FAILED.
+            log.warn(
+              { spheronDeploymentId: dep.id, providerDeploymentId: dep.providerDeploymentId },
+              'Spheron VM DELETE deferred during stale sweep (minimum runtime not met)',
+            )
+          } else {
+            log.warn(
+              { providerDeploymentId: dep.providerDeploymentId, err: delErr },
+              'Spheron VM DELETE failed during stale sweep',
+            )
+          }
+        }
+      }
+
+      const result = await prisma.spheronDeployment.updateMany({
+        where: { id: dep.id, status: dep.status },
+        data: {
+          status: 'FAILED',
+          errorMessage: `Stale deployment detected: stuck in ${dep.status} for >${STALE_THRESHOLD_MIN} minutes (swept at ${new Date().toISOString()})`,
+          ...(upstreamDeletedAt ? { upstreamDeletedAt } : {}),
+        },
+      })
+
+      if (result.count > 0) {
+        await decrementOrgConcurrency(prisma, dep.organizationId)
+          .catch((err) => log.warn({ err, deploymentId: dep.id }, 'Concurrency decrement failed (stale Spheron)'))
+      }
+    }
+
+    if (staleSpheron.length > 0) {
+      log.info(`Marked ${staleSpheron.length} stale Spheron deployment(s) as FAILED`)
+    }
+  } catch (err) {
+    log.error(err as Error, 'Error sweeping Spheron deployments')
+  }
 }
 
 /**
@@ -189,8 +267,7 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
  * Because provider.close() settles all billing (interface contract), no
  * provider-specific billing logic is needed here.
  */
-// Sweeper philosophy (2026-05-03 — explicit redesign after rustfs-p1td
-// incident, refined in Phase 49b after the loophole audit):
+// Sweeper philosophy:
 //
 //   The sweeper closes leases that are GENUINELY GONE on-chain. It does
 //   NOT close leases just because a container is unhealthy.
@@ -206,9 +283,9 @@ async function sweepStaleDeployments(prisma: PrismaClient): Promise<void> {
 // What still triggers a sweeper close:
 //   • `overall === 'gone'`  — provider returned 404 / "not found" on
 //     lease-status, OR our DB has the deployment in a terminal failure
-//     state, OR (Phase 49b) Phala's CVM existence probe says the appId
-//     no longer exists at the provider. The chain-side / provider-side
-//     resource is dead; we're just syncing bookkeeping.
+//     state, OR Phala's CVM existence probe says the appId no longer
+//     exists at the provider. The chain-side / provider-side resource is
+//     dead; we're just syncing bookkeeping.
 //
 // What does NOT trigger close:
 //   • `overall === 'unhealthy'`         (container down, lease alive)
@@ -227,18 +304,18 @@ const UNHEALTHY_THRESHOLD = 3   // failover trigger only (if policy enabled)
 // provider-wide outage / RPC blip, not real death. Counters are reset so
 // the next pass starts fresh once the underlying issue clears.
 //
-// 2026-05-03 (Phase 49b) — the same guard is now applied to failover_check
-// verdicts. Previously only `close_gone` was counted, so a provider-wide
-// outage that flipped many opted-in services to `'unhealthy'` could trigger
+// The same guard is also applied to failover_check verdicts. Previously
+// only `close_gone` was counted, so a provider-wide outage that flipped
+// many opted-in services to `'unhealthy'` could trigger
 // fleet-wide auto-failover (each calling provider.close on its old lease)
 // without ever tripping the abort. Now both close paths are protected.
 const MASS_EVENT_MIN_TOTAL = 5
 const MASS_EVENT_RATIO = 0.5
 
-// Per-verdict-kind streak counters. Phase 49 introduced the verdict
-// taxonomy; Phase 49b separates the buckets so streaks of one kind don't
-// inflate the threshold for another. Previously `unhealthyCounters` was
-// shared across `'unhealthy'`, `'unknown'`, and probe-exception streaks,
+// Per-verdict-kind streak counters. Buckets are separated so streaks of
+// one kind don't inflate the threshold for another. Previously
+// `unhealthyCounters` was shared across `'unhealthy'`, `'unknown'`, and
+// probe-exception streaks,
 // which meant an alternating `unhealthy → unknown → unhealthy` sequence
 // could fire failover at the second `'unhealthy'` instead of the third.
 //
@@ -303,7 +380,7 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
   const providers = getAvailableProviders()
   let totalReconciled = 0
   // One trace id per sweep invocation so all closures in a single pass
-  // group together in the audit log (Phase 44).
+  // group together in the audit log.
   const sweepTraceId = randomUUID()
 
   for (const provider of providers) {
@@ -313,7 +390,7 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
 
       log.debug({ provider: provider.name, count: activeIds.length }, 'Reconciling active deployments')
 
-      // ─── Phase 1: probe every deployment, collect verdicts (no closes yet) ───
+      // ─── Step 1: probe every deployment, collect verdicts (no closes yet) ───
       const verdicts: ReconcileVerdict[] = []
       for (const id of activeIds) {
         const goneKey = `${provider.name}:gone:${id}`
@@ -323,7 +400,7 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
         // Helper closure: when we transition into a new verdict bucket we
         // reset the buckets we're leaving so streaks of one kind don't
         // pollute the threshold for another. Each bucket is strictly
-        // single-purpose post-Phase 49b — see counter declarations above.
+        // single-purpose — see counter declarations above.
         const resetOthers = (keep: 'gone' | 'unhealthy' | 'observability') => {
           if (keep !== 'gone') goneCounters.delete(goneKey)
           if (keep !== 'unhealthy') unhealthyCounters.delete(unhealthyKey)
@@ -360,8 +437,8 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
             // the user needs the lease to debug. Only run the opt-in
             // failover branch; if no policy, audit-only. Strict counter:
             // ONLY consecutive `'unhealthy'` ticks count toward the
-            // failover threshold (Phase 49b). Any `'unknown'` /
-            // probe-exception in between resets the streak.
+            // failover threshold. Any `'unknown'` / probe-exception in
+            // between resets the streak.
             const count = (unhealthyCounters.get(unhealthyKey) ?? 0) + 1
             unhealthyCounters.set(unhealthyKey, count)
             resetOthers('unhealthy')
@@ -408,8 +485,8 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
           // Probe threw. Could be RPC timeout, CLI death, network blip.
           // We never close on raw exceptions — the provider 404 path is
           // already mapped to 'gone' inside getHealth(). Tracked in the
-          // observability bucket (Phase 49b) so a transient probe blip
-          // doesn't burn a tick of the unhealthy/failover counter.
+          // observability bucket so a transient probe blip doesn't burn
+          // a tick of the unhealthy/failover counter.
           const errMsg = err instanceof Error ? err.message : String(err)
           const count = (observabilityCounters.get(observabilityKey) ?? 0) + 1
           observabilityCounters.set(observabilityKey, count)
@@ -428,9 +505,9 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
         }
       }
 
-      // ─── Phase 2: mass-event guard ───
-      // Trips on EITHER `close_gone` OR `failover_check` saturation. Phase 49b:
-      // previously only `close_gone` counted, so a provider-wide outage that
+      // ─── Mass-event guard ───
+      // Trips on EITHER `close_gone` OR `failover_check` saturation.
+      // Previously only `close_gone` counted, so a provider-wide outage that
       // flipped many opted-in services to `'unhealthy'` could fan out
       // fleet-wide auto-failover (each calling provider.close on its old
       // lease) without ever tripping the abort. We now treat both as
@@ -492,7 +569,7 @@ async function reconcileActiveDeployments(prisma: PrismaClient): Promise<void> {
         }
       }
 
-      // ─── Phase 3: act on verdicts ───
+      // ─── Act on verdicts ───
       for (const v of verdicts) {
         if (v.kind === 'healthy') continue
 
@@ -669,7 +746,7 @@ function countReasons(closures: Array<{ reason: string }>): Record<string, numbe
 }
 
 /**
- * Phase 44 audit helper — records one event per health-driven close. We
+ * Audit helper — records one event per health-driven close. We
  * best-effort enrich the event with org/service context by looking up the
  * AkashDeployment row; Phala closes use the generic provider id as
  * deploymentId without enrichment. Fire-and-forget: any lookup failure is
@@ -821,8 +898,8 @@ async function reconcileOrphanedEscrows(prisma: PrismaClient): Promise<void> {
 }
 
 /**
- * Phase 46 — auto-cancel deployments stuck in AWAITING_REGION_RESPONSE
- * for >REGION_AWAIT_THRESHOLD_MS. The state is the user-visible "no bids
+ * Auto-cancel deployments stuck in AWAITING_REGION_RESPONSE for
+ * >REGION_AWAIT_THRESHOLD_MS. The state is the user-visible "no bids
  * in region X" pause; if the user walks away without picking an
  * alternative, we don't want a half-state deployment row sitting around
  * forever. Marks FAILED with a self-explanatory errorMessage. No on-chain

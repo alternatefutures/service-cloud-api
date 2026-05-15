@@ -3,8 +3,10 @@ import { createLogger } from '../../lib/logger.js'
 import { getEscrowService } from '../billing/escrowService.js'
 import {
   processFinalPhalaBilling,
+  processFinalSpheronBilling,
   settleAkashEscrowToTime,
 } from '../billing/deploymentSettlement.js'
+import { tryGetProvider } from '../providers/registry.js'
 import { audit } from '../../lib/audit.js'
 
 const log = createLogger('policy-enforcer')
@@ -36,6 +38,7 @@ export async function checkPolicyLimits(prisma: PrismaClient): Promise<PolicyEnf
     include: {
       akashDeployment: { select: { id: true, dseq: true, status: true } },
       phalaDeployment: { select: { id: true, appId: true, status: true, name: true } },
+      spheronDeployment: { select: { id: true, providerDeploymentId: true, status: true } },
     },
   })
 
@@ -43,11 +46,14 @@ export async function checkPolicyLimits(prisma: PrismaClient): Promise<PolicyEnf
 
   for (const policy of policiesNeedingEnforcement) {
     try {
-      const deployment = policy.akashDeployment ?? policy.phalaDeployment
+      const deployment =
+        policy.akashDeployment ?? policy.phalaDeployment ?? policy.spheronDeployment
       if (!deployment) continue
 
       const isActive =
-        policy.akashDeployment?.status === 'ACTIVE' || policy.phalaDeployment?.status === 'ACTIVE'
+        policy.akashDeployment?.status === 'ACTIVE' ||
+        policy.phalaDeployment?.status === 'ACTIVE' ||
+        policy.spheronDeployment?.status === 'ACTIVE'
       if (!isActive) continue
 
       // Runtime expiration check
@@ -87,14 +93,14 @@ export async function stopForPolicy(
     id: string
     akashDeployment: { id: string; dseq: bigint | string | null } | null
     phalaDeployment: { id: string; appId: string } | null
+    spheronDeployment: { id: string; providerDeploymentId: string | null } | null
   },
   reason: 'BUDGET_EXCEEDED' | 'RUNTIME_EXPIRED'
 ) {
   const now = new Date()
 
-  // Clear the reservation — any remaining funds return to the org's pool
-  // automatically since reservedCents is subtracted from effective balance
-  // in balanceCheck.ts. Setting it to 0 releases those funds.
+  // Clearing the reservation lets the unused funds flow back into the org's
+  // effective balance via balanceCheck.ts.
   await prisma.deploymentPolicy.update({
     where: { id: policy.id },
     data: { stopReason: reason, stoppedAt: now, reservedCents: 0 },
@@ -118,45 +124,70 @@ export async function stopForPolicy(
     await getEscrowService(prisma).refundEscrow(policy.akashDeployment.id)
   }
 
-    if (policy.phalaDeployment) {
-      await processFinalPhalaBilling(
-        prisma,
-        policy.phalaDeployment.id,
-        now,
-        `policy_${reason.toLowerCase()}`
-      )
+  if (policy.phalaDeployment) {
+    await processFinalPhalaBilling(
+      prisma,
+      policy.phalaDeployment.id,
+      now,
+      `policy_${reason.toLowerCase()}`
+    )
 
-      try {
-        const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
-        const orchestrator = getPhalaOrchestrator(prisma)
-        await orchestrator.stopPhalaDeployment(policy.phalaDeployment.appId)
-      } catch (err) {
-        log.warn({ appId: policy.phalaDeployment.appId, err }, 'Failed to stop Phala CVM')
-      }
-
-      await prisma.phalaDeployment.update({
-        where: { id: policy.phalaDeployment.id },
-        data: { status: 'STOPPED' },
-      })
+    try {
+      const { getPhalaOrchestrator } = await import('../phala/orchestrator.js')
+      const orchestrator = getPhalaOrchestrator(prisma)
+      await orchestrator.stopPhalaDeployment(policy.phalaDeployment.appId)
+    } catch (err) {
+      log.warn({ appId: policy.phalaDeployment.appId, err }, 'Failed to stop Phala CVM')
     }
 
-    log.info({ policyId: policy.id, reason }, 'Deployment stopped by policy')
-
-    // Phase 44: single policy auto-stop audit event covers both providers.
-    // deploymentId falls through in provider-agnostic form; payload carries
-    // which provider actually received the stop call so filters can still
-    // split akash vs phala without touching the top-level shape.
-    audit(prisma, {
-      category: 'deployment',
-      action: 'policy.auto_stopped',
-      status: 'ok',
-      deploymentId: policy.akashDeployment?.id ?? policy.phalaDeployment?.id,
-      payload: {
-        reason,
-        policyId: policy.id,
-        provider: policy.akashDeployment ? 'akash' : 'phala',
-      },
+    await prisma.phalaDeployment.update({
+      where: { id: policy.phalaDeployment.id },
+      data: { status: 'STOPPED' },
     })
+  }
+
+  if (policy.spheronDeployment) {
+    // Spheron settles inside provider.close(); call the registry path to
+    // keep the on-chain billing contract identical to user-initiated close.
+    await processFinalSpheronBilling(
+      prisma,
+      policy.spheronDeployment.id,
+      now,
+      `policy_${reason.toLowerCase()}`
+    )
+
+    const spheron = tryGetProvider('spheron')
+    if (spheron) {
+      try {
+        await spheron.close(policy.spheronDeployment.id)
+      } catch (err) {
+        log.warn(
+          { id: policy.spheronDeployment.id, err },
+          'Failed to close Spheron deployment for policy stop',
+        )
+      }
+    }
+  }
+
+  const provider = policy.akashDeployment
+    ? 'akash'
+    : policy.phalaDeployment
+      ? 'phala'
+      : 'spheron'
+  const deploymentId =
+    policy.akashDeployment?.id ??
+    policy.phalaDeployment?.id ??
+    policy.spheronDeployment?.id
+
+  log.info({ policyId: policy.id, reason, provider }, 'Deployment stopped by policy')
+
+  audit(prisma, {
+    category: 'deployment',
+    action: 'policy.auto_stopped',
+    status: 'ok',
+    deploymentId,
+    payload: { reason, policyId: policy.id, provider },
+  })
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Phase 38 smoke test — verify generateCustomDockerSDL emits the right
+ * Smoke test — verify generateCustomDockerSDL emits the right
  * persistent-storage YAML when volumes are attached.
  *
  * Run from service-cloud-api/:

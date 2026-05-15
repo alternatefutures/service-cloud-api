@@ -529,8 +529,8 @@ export async function processFinalPhalaBilling(
  *   - `idempotencyPrefix` defaults to `'spheron_final'` to keep Spheron and
  *     Phala settlement keys in independent namespaces (collision protection).
  *
- * Phase 34 contract: the `alreadyProcessed` branch returns early WITHOUT
- * updating local `lastBilledAt` / `totalBilledCents` because the prior
+ * The `alreadyProcessed` branch returns early WITHOUT updating local
+ * `lastBilledAt` / `totalBilledCents` because the prior
  * commit already wrote them. The hourly accrual scheduler
  * (`processSpheronDebits`) follows the post-Phase-34 Phala fix and mirrors
  * locally first, then logs the idempotency-hit branch — that is the

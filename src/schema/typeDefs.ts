@@ -112,7 +112,6 @@ export const typeDefs = /* GraphQL */ `
     this service. One of 'docker' | 'server' | 'function' | 'template'.
     Null on legacy rows; the web app falls through to 'docker' for VM
     rows and 'function' for FUNCTION rows. Immutable after creation.
-    (Phase 39)
     """
     flavor: String
     templateId: ID
@@ -120,11 +119,11 @@ export const typeDefs = /* GraphQL */ `
     containerPort: Int
     """
     Persistent volumes for raw Docker images. Templates use template.persistentStorage instead.
-    Shape: Array<{ name: string; mountPath: string; size: string }>. (Phase 38)
+    Shape: Array<{ name: string; mountPath: string; size: string }>.
     """
     volumes: JSON
     """
-    Optional application HTTP health probe (Phase 42). Shape:
+    Optional application HTTP health probe. Shape:
     JSON object with path (required, must start with /), optional port,
     expectStatus (default 200), intervalSec (default 30, clamped 10-3600),
     and timeoutSec (default 5, clamped 1-30). Null when no probe is configured.
@@ -132,11 +131,11 @@ export const typeDefs = /* GraphQL */ `
     healthProbe: JSON
     """
     Live application-level health derived from the configured healthProbe.
-    Null until the runner has fired at least one probe. (Phase 42)
+    Null until the runner has fired at least one probe.
     """
     applicationHealth: ApplicationHealth
     """
-    Optional health-aware auto-failover policy (Phase 43). Shape:
+    Optional health-aware auto-failover policy. Shape:
     JSON object with enabled (boolean), maxAttempts (default 3, clamped 1-10),
     and windowHours (default 24, clamped 1-720). When enabled, the sweeper
     redeploys to a different provider on provider-side failures rather than
@@ -146,7 +145,7 @@ export const typeDefs = /* GraphQL */ `
     failoverPolicy: JSON
     """
     Live failover history derived from this service's deployment chain.
-    Null when no failover has ever fired for this service. (Phase 43)
+    Null when no failover has ever fired for this service.
     """
     failoverHistory: FailoverHistory
     internalHostname: String
@@ -208,7 +207,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
-  # APPLICATION HEALTH (Phase 42)
+  # APPLICATION HEALTH
   # ============================================
 
   """
@@ -239,7 +238,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
-  # FAILOVER HISTORY (Phase 43)
+  # FAILOVER HISTORY
   # ============================================
 
   """
@@ -442,7 +441,6 @@ export const typeDefs = /* GraphQL */ `
     """
     Catalog flow discriminator. One of 'docker' | 'server' | 'function' | 'template'.
     Validated server-side; rejected if any other value. Immutable post-creation.
-    (Phase 39)
     """
     flavor: String
     dockerImage: String
@@ -468,20 +466,20 @@ export const typeDefs = /* GraphQL */ `
     volumes; pass null to leave unchanged. Each volume requires "name"
     (lowercase letters/digits/hyphen, max 31 chars), "mountPath" (absolute,
     no trailing slash), and "size" (e.g. "5Gi", "100Mi"). Max 4 per service.
-    Templates ignore this field. (Phase 38)
+    Templates ignore this field.
     """
     volumes: JSON
     """
-    Optional application HTTP health probe (Phase 42). Pass null to remove
-    the probe; pass an object to set/replace it. Required key: path
+    Optional application HTTP health probe. Pass null to remove the probe;
+    pass an object to set/replace it. Required key: path
     (must start with "/"). Optional keys: port (1-65535), expectStatus
     (HTTP code, default 200), intervalSec (default 30, clamped 10-3600),
     timeoutSec (default 5, clamped 1-30).
     """
     healthProbe: JSON
     """
-    Optional health-aware auto-failover policy (Phase 43). Pass null to
-    remove the policy; pass an object to set/replace it. Required key:
+    Optional health-aware auto-failover policy. Pass null to remove the
+    policy; pass an object to set/replace it. Required key:
     enabled (boolean). Optional keys: maxAttempts (default 3, clamped 1-10),
     windowHours (default 24, clamped 1-720). Refused on services with
     persistent volumes — that combination would silently lose data on a
@@ -597,12 +595,12 @@ export const typeDefs = /* GraphQL */ `
     """
     activeSince: Date
     """
-    Phase 46 — curated region the user picked at deploy time
+    Curated region the user picked at deploy time
     (one of: us-east, us-west, eu, asia) or null for "Any (cheapest globally)".
     """
     region: String
     """
-    Phase 46 — actual region of the provider that won the bid (post-lease).
+    Actual region of the provider that won the bid (post-lease).
     Diverges from "region" only when failover relaxed the constraint.
     """
     resolvedRegion: String
@@ -634,7 +632,7 @@ export const typeDefs = /* GraphQL */ `
     SUSPENDED
     CLOSED
     """
-    Phase 46 — strict region selected, no bids in the polling window.
+    Strict region selected, no bids in the polling window.
     Soft-fail state, NOT a failure. UI surfaces alternatives + retry.
     Sweeper auto-cancels rows stuck here >5 min.
     """
@@ -686,7 +684,7 @@ export const typeDefs = /* GraphQL */ `
     """
     activeSince: Date
     """
-    Phase 46 — schema-level forward compatibility for region selection.
+    Schema-level forward compatibility for region selection on Phala.
     Always null in production until Phala Cloud exposes region/cluster
     selection in its CLI. Surfaced so client code that fragments on
     AkashDeployment + PhalaDeployment can use a uniform shape.
@@ -948,8 +946,8 @@ export const typeDefs = /* GraphQL */ `
     resourceOverrides: ResourceOverrideInput
     # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
     baseImage: String
-    # Phase 46 — optional curated region bucket: "us-east" | "us-west" | "eu" | "asia".
-    # Null/omitted = "Any (cheapest globally)" — today's default behavior.
+    # Optional curated region bucket: "us-east" | "us-west" | "eu" | "asia".
+    # Null/omitted = "Any (cheapest globally)".
     # Strict: only providers publishing the matching region attribute will bid.
     # If no bids arrive, the deployment goes to AWAITING_REGION_RESPONSE
     # (not FAILED) so the UI/CLI can surface alternatives without losing the row.
@@ -971,8 +969,8 @@ export const typeDefs = /* GraphQL */ `
     resourceOverrides: ResourceOverrideInput
     # Optional base Docker image for raw services without a template or custom image (e.g. "ubuntu:24.04")
     baseImage: String
-    # Phase 46 — accepted for forward compatibility; currently ignored because
-    # Phala Cloud is single-region. Servers persist NULL on PhalaDeployment.region
+    # Accepted for forward compatibility; currently ignored because Phala
+    # Cloud is single-region. Servers persist NULL on PhalaDeployment.region
     # regardless of input, and the picker UI swaps to a "single-region" message
     # when provider = phala. Will become live when upstream adds region support.
     region: String
@@ -2555,13 +2553,14 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ============================================
-  # REGIONS (Phase 46)
+  # REGIONS
   # ============================================
 
   """Compute provider type, used for picker queries that branch by provider."""
   enum ComputeProviderType {
     AKASH
     PHALA
+    SPHERON
   }
 
   """Coarse confidence indicator for a region — drives UI dot color."""
@@ -2596,7 +2595,12 @@ export const typeDefs = /* GraphQL */ `
     id: String!
     """Human label, e.g. "US East" or "Phala Cloud (single-region)"."""
     label: String!
-    """Strict gate: true iff verifiedCount ≥ 1 AND recentBidCount ≥ 1."""
+    """
+    Region availability gate. Default mode (AF_REGIONS_REQUIRE_BIDS unset/0):
+    true iff verifiedCount ≥ 1 (a verified provider exists in the bucket).
+    Strict mode (AF_REGIONS_REQUIRE_BIDS=1): true iff verifiedCount ≥ 1 AND
+    recentBidCount ≥ 1 (a recent bid was observed in the bucket).
+    """
     available: Boolean!
     verifiedCount: Int!
     onlineCount: Int!

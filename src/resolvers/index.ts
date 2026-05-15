@@ -130,6 +130,23 @@ function parseSdlResources(sdl: string): { cpu: number; memory: number } {
   return { cpu: Math.round(cpu), memory: Math.round(memory) }
 }
 
+/**
+ * Static Phala instance-type → vcpu/memory map. Used by `workspaceMetrics`
+ * to roll Phala compute into the dashboard total without an upstream call.
+ * Mirrors `phala/instanceTypes.ts` FALLBACK_INSTANCE_TYPES so a Phala API
+ * outage doesn't blank the dashboard. Update both when Phala adds SKUs.
+ */
+const FALLBACK_PHALA_SPECS: Record<string, { vcpu: number; memoryMb: number }> = {
+  'tdx.small':    { vcpu: 1,   memoryMb: 2048 },
+  'tdx.medium':   { vcpu: 2,   memoryMb: 4096 },
+  'tdx.large':    { vcpu: 4,   memoryMb: 8192 },
+  'tdx.xlarge':   { vcpu: 8,   memoryMb: 16384 },
+  'h100.small':   { vcpu: 16,  memoryMb: 131072 },
+  'h200.small':   { vcpu: 24,  memoryMb: 196608 },
+  'h200.8x.large': { vcpu: 192, memoryMb: 1572864 },
+  'b200.small':   { vcpu: 32,  memoryMb: 262144 },
+}
+
 /** Format byte count to human-readable string */
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -747,6 +764,10 @@ export const resolvers = {
       ).map((p) => p.id)
 
       // ── Compute Metrics ──────────────────────────────────────────
+      // Sum cpu / memory across ALL active providers, not just Akash.
+      // Akash → parse SDL `compute.resources` block.
+      // Phala → look up the cvmSize in the static instance-types catalog.
+      // Spheron → read pricedSnapshotJson (vcpus + memory in GB).
       const activeAkash = await context.prisma.akashDeployment.findMany({
         where: {
           status: 'ACTIVE',
@@ -763,11 +784,42 @@ export const resolvers = {
         totalMemoryMb += memory
       }
 
+      const activePhala = await context.prisma.phalaDeployment.findMany({
+        where: {
+          status: 'ACTIVE',
+          service: { projectId: { in: projectIds } },
+        },
+        select: { cvmSize: true },
+      })
+      for (const dep of activePhala) {
+        const spec = dep.cvmSize ? FALLBACK_PHALA_SPECS[dep.cvmSize] : undefined
+        if (spec) {
+          totalCpuMillicores += spec.vcpu * 1000
+          totalMemoryMb += spec.memoryMb
+        }
+      }
+
+      const activeSpheron = await context.prisma.spheronDeployment.findMany({
+        where: {
+          status: 'ACTIVE',
+          service: { projectId: { in: projectIds } },
+        },
+        select: { pricedSnapshotJson: true },
+      })
+      for (const dep of activeSpheron) {
+        const snap = dep.pricedSnapshotJson as { vcpus?: number; memory?: number } | null
+        if (snap?.vcpus) totalCpuMillicores += snap.vcpus * 1000
+        if (snap?.memory) totalMemoryMb += snap.memory * 1024
+      }
+
+      const totalActiveCompute =
+        activeAkash.length + activePhala.length + activeSpheron.length
+
       const cpuFormatted = (totalCpuMillicores / 1000).toFixed(1)
       const memFormatted = totalMemoryMb >= 1024
         ? `${(totalMemoryMb / 1024).toFixed(1)} GB`
         : `${totalMemoryMb} MB`
-      const computeFormatted = activeAkash.length > 0
+      const computeFormatted = totalActiveCompute > 0
         ? `${cpuFormatted} vCPU / ${memFormatted}`
         : '--'
 
@@ -815,7 +867,7 @@ export const resolvers = {
 
       return {
         compute: {
-          activeDeploys: activeAkash.length,
+          activeDeploys: totalActiveCompute,
           totalCpuMillicores,
           totalMemoryMb,
           formatted: computeFormatted,
@@ -1049,7 +1101,7 @@ export const resolvers = {
     // Spheron GPU VM deployment queries
     ...spheronQueries,
 
-    // Phase 46 — region picker query (provider-agnostic; PHALA returns sentinel)
+    // Region picker query (provider-agnostic; PHALA returns sentinel).
     ...regionsQueries,
 
     // GitHub-source deploy queries
@@ -1495,8 +1547,8 @@ export const resolvers = {
       const slug = generateSlug(input.name)
       const serviceType = (input.type as any) || 'FUNCTION'
 
-      // Phase 39 — validate the catalog-flow discriminator. Templates always
-      // resolve to 'template' regardless of what the caller sent (so the UI
+      // Validate the catalog-flow discriminator. Templates always resolve
+      // to 'template' regardless of what the caller sent (so the UI
       // can't mis-tag a template-backed service). Anything else must be one
       // of the known flavors or null (legacy/unspecified — readers default
       // to 'docker' for VM, 'function' for FUNCTION).
@@ -1513,8 +1565,8 @@ export const resolvers = {
         flavor = input.flavor
       }
 
-      // Phase 47 — when a templateId is supplied, resolve the template and
-      // run the same env-var seeding that `deployFromTemplate` does. Without
+      // When a templateId is supplied, resolve the template and run the
+      // same env-var seeding that `deployFromTemplate` does. Without
       // this, the catalog flow (AddServiceBox -> createServiceEntry -> here)
       // creates a stub Service with ZERO ServiceEnvVar rows, which means
       // platform-injected creds (`generatedAccessKey` / `generatedSecret`)
@@ -1728,7 +1780,7 @@ export const resolvers = {
         }
       }
 
-      // Volumes (Phase 38) — persistent storage attached to raw Docker images.
+      // Volumes — persistent storage attached to raw Docker images.
       // Templates own their volume layout via template.persistentStorage and
       // ignore this field. We validate strictly here to keep the SDL builder
       // simple downstream.
@@ -1780,8 +1832,8 @@ export const resolvers = {
         }
       }
 
-      // Health probe (Phase 42) — application-level HTTP probe configured per
-      // service. Defaults applied at runtime by `ApplicationHealthRunner`, so
+      // Health probe — application-level HTTP probe configured per service.
+      // Defaults applied at runtime by `ApplicationHealthRunner`, so
       // here we only validate field shape + ranges and refuse anything weird.
       if (Object.prototype.hasOwnProperty.call(input, 'healthProbe')) {
         const probe = input.healthProbe
@@ -1830,8 +1882,8 @@ export const resolvers = {
         }
       }
 
-      // Failover policy (Phase 43) — health-aware auto-redeploy on dead
-      // providers. We refuse the combination "failover enabled + service has
+      // Failover policy — health-aware auto-redeploy on dead providers.
+      // We refuse the combination "failover enabled + service has
       // volumes" because failover spawns a fresh deployment on a different
       // provider with no carry-over of /data. The user must either remove
       // volumes first or accept that auto-failover is off for stateful apps.
@@ -1918,8 +1970,8 @@ export const resolvers = {
             name,
             slug,
             projectId: context.projectId!,
-            // Phase 39 — function services are always 'function' flavor; this
-            // is the only catalog flow that produces them, so we hardcode
+            // Function services are always 'function' flavor; this is the
+            // only catalog flow that produces them, so we hardcode
             // rather than accepting it from the caller.
             flavor: 'function',
             createdByUserId: context.userId ?? null,
@@ -2305,7 +2357,7 @@ export const resolvers = {
      * applicationHealth — live read from the in-memory ring buffer maintained
      * by `ApplicationHealthRunner`. Returns null when no probe is configured
      * or the runner hasn't observed this service yet (the dashboard renders
-     * a grey "no data" badge in that case). (Phase 42)
+     * a grey "no data" badge in that case).
      */
     applicationHealth: async (parent: any) => {
       if (!parent?.id || !parent?.healthProbe) return null
@@ -2326,7 +2378,7 @@ export const resolvers = {
      * failoverHistory — derived view over the failover chain for this
      * service. Returns null when no failover has fired (the chain is empty).
      * The `chain` array is newest-first and includes the original deployment
-     * + every spawned replacement so the UI can show the full lineage. (Phase 43)
+     * + every spawned replacement so the UI can show the full lineage.
      */
     failoverHistory: async (parent: any, _: unknown, context: Context) => {
       if (!parent?.id) return null

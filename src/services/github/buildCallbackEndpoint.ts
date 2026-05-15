@@ -1,24 +1,14 @@
 /**
  * `POST /internal/build-callback` — receives status updates from af-builder Jobs.
  *
- * The builder POSTs three times per Job:
- *   1. RUNNING   — when the daemon is up and clone starts
- *   2. SUCCEEDED — image pushed; payload includes imageTag, commitSha, detectedFramework, detectedPort
- *   3. FAILED    — anywhere along the way; payload includes errorMessage + truncated logs
+ * The builder POSTs three times per Job: RUNNING (clone starts), SUCCEEDED
+ * (image pushed; payload has imageTag, commitSha, detectedFramework,
+ * detectedPort), FAILED (errorMessage + truncated logs).
  *
- * On SUCCEEDED we:
- *   - update BuildJob row + Service.dockerImage / detected* / lastBuildSha
- *   - post commit status `success` on GitHub
- *   - auto-deploy via the existing per-deploy provider mechanism:
- *       - rebuilds with an active deployment → use that provider
- *       - first build → fall back to Akash (matches the
- *         ServiceDetailPanel default at onDeploy → onDeployToAkash)
- *
- * The compute provider is NEVER stored on the Service row — it's the
- * same per-deploy choice every other flavor uses (Standard → Akash,
- * Confidential → Phala via ComputeMode picker). For first-deploy we
- * follow the panel's default; the user changes it later via
- * ComputeSelector + Redeploy, just like docker / server flavors.
+ * On SUCCEEDED we update BuildJob, sync Service.dockerImage/detected*
+ * fields, post commit status to GitHub, and auto-deploy via the existing
+ * per-deploy mutation. Provider choice mirrors the most recent active
+ * deployment: Phala → Phala, Spheron → Spheron, otherwise Akash.
  *
  * Auth: `X-AF-Build-Token` header is HMAC-signed with JWT_SECRET and bound
  * to the buildJobId in the body. Verified by `verifyBuildToken`.
@@ -31,6 +21,7 @@ import { verifyBuildToken } from './buildToken.js'
 import { postCommitStatus } from './client.js'
 import { akashMutations } from '../../resolvers/akash.js'
 import { phalaMutations } from '../../resolvers/phala.js'
+import { spheronMutations } from '../../resolvers/spheron.js'
 import type { Context } from '../../resolvers/types.js'
 
 const log = createLogger('github.buildCallback')
@@ -245,18 +236,13 @@ export async function handleBuildCallback(
 
 /**
  * Decide which compute provider to deploy the freshly-built image to,
- * then call the existing GraphQL deploy mutation. We deliberately call
- * the resolver functions (not provider.deploy()) so we inherit their
- * full guard stack — subscription, balance, policy, QStash pipeline —
- * without duplicating it.
+ * then call the existing GraphQL deploy mutation. Calling the resolver
+ * (not provider.deploy()) inherits its full guard stack — subscription,
+ * balance, policy, QStash pipeline — without duplication.
  *
- * Provider choice mirrors what the ServiceDetailPanel "Deploy" button
- * does today (see ServiceDetailPanel.onDeploy):
- *   1. Active Phala deployment present → keep on Phala
- *   2. Otherwise → Akash (the panel's default fallback)
- *
- * The user retargets later via ComputeSelector + Redeploy, identical
- * to the docker / server / function flavors.
+ * Provider choice: most-recent non-terminal deployment wins (Phala /
+ * Spheron / Akash). When the service has never deployed, default to Akash
+ * (matches ServiceDetailPanel's onDeploy default).
  */
 async function autoDeployAfterBuild(prisma: PrismaClient, serviceId: string): Promise<void> {
   const service = await prisma.service.findUnique({
@@ -265,7 +251,14 @@ async function autoDeployAfterBuild(prisma: PrismaClient, serviceId: string): Pr
       project: true,
       phalaDeployments: {
         where: { status: { in: ['ACTIVE', 'CREATING', 'STARTING'] } },
-        select: { id: true },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+      },
+      spheronDeployments: {
+        where: { status: { in: ['ACTIVE', 'CREATING', 'STARTING'] } },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
         take: 1,
       },
     },
@@ -275,32 +268,41 @@ async function autoDeployAfterBuild(prisma: PrismaClient, serviceId: string): Pr
     throw new Error('cannot deploy: service has no createdByUserId')
   }
 
-  // Defense in depth against duplicate auto-deploys.
-  //
-  // The build-callback CAS gate above already filters duplicate SUCCEEDED
-  // callbacks for a single BuildJob. But we can still be invoked twice for
-  // the same service+image by orthogonal paths:
-  //
-  //   - Two BuildJobs for the same SHA (webhook redelivery slipping past the
-  //     dedup window in webhookEndpoint, simultaneous push + manual rebuild,
-  //     dual-instance race, etc.) each producing their own SUCCEEDED.
-  //   - User clicking "Deploy" in the UI in the same second as the build's
-  //     auto-deploy fires.
-  //
-  // Skip if there's already a non-terminal AkashDeployment for THIS service
-  // created in the last 30s. The window is intentionally short — legitimate
-  // redeploys (config change → redeploy) take longer than 30s of human input
-  // anyway, and we'd rather the user occasionally hit "Redeploy" again than
-  // double-charge them on every push.
+  // Dedup against duplicate auto-deploys. The build-callback CAS gate above
+  // filters duplicate SUCCEEDED callbacks for a single BuildJob, but two
+  // BuildJobs for the same SHA (webhook redelivery, manual rebuild, dual
+  // instance) or a user clicking "Deploy" the same second can still race.
+  // 30s is short enough that genuine redeploys aren't blocked but long enough
+  // to absorb the duplicate-callback window.
   const DEDUP_WINDOW_MS = 30_000
-  const inFlight = await prisma.akashDeployment.findFirst({
-    where: {
-      serviceId,
-      status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'] },
-      createdAt: { gte: new Date(Date.now() - DEDUP_WINDOW_MS) },
-    },
-    select: { id: true, status: true, createdAt: true },
-  })
+  const since = new Date(Date.now() - DEDUP_WINDOW_MS)
+  const [akashInFlight, phalaInFlight, spheronInFlight] = await Promise.all([
+    prisma.akashDeployment.findFirst({
+      where: {
+        serviceId,
+        status: { notIn: ['CLOSED', 'FAILED', 'PERMANENTLY_FAILED', 'SUSPENDED'] },
+        createdAt: { gte: since },
+      },
+      select: { id: true, status: true },
+    }),
+    prisma.phalaDeployment.findFirst({
+      where: {
+        serviceId,
+        status: { notIn: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED'] },
+        createdAt: { gte: since },
+      },
+      select: { id: true, status: true },
+    }),
+    prisma.spheronDeployment.findFirst({
+      where: {
+        serviceId,
+        status: { notIn: ['STOPPED', 'FAILED', 'PERMANENTLY_FAILED', 'DELETED'] },
+        createdAt: { gte: since },
+      },
+      select: { id: true, status: true },
+    }),
+  ])
+  const inFlight = akashInFlight ?? phalaInFlight ?? spheronInFlight
   if (inFlight) {
     log.info(
       { serviceId, existingDeploymentId: inFlight.id, existingStatus: inFlight.status },
@@ -316,14 +318,23 @@ async function autoDeployAfterBuild(prisma: PrismaClient, serviceId: string): Pr
     projectId: service.projectId,
   } as unknown as Context
 
-  const useTee = service.phalaDeployments.length > 0
-  log.info(
-    { serviceId, provider: useTee ? 'phala' : 'akash' },
-    'auto-deploying after successful build',
-  )
+  const phala = service.phalaDeployments[0]
+  const spheron = service.spheronDeployments[0]
+  let provider: 'akash' | 'phala' | 'spheron' = 'akash'
+  if (phala && spheron) {
+    provider = phala.createdAt >= spheron.createdAt ? 'phala' : 'spheron'
+  } else if (phala) {
+    provider = 'phala'
+  } else if (spheron) {
+    provider = 'spheron'
+  }
 
-  if (useTee) {
+  log.info({ serviceId, provider }, 'auto-deploying after successful build')
+
+  if (provider === 'phala') {
     await phalaMutations.deployToPhala(undefined, { input: { serviceId } }, ctx)
+  } else if (provider === 'spheron') {
+    await spheronMutations.deployToSpheron(undefined, { input: { serviceId } }, ctx)
   } else {
     await akashMutations.deployToAkash(undefined, { input: { serviceId } }, ctx)
   }

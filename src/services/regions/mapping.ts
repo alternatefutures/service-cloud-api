@@ -1,20 +1,7 @@
 /**
- * Phase 46 — Curated region catalog.
- *
- * Single source of truth for the region buckets we expose to users. Adding,
- * removing, or splitting a region is a code change here — that's intentional.
- * The product UX depends on a stable, small set of buckets, not on whatever
- * strings provider operators happen to publish.
- *
- * Resolution priority (see `resolve.ts`):
- *   1. Akashlytics lat/lon → nearest centroid
- *   2. Chain attribute `region`/`zone` matches an alias
- *   3. Chain attribute `country` in `countries` (with us-east/us-west tiebreak
- *      via lat/lon if any geographic hint is present, otherwise default)
- *   4. Chain attribute `host` matches a host-string heuristic
- *   5. Manual override row in `compute_provider_region_override`
- *   6. None → null (provider is invisible to region-filtered queries but
- *      still selectable for "Any (cheapest globally)")
+ * Curated region catalog. Single source of truth for the region buckets we
+ * expose to users. Resolution priority lives in `resolve.ts` and the spec is
+ * in AF_REGION_SELECTION.md.
  */
 
 export type RegionId = 'us-east' | 'us-west' | 'eu' | 'asia'
@@ -30,26 +17,10 @@ export interface RegionDefinition {
   regionAliases: ReadonlyArray<string>
   /** Lowercase substrings matched against chain attribute `host` (FQDN). */
   hostHeuristics: ReadonlyArray<string>
-  /**
-   * For country-fallback ties (multiple regions claim the same country code),
-   * `tieBreakLat` defines the boundary. Providers whose lat is < tieBreakLat
-   * go to the southern region, ≥ goes north. For US, `lon` is used: < goes
-   * west, ≥ goes east. Only set when there's an actual ambiguity to resolve.
-   */
-  countryTiebreak?: {
-    field: 'lat' | 'lon'
-    threshold: number
-    losesTo: RegionId
-  }
-  /** Default region when only a country code is available and no tiebreak applies. */
+  /** Default region when only a country code is available. */
   countryDefaultFor?: ReadonlyArray<string>
 }
 
-/**
- * The four buckets. Asia is intentionally one bucket for v1 — split into
- * `asia-east` / `asia-southeast` only when ≥2 verified providers exist in
- * each. See AF_REGION_SELECTION.md.
- */
 export const REGIONS: Record<RegionId, RegionDefinition> = {
   'us-east': {
     id: 'us-east',
@@ -84,7 +55,6 @@ export const REGIONS: Record<RegionId, RegionDefinition> = {
       'west',
     ],
     hostHeuristics: ['us-west', 'uswest', 'west-us', 'usa-west'],
-    // No `countryDefaultFor` — us-east wins ties on country alone.
   },
   eu: {
     id: 'eu',

@@ -170,8 +170,8 @@ export async function resolvePhalaActiveSince(
  * walk the same precedence (resumedFromId first, then parentDeploymentId).
  *
  * Spheron does not currently set `failoverParentId` (no auto-failover yet),
- * so we don't include it in the walk. If/when Spheron joins Phase 43
- * failover, this loop should adopt the same precedence Akash uses.
+ * so we don't include it in the walk. If/when Spheron joins the failover
+ * system, this loop should adopt the same precedence Akash uses.
  */
 export async function resolveSpheronActiveSince(
   prisma: PrismaClient,

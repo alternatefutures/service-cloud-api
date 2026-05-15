@@ -297,7 +297,7 @@ export async function handlePollStatus(prisma: PrismaClient, payload: PhalaPollS
       await enqueueNext('/queue/phala/step', {
         step: 'HANDLE_FAILURE',
         deploymentId,
-        errorMessage: 'CVM did not start within timeout (5 minutes)',
+        errorMessage: `CVM did not start within timeout (${Math.round((PHALA_POLL_MAX_ATTEMPTS * 5) / 60)} minutes)`,
       } satisfies PhalaHandleFailurePayload)
       return
     }

@@ -294,7 +294,7 @@ export const spheronMutations = {
    * No `stopSpheronDeployment` exists — Spheron has no native stop. The
    * resolver intentionally does NOT auto-route to Akash on Spheron capacity
    * failure: that decision lives in the web-app's
-   * `services/templates/actions.ts` per Phase D.
+   * `services/templates/actions.ts`.
    */
   deployToSpheron: async (
     _: unknown,
@@ -705,8 +705,8 @@ export const spheronMutations = {
         },
       })
       if (error instanceof GraphQLError) throw error
-      // Phase 50.1 (2026-05-15): synchronous-POST rejection signals
-      // NO_CAPACITY to the web-app auto-router so Standard-mode deploys
+      // Synchronous-POST rejection signals NO_CAPACITY to the web-app
+      // auto-router so Standard-mode deploys
       // fall back to Akash transparently. Orchestrator has already
       // marked the row FAILED and blocklisted the SKU (if applicable);
       // resolver just needs to emit the right extensions.code.
@@ -832,6 +832,15 @@ export const spheronMutations = {
         deferredFloorReason,
       },
     })
+
+    // Drop the proxy backend cache so the next *.apps/*.agents request to
+    // this slug re-resolves and 503s instead of routing to the dead VM.
+    try {
+      const { getSubdomainProxy } = await import('../services/proxy/subdomainProxy.js')
+      getSubdomainProxy()?.invalidateSlug(deployment.service.slug)
+    } catch (err) {
+      log.warn({ err, slug: deployment.service.slug }, 'Subdomain proxy invalidation failed (Spheron delete)')
+    }
 
     return updated
   },

@@ -1,31 +1,17 @@
 /**
- * Health-aware Auto-failover (Phase 43)
+ * Health-aware Akash auto-failover.
  *
- * When the stale-deployment sweeper detects an ACTIVE deployment whose lease
- * is dead but where the failure looks like a *provider* problem (NOT an app
- * problem), we redeploy the same SDL to a different provider instead of
- * plain-closing it.
+ * When the sweeper sees an ACTIVE deployment whose lease is dead AND the
+ * failure looks provider-side (not app-side), `evaluateFailoverEligibility`
+ * decides whether to redeploy on a different provider instead of plain
+ * close. `executeFailover` runs that redeploy. Splitting evaluate/execute
+ * lets the sweeper audit a precise skip reason without entering failover.
  *
- * This file is the single decision and execution point. The sweeper calls
- * `evaluateFailoverEligibility()` first, then `executeFailover()` only if
- * the evaluation said yes. Splitting evaluate/execute lets us audit the
- * "skip" path (with a precise reason code) without entering the failover
- * code path at all.
- *
- * Safety guards (see `evaluateFailoverEligibility`):
- *  - service.failoverPolicy must opt-in (defaults to disabled)
- *  - service has NO persistent volumes — failing over to a fresh provider
- *    silently loses /data; volumes-aware failover is a separate phase
- *  - container had been ACTIVE before (deployedAt != null) — otherwise this
- *    is a deploy-time failure and the existing 3-retry chain handles it
- *  - last application probe (Phase 42) is NOT failing — that points at the
- *    user's app, not the provider
- *  - attempts in window < cap — never burn escrow indefinitely on a buggy
- *    user setup
- *
- * The new deployment record carries forward `excludedProviders` (the union
- * of every provider this chain has run on), so `handleCheckBids` can skip
- * known-bad bidders before consulting `selectPreferredBid`.
+ * Eligibility is opt-in via `service.failoverPolicy` and gated by:
+ * volumes-free service, deployment had reached ACTIVE before, app probe
+ * not currently `unhealthy`, attempts within the policy window. The new
+ * row carries the union of `excludedProviders` so future bid filtering
+ * skips known-bad providers.
  */
 
 import { Prisma } from '@prisma/client'
@@ -38,7 +24,6 @@ const log = createLogger('failover')
 
 export type FailoverSkipReason =
   | 'policy_disabled'
-  | 'unsupported_provider'
   | 'has_volumes'
   | 'never_active'
   | 'app_unhealthy'
@@ -282,16 +267,11 @@ export async function executeFailover(
     }
   }
 
-  // 3. Spawn the new deployment row. Negative dseq is the same temporary
-  // marker the orchestrator uses pre-SUBMIT_TX (avoids the unique constraint).
-  //
-  // Phase 46/47 — carry `region` forward so the user's intent survives
-  // failover. Without this, the failover row has region=NULL, the
-  // server-side bid filter (akashSteps.handleCheckBids) doesn't fire,
-  // and the deployment lands wherever's cheapest globally — often a
-  // different region than the user picked. The "Failover policy: tiered"
-  // design (M4) will eventually relax this to soft-region after N
-  // exclusions; for now the user's region choice is honored every time.
+  // 3. Spawn the new deployment row. Negative dseq is a temporary marker
+  // the orchestrator uses pre-SUBMIT_TX to avoid the unique constraint.
+  // `region` is carried forward so the user's region choice survives
+  // failover; without it, handleCheckBids' region filter would skip and
+  // the new deployment could land outside the requested bucket.
   const newDeployment = await prisma.akashDeployment.create({
     data: {
       owner: deployment.owner,

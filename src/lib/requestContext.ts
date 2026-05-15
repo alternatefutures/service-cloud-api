@@ -7,7 +7,7 @@ import type { IncomingMessage } from 'node:http'
  * `src/index.ts` via `requestContext.run(...)` and inherited by every
  * async callback under that stack via Node's AsyncLocalStorage.
  *
- * `traceId` is the Phase 44 audit / observability trace id. It is the
+ * `traceId` is the audit / observability trace id. It is the
  * value external clients and upstream services can send via
  * `X-AF-Trace-Id` to correlate logs across service-auth ↔ service-cloud-api
  * ↔ web-app. The `audit()` helper reads it from here when present.

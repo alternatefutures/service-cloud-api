@@ -7,7 +7,7 @@
  * This client is the bridge between deployment operations (cloud-api)
  * and the wallet/balance system (auth service).
  *
- * Phase 44 D2: every outbound request forwards the current trace id via
+ * Every outbound request forwards the current trace id via
  * `X-AF-Trace-Id` so events on both sides of this call (debit in auth,
  * deploy in cloud-api) share one trace id in the audit log.
  */
@@ -240,8 +240,15 @@ class BillingApiClient {
     balanceCents?: number
     dailyCostCents?: number
     pausedServices?: string[]
-  }): Promise<{ success: boolean; type: string }> {
-    return this.request<{ success: boolean; type: string }>('/notify', {
+    /**
+     * Stable dedupe key. Auth-side stores it in
+     * `organization_notification_log` and skips the email send on
+     * collision. Required to avoid duplicate emails when this client
+     * is invoked by retried QStash steps or the billing scheduler.
+     */
+    idempotencyKey?: string
+  }): Promise<{ success: boolean; type: string; alreadyProcessed?: boolean }> {
+    return this.request<{ success: boolean; type: string; alreadyProcessed?: boolean }>('/notify', {
       method: 'POST',
       body: JSON.stringify(args),
     })

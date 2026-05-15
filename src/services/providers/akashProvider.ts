@@ -303,8 +303,8 @@ export class AkashProvider implements DeploymentProvider {
         // death signal — Akash providers return this during k8s manifest
         // re-pushes, brief container restarts, or any moment when their
         // internal cache is empty. Classify as `unknown` so the sweeper's
-        // observability counter (Phase 49b) tracks it without ever feeding
-        // the close path, instead of falling into the `unhealthy` bucket
+        // observability counter tracks it without ever feeding the close
+        // path, instead of falling into the `unhealthy` bucket
         // which (pre-Phase-49) used to kill the lease in 1 tick. (2026-05-03
         // incident — single sweep pass killed 6 prod leases in 4 min, all
         // reason=unhealthy.)
@@ -431,8 +431,9 @@ export class AkashProvider implements DeploymentProvider {
     }
 
     const sdlServiceName = opts?.service
-      || deployment.service.sdlServiceName
-      || deployment.service.slug
+      || deployment.service?.sdlServiceName
+      || deployment.service?.slug
+      || undefined
 
     const orchestrator = getAkashOrchestrator(this.prisma)
     return orchestrator.getShell(
