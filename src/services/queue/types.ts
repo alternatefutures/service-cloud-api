@@ -97,7 +97,7 @@ export type PhalaJobPayload =
 //                          retry independently of VM provisioning.
 //   HANDLE_FAILURE       → uniform failure path (mirrors phala/akash)
 //
-// Phase A v1 ships DEDICATED-only — SPOT (`status: terminated-provider`) is a
+// v1 ships DEDICATED-only — SPOT (`status: terminated-provider`) is a
 // reserved code path. The PROVIDER_INTERRUPTED policy stop reason exists in
 // the schema but no step emits it yet.
 

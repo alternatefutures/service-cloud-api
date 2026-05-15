@@ -900,7 +900,7 @@ export const templateMutations = {
 
     // No companion services on Spheron — the cloudInit is a single VM.
     // Templates that declare companions (e.g. postgres sidecar) deploy
-    // ALL components into the same compose YAML. Phase 2 work item if a
+    // ALL components into the same compose YAML. Future work if a
     // template ever genuinely needs a separate VM per companion.
 
     let policyId: string | undefined
@@ -1001,8 +1001,8 @@ export const templateMutations = {
       return deployment
     } catch (error: any) {
       const msg = error?.message || 'Unknown error'
-      // Phase 50.1 (2026-05-15): synchronous-POST rejection signals
-      // NO_CAPACITY to the web-app auto-router so Standard-mode template
+      // Synchronous-POST rejection signals NO_CAPACITY to the web-app
+      // auto-router so Standard-mode template
       // deploys fall back to Akash transparently. The orchestrator has
       // already marked the row FAILED and blocklisted the SKU; resolver
       // just emits the right extensions.code.

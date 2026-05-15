@@ -8,7 +8,7 @@
  * `services/spheron/orchestrator.ts` uses for every SSH-based shell, log,
  * and health probe.
  *
- * Locked decision (per AF_HANDOFF — Spheron Phase A):
+ * Locked decision:
  *   - Single platform-managed key for v1; per-user keys are deferred.
  *   - Bootstrap is **add-only** — never deletes existing keys, even on
  *     fingerprint mismatch (operator surface only).
@@ -28,7 +28,7 @@
  *   - Spheron API down → log warning + return null. A later DEPLOY_VM
  *     attempt will throw with the real error. Bootstrap is best-effort.
  *
- * Phase 30 lesson honored (AF_DEVELOPMENT_PROCESS.md ~line 2191):
+ * Operational rule honored:
  *   The platform private key is never injected into user-deployed
  *   containers, never persisted in DB rows visible to the user, never
  *   logged. Lives only in the cloud-api pod's filesystem.

@@ -1,9 +1,9 @@
 /**
  * Internal endpoint: GET /internal/admin/billing-stats
  *
- * Returns aggregate billing stats per provider (Akash, Phala):
+ * Returns aggregate billing stats per provider (Akash, Phala, Spheron):
  * total charged, raw cost, profit, active count, and current burn rate.
- * Secured by INTERNAL_AUTH_TOKEN (same pattern as deployment-stats).
+ * Secured by INTERNAL_AUTH_TOKEN.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -23,6 +23,13 @@ interface AkashRow {
 }
 
 interface PhalaRow {
+  total_charged_cents: bigint
+  total_cost_cents: bigint
+  active_count: bigint
+  active_hourly_burn_cents: bigint
+}
+
+interface SpheronRow {
   total_charged_cents: bigint
   total_cost_cents: bigint
   active_count: bigint
@@ -93,7 +100,7 @@ export async function handleAdminBillingStats(
   }
 
   try {
-    const [akashRows, phalaRows, akashWallet] = await Promise.all([
+    const [akashRows, phalaRows, spheronRows, akashWallet] = await Promise.all([
       prisma.$queryRaw<AkashRow[]>`
       SELECT
         COALESCE(SUM(e."consumed_cents"), 0)::bigint AS total_charged_cents,
@@ -112,16 +119,29 @@ export async function handleAdminBillingStats(
         COALESCE(SUM(CASE WHEN pd."status" = 'ACTIVE' THEN pd."hourly_rate_cents" ELSE 0 END), 0)::bigint AS active_hourly_burn_cents
       FROM "PhalaDeployment" pd
     `,
+      prisma.$queryRaw<SpheronRow[]>`
+      SELECT
+        COALESCE(SUM(sd."total_billed_cents"), 0)::bigint AS total_charged_cents,
+        COALESCE(SUM(CASE WHEN sd."margin_rate" IS NOT NULL AND sd."margin_rate" > 0
+          THEN ROUND(sd."total_billed_cents" / (1.0 + sd."margin_rate"))
+          ELSE sd."total_billed_cents" END)::bigint, 0) AS total_cost_cents,
+        COUNT(DISTINCT CASE WHEN sd."status" = 'ACTIVE' THEN sd.id END)::bigint AS active_count,
+        COALESCE(SUM(CASE WHEN sd."status" = 'ACTIVE' THEN sd."hourly_rate_cents" ELSE 0 END), 0)::bigint AS active_hourly_burn_cents
+      FROM "SpheronDeployment" sd
+    `,
       getAkashWalletSnapshot(),
     ])
 
     const akash = akashRows[0]
     const phala = phalaRows[0]
+    const spheron = spheronRows[0]
 
     const akashCharged = Number(akash.total_charged_cents)
     const akashCost = Number(akash.total_cost_cents)
     const phalaCharged = Number(phala.total_charged_cents)
     const phalaCost = Number(phala.total_cost_cents)
+    const spheronCharged = Number(spheron.total_charged_cents)
+    const spheronCost = Number(spheron.total_cost_cents)
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
@@ -139,6 +159,14 @@ export async function handleAdminBillingStats(
         profitCents: phalaCharged - phalaCost,
         activeCount: Number(phala.active_count),
         activeHourlyBurnCents: Number(phala.active_hourly_burn_cents),
+        wallet: null,
+      },
+      spheron: {
+        totalChargedCents: spheronCharged,
+        totalCostCents: spheronCost,
+        profitCents: spheronCharged - spheronCost,
+        activeCount: Number(spheron.active_count),
+        activeHourlyBurnCents: Number(spheron.active_hourly_burn_cents),
         wallet: null,
       },
     }))

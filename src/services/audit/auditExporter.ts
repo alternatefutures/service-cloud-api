@@ -1,5 +1,5 @@
 /**
- * Audit Log JSONL Exporter (Phase 44 / D3a)
+ * Audit Log JSONL Exporter
  *
  * Pulls a UTC day's audit events from BOTH `service-auth` and
  * `service-cloud-api`, merges them by `(timestamp, id)`, writes one

@@ -157,8 +157,8 @@ export class ProviderSelector {
     serviceType: ServiceType,
     excludeProviders?: ReadonlySet<string> | readonly string[]
   ): ProviderSafetyResult {
-    // Phase 43 — skip providers that previous failovers in this chain
-    // already proved unhealthy. We treat exclusion the same as a block at
+    // Skip providers that previous failovers in this chain already proved
+    // unhealthy. We treat exclusion the same as a block at
     // the bid-filter level so the existing safe-bids pipeline handles it.
     if (excludeProviders) {
       const set =

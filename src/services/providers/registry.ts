@@ -173,7 +173,7 @@ export async function findActiveDeploymentForService(
  * the Provider Health card shows up the moment a deploy starts, not
  * only after it reaches ACTIVE. Each provider's descriptor decides
  * what counts as pending — Spheron returns an empty set because
- * CREATING/STARTING already count as "live" per Phase 50 UX.
+ * CREATING/STARTING already count as "live" in the UX.
  */
 export async function findActiveOrPendingDeploymentForService(
   prisma: PrismaClient,

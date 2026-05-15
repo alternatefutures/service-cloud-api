@@ -232,8 +232,8 @@ export async function handleSuspendOrg(
       try {
         const stoppedAt = new Date()
 
-        // Phase 31 — settle billing BEFORE the upstream DELETE. The
-        // 20-min floor is enforced inside processFinalSpheronBilling.
+        // Settle billing BEFORE the upstream DELETE. The 20-min floor
+        // is enforced inside processFinalSpheronBilling.
         await processFinalSpheronBilling(
           prisma,
           deployment.id,

@@ -1,5 +1,5 @@
 /**
- * Internal endpoint: GET /internal/admin/audit-events  (Phase 44 / D3b)
+ * Internal endpoint: GET /internal/admin/audit-events
  *
  * Live admin query against the unified audit log. UNIONs the cloud-api
  * half (this service's Postgres) with the auth half (fetched via

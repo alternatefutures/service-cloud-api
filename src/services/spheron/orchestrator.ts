@@ -16,11 +16,11 @@
  *   - **No stop/start.** Spheron only supports deploy + DELETE. Resume after
  *     low-balance pause = re-deploy from saved cloud-init (mirror Akash's
  *     `savedSdl` pattern with `savedCloudInit` + `savedDeployInput`).
- *   - **Existence probe (Phase 49b pattern).** A dedicated
- *     `probeDeploymentExistence` distinguishes "VM genuinely gone at provider"
- *     from "API threw transiently" so the sweeper never closes on a blip.
+ *   - **Existence probe.** A dedicated `probeDeploymentExistence`
+ *     distinguishes "VM genuinely gone at provider" from "API threw
+ *     transiently" so the sweeper never closes on a blip.
  *
- * Lifecycle-safety contracts honored here (Phase 31 / 34 / 49 / 49b):
+ * Lifecycle-safety contracts honored here:
  *
  *   - `getDeploymentStatus()` returns null on transient errors. The provider
  *     adapter then maps null → `OverallHealth: 'unknown'`. NEVER returns a
@@ -173,8 +173,7 @@ export interface DockerHealthSnapshot {
 // ─── Synchronous-POST rejection error ────────────────────────────────
 
 /**
- * Phase 50.1 (2026-05-15) — typed error thrown by
- * `deployServiceSpheron` when the synchronous first POST to Spheron is
+ * Typed error thrown by `deployServiceSpheron` when the synchronous first POST to Spheron is
  * rejected upstream.
  *
  * Carries the diagnostic context the resolver needs to map the failure
@@ -233,7 +232,7 @@ export class SpheronOrchestrator {
    * Create the SpheronDeployment DB row, build cloudInit, POST to Spheron,
    * persist `providerDeploymentId`, return our internal deployment id.
    *
-   * Phase 34 contract: the chain-side / API-side side effect MUST round-trip
+   * Contract: the chain-side / API-side side effect MUST round-trip
    * into our local DB before this method returns. We persist the row first,
    * then call the API, then persist the upstream id. A crash between the API
    * call and the second persist leaves a row in CREATING with no
@@ -319,8 +318,7 @@ export class SpheronOrchestrator {
       // Synchronous first-POST failure (e.g. Spheron 400 "Not Enough Stock",
       // 401, 5xx not retryable, network timeout).
       //
-      // Phase 50.1 fix (2026-05-15): the previous behaviour left the
-      // CREATING row in the DB and re-threw, so:
+      // The previous behaviour left the CREATING row in the DB and re-threw, so:
       //   1. The web-app received a generic GraphQLError with NO
       //      `extensions.code` — the auto-router couldn't recognise the
       //      failure and didn't fall back to Akash.
@@ -395,7 +393,7 @@ export class SpheronOrchestrator {
       })
     }
 
-    // Step 3 — round-trip the upstream id (Phase 34 contract).
+    // Step 3 — round-trip the upstream id.
     await this.prisma.spheronDeployment.update({
       where: { id: row.id },
       data: {
@@ -489,8 +487,8 @@ export class SpheronOrchestrator {
   }
 
   /**
-   * Phase 49b — the existence probe. Distinguishes "definitely gone at
-   * provider" from "transient API blip". Used by:
+   * Existence probe — distinguishes "definitely gone at provider" from
+   * "transient API blip". Used by:
    *
    *   - `provider.getHealth()` to upgrade the catch path from 'unknown' to
    *     'gone' when we have evidence the VM is really deleted.
@@ -521,7 +519,7 @@ export class SpheronOrchestrator {
    * DELETE the Spheron deployment. Idempotent in the project-wide
    * "already gone" sense — a 404 / "already deleted" / "not found" upstream
    * error returns successfully. The provider adapter's `close()` does the
-   * billing settlement BEFORE calling this (Phase 31 contract).
+   * billing settlement BEFORE calling this.
    */
   async closeDeployment(spheronId: string): Promise<void> {
     const client = this.requireClient()
@@ -726,13 +724,13 @@ export class SpheronOrchestrator {
   /**
    * Probe `docker ps --format json` over SSH to determine container-level
    * health on a Spheron VM. Returns null on any SSH error so the caller maps
-   * to OverallHealth: 'unknown' (Phase 31 contract — never fake 'healthy').
+   * to OverallHealth: 'unknown' (contract: never fake 'healthy').
    *
    * `allRunning` distinguishes 'healthy' from 'unhealthy'/'starting' for
    * the provider adapter:
    *   - allRunning=true && containers.length > 0 → 'healthy'
-   *   - allRunning=false && containers.length > 0 → 'unhealthy' (per Phase 49,
-   *     this is NOT a sweeper-close signal — user inspects)
+   *   - allRunning=false && containers.length > 0 → 'unhealthy' (NOT a
+   *     sweeper-close signal — user inspects)
    *   - containers.length === 0 → 'starting' (compose hasn't finished apt
    *     install + pull yet; the cloud-init may still be running)
    */

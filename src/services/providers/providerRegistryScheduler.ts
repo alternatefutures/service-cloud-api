@@ -55,9 +55,9 @@ export class ProviderRegistryScheduler {
       return
     }
 
-    // Every 15 minutes at :00/:15/:30/:45 — Phase 51 mitigation. The hourly
-    // cadence (Phase 24) was hiding a 0–60-min staleness window: a provider
-    // sells out at :16, our snapshot says "still 8 H100 free" until :15
+    // Every 15 minutes at :00/:15/:30/:45. The previous hourly cadence
+    // hid a 0–60-min staleness window: a provider sells out at :16, our
+    // snapshot says "still 8 H100 free" until :15
     // next hour, the dropdown advertises capacity that won't bid, the user
     // gets a confusing "no bids" timeout. 15-min cuts the worst-case to
     // ~16 min and pairs with the bid-probe gating in the BFF route.
@@ -241,8 +241,8 @@ export class ProviderRegistryScheduler {
       `Scan complete — ${upserted} provider(s) upserted in ${durationMs}ms`
     )
 
-    // Phase 46 — region resolution piggybacks on the hourly scan. The
-    // chain `attributes` we just upserted are the second-best region signal
+    // Region resolution piggybacks on the hourly scan. The chain
+    // `attributes` we just upserted are the second-best region signal
     // (after Akashlytics lat/lon), so refreshing immediately after means
     // every newly-onboarded provider gets a region within an hour. Fail-open
     // by design: a region-refresh failure does not affect the registry scan

@@ -168,49 +168,6 @@ async function enqueueNext(
   }
 }
 
-function isLikelyTcpUri(uri: string): boolean {
-  if (uri.startsWith('http://') || uri.startsWith('https://')) return false
-  const parts = uri.split(':')
-  if (parts.length < 2) return false
-  const port = Number(parts.at(-1))
-  if (Number.isNaN(port)) return false
-  return port !== 80 && port !== 443
-}
-
-async function probeHttpUri(uri: string): Promise<boolean> {
-  const candidates =
-    uri.startsWith('http://') || uri.startsWith('https://')
-      ? [uri]
-      : [`https://${uri}`, `http://${uri}`]
-
-  for (const candidate of candidates) {
-    try {
-      const response = await fetch(candidate, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: AbortSignal.timeout(5000),
-      })
-      if (response.status < 500) return true
-    } catch {
-      // Keep trying candidate URLs.
-    }
-  }
-
-  return false
-}
-
-async function hasUsableEndpoint(
-  services: Record<string, { uris: string[] }>
-): Promise<boolean> {
-  for (const service of Object.values(services)) {
-    for (const uri of service.uris) {
-      if (isLikelyTcpUri(uri)) return true
-      if (await probeHttpUri(uri)) return true
-    }
-  }
-  return false
-}
-
 /**
  * Last-resort: if enqueueNext for HANDLE_FAILURE itself fails, write FAILED
  * directly to the DB so the deployment doesn't hang forever.
@@ -472,8 +429,8 @@ export async function handleCheckBids(
       retryCount: true,
       status: true,
       excludedProviders: true,
-      // Phase 46 — used to route empty-bids to AWAITING_REGION_RESPONSE
-      // when the user explicitly picked a region. Null = "Any", legacy path.
+      // Used to route empty-bids to AWAITING_REGION_RESPONSE when the user
+      // explicitly picked a region. Null = "Any" (legacy path).
       region: true,
     },
   })
@@ -517,8 +474,8 @@ export async function handleCheckBids(
 
     if (rawBids.length === 0) {
       if (attempt >= BID_POLL_MAX_ATTEMPTS) {
-        // Phase 46 — when the user explicitly picked a region and no bids
-        // arrived, this is *not* a deploy failure. Move to a soft-fail
+        // When the user explicitly picked a region and no bids arrived this
+        // is NOT a deploy failure. Move to a soft-fail
         // state so the UI/CLI can surface alternative regions and the
         // user can one-click retry without losing the deployment row.
         // The stale-deployment sweeper auto-cancels rows stuck here for
@@ -582,8 +539,8 @@ export async function handleCheckBids(
       data: { status: 'SELECTING_BID' },
     })
 
-    // Phase 43 — when this deployment was spawned by a failover, the
-    // excludedProviders array carries every provider this chain has already
+    // When this deployment was spawned by a failover, excludedProviders
+    // carries every provider this chain has already
     // tried. We skip them at the safety filter so we never fail back onto a
     // known-bad host.
     const excludeSet =
@@ -605,7 +562,7 @@ export async function handleCheckBids(
       return
     }
 
-    // ── Phase 46 / Phase 47 — app-side region filter ───────────────
+    // ── App-side region filter ────────────────────────────────────
     // The SDL doesn't pin region anymore (because Akash chain attributes
     // don't match our curated taxonomy and we'd need every operator to
     // re-tag). Instead: cast the bid net wide, then filter here using
@@ -1641,8 +1598,8 @@ export async function handleFailure(
         parentDeploymentId: deployment.parentDeploymentId || deploymentId,
         policyId: retryPolicyId,
         excludedProviders: [...excluded],
-        // Phase 46/47 — carry the user's region intent forward across
-        // queue-step retries. Without this the retry row has region=NULL,
+        // Carry the user's region intent forward across queue-step retries.
+        // Without this the retry row has region=NULL,
         // the bid filter in handleCheckBids no-ops, and the deploy lands
         // wherever's cheapest globally — ignoring the user's pick.
         region: deployment.region,

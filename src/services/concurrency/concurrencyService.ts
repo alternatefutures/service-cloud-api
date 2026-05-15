@@ -129,7 +129,7 @@ async function countActiveDeploymentsForOrg(
   prisma: PrismaClient,
   organizationId: string,
 ): Promise<number> {
-  const [akashActive, phalaActive] = await Promise.all([
+  const [akashActive, phalaActive, spheronActive] = await Promise.all([
     prisma.akashDeployment.count({
       where: {
         status: { in: ['CREATING', 'WAITING_BIDS', 'SELECTING_BID', 'CREATING_LEASE', 'SENDING_MANIFEST', 'DEPLOYING', 'ACTIVE'] },
@@ -142,8 +142,14 @@ async function countActiveDeploymentsForOrg(
         organizationId,
       },
     }),
+    prisma.spheronDeployment.count({
+      where: {
+        status: { in: ['CREATING', 'STARTING', 'ACTIVE'] },
+        service: { project: { organizationId } },
+      },
+    }),
   ])
-  return akashActive + phalaActive
+  return akashActive + phalaActive + spheronActive
 }
 
 /**
@@ -199,6 +205,11 @@ export async function reconcileAll(
     select: { service: { select: { project: { select: { organizationId: true } } } } },
     take: limit,
   })
+  const spheronOrgsRaw = await prisma.spheronDeployment.findMany({
+    where: { status: { in: ['CREATING', 'STARTING', 'ACTIVE'] } },
+    select: { service: { select: { project: { select: { organizationId: true } } } } },
+    take: limit,
+  })
 
   const orgIds = new Set<string>()
   for (const c of counterOrgs) orgIds.add(c.organizationId)
@@ -207,6 +218,10 @@ export async function reconcileAll(
   }
   for (const a of akashOrgsRaw) {
     const id = a.service?.project?.organizationId
+    if (id) orgIds.add(id)
+  }
+  for (const s of spheronOrgsRaw) {
+    const id = s.service?.project?.organizationId
     if (id) orgIds.add(id)
   }
 

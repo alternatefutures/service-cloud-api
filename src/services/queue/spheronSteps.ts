@@ -22,9 +22,9 @@
  *                    policy clone, user-cancelled-sibling check, failDirectly
  *                    fallback, upstream DELETE on permanent failure.
  *
- * Phase A v1 ships DEDICATED-only — SPOT (`status: terminated-provider`) is
- * a reserved code path. The PROVIDER_INTERRUPTED policy stop reason exists
- * in the schema but no step here emits it yet.
+ * Today we ship DEDICATED-only — SPOT (`status: terminated-provider`) is a
+ * reserved code path. The PROVIDER_INTERRUPTED policy stop reason exists in
+ * the schema but no step here emits it yet.
  */
 
 import type { PrismaClient, SpheronDeploymentStatus } from '@prisma/client'
@@ -189,7 +189,7 @@ export async function handleDeployVm(prisma: PrismaClient, deploymentId: string)
     'Submitting deploy request to Spheron...'
   )
 
-  // Stock-blocklist short-circuit (Phase 50.1 fix, 2026-05-15).
+  // Stock-blocklist short-circuit.
   //
   // If this SKU was rejected for capacity in the last ~15 min, the next
   // POST will almost certainly fail with the same upstream 400. Skip the
@@ -333,7 +333,7 @@ export async function handleDeployVm(prisma: PrismaClient, deploymentId: string)
  * Poll GET /api/deployments/{id} until `status=running && ipAddress`. Then
  * persist connection details and enqueue RUN_CLOUDINIT_PROBE. Status stays
  * STARTING until the cloudinit probe confirms containers are up — that
- * keeps billing off until the workload actually starts (Phase 31 contract:
+ * keeps billing off until the workload actually starts (contract:
  * activeStartedAt = lastBilledAt = ACTIVE transition).
  */
 export async function handlePollStatus(prisma: PrismaClient, payload: SpheronPollStatusPayload): Promise<void> {
@@ -392,8 +392,8 @@ export async function handlePollStatus(prisma: PrismaClient, payload: SpheronPol
     )
 
     if (upstream.status === 'running' && upstream.ipAddress) {
-      // Per Phase A handoff: defer ACTIVE transition (and billing start)
-      // until the cloudinit probe confirms `docker ps` shows containers.
+      // Defer ACTIVE transition (and billing start) until the cloudinit
+      // probe confirms `docker ps` shows containers.
       await prisma.spheronDeployment.update({
         where: { id: deploymentId },
         data: {
@@ -500,8 +500,8 @@ export async function handlePollStatus(prisma: PrismaClient, payload: SpheronPol
  * iterations (~5min default ceiling).
  *
  * On success: status → ACTIVE, activeStartedAt = now, lastBilledAt = now.
- * Billing starts here, NOT at POLL_STATUS — Phase 31 contract that
- * lastBilledAt only advances when the workload is actually running.
+ * Billing starts here, NOT at POLL_STATUS — contract: lastBilledAt only
+ * advances when the workload is actually running.
  */
 export async function handleRunCloudInitProbe(
   prisma: PrismaClient,

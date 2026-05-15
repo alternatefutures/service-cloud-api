@@ -252,8 +252,8 @@ export class EscrowHealthMonitor {
       let closedCount = 0
       let errorCount = 0
 
-      // Phase 49b — mass-event guard. Previously this loop closed every
-      // ACTIVE row whose dseq was missing from `chainEscrows`. A single
+      // Mass-event guard. Previously this loop closed every ACTIVE row
+      // whose dseq was missing from `chainEscrows`. A single
       // RPC blip that returned truncated data could nuke the fleet by
       // mis-attributing every present deployment as "gone on-chain". Now
       // we collect close candidates first, then refuse to act if a
@@ -383,8 +383,8 @@ export class EscrowHealthMonitor {
   }
 
   /**
-   * Phase 49b mass-close guard for the per-deployment "chain says gone"
-   * close path. Mirrors the staleDeploymentSweeper's reconciler guard.
+   * Mass-close guard for the per-deployment "chain says gone" close path.
+   * Mirrors the staleDeploymentSweeper's reconciler guard.
    *
    * If a single chain query returns truncated data (RPC blip, gateway
    * partial response, owner-mismatch), every ACTIVE row could appear to be

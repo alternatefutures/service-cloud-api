@@ -260,11 +260,11 @@ model Service {
   projectId        String
   templateId       String?
   dockerImage      String? // Custom Docker image (e.g. ghcr.io/org/app:v1)
-  flavor           String? // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation. (Phase 39)
+  flavor           String? // Create-time discriminator: 'docker' | 'server' | 'function' | 'template'. Null = legacy row. Immutable post-creation.
   containerPort    Int? // Port the container listens on (default: 80). Used in SDL generation.
-  volumes          Json? // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead. (Phase 38)
-  healthProbe      Json? // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }. (Phase 42)
-  failoverPolicy   Json? // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null. (Phase 43)
+  volumes          Json? // Persistent volumes for raw Docker images: Array<{ name: string; mountPath: string; size: string }>. Templates use template.persistentStorage instead.
+  healthProbe      Json? // Optional application HTTP health probe: { path: string; port?: number; expectStatus?: number; intervalSec?: number; timeoutSec?: number }.
+  failoverPolicy   Json? // Optional health-aware auto-failover policy: { enabled: boolean; maxAttempts?: number; windowHours?: number }. Defaults applied at runtime when null.
   internalHostname String? // Deterministic hostname: {slug}.{project-slug}.internal
   createdByUserId  String?
   parentServiceId  String? // Companion services share the parent's deployment lifecycle
@@ -294,7 +294,7 @@ model Service {
   lastBuildStatus   String? // 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'
   lastBuildAt       DateTime?
 
-  // ── Phase 46 — region selection defaults ──────────────────────────
+  // ── Region selection defaults ─────────────────────────────────────
   // `preferredRegion` is the user-set default applied to new deployments
   // of this service when the deploy form/CLI doesn't override it. One of
   // the curated buckets ("us-east" | "us-west" | "eu" | "asia") or null
@@ -769,7 +769,7 @@ model ObservabilitySettings {
 }
 
 // ============================================
-// AUDIT LOG (Phase 44)
+// AUDIT LOG
 // ============================================
 // Append-only event log. One row per business event across deployment,
 // billing, provider, health, user, cron, ai-proxy, and system categories.
@@ -1137,7 +1137,7 @@ model AkashDeployment {
   parentDeploymentId String? // Links retries to the original deployment
   qstashMessageId    String? // For cancellation of pending QStash messages
 
-  // Phase 43 — health-aware auto-failover.
+  // Health-aware auto-failover.
   // failoverParentId chains deployments that were spawned because the previous
   // deployment was declared dead by the sweeper (vs parentDeploymentId, which
   // links queue-step retries within a single deploy attempt).
@@ -1147,7 +1147,7 @@ model AkashDeployment {
   excludedProviders String[] @default([]) @map("excluded_providers")
   failoverReason    String?  @map("failover_reason")
 
-  // Phase 46 — region selection.
+  // Region selection.
   // `region` is the user's intent at deploy time: one of the curated
   // buckets ("us-east" | "us-west" | "eu" | "asia") or null for "Any
   // (cheapest globally)" — today's default behavior.
@@ -1206,7 +1206,7 @@ enum AkashDeploymentStatus {
   SUSPENDED // Paused due to low balance (will auto-resume on topup)
   PERMANENTLY_FAILED // Failed after all retries exhausted
   CLOSE_FAILED // Local close attempt failed on-chain (RPC down, wallet empty, etc.) — needs operator/sweeper retry
-  AWAITING_REGION_RESPONSE // Phase 46 — strict region selected, no bids in initial 30s window. UI/CLI surface alternatives; sweeper auto-cancels after 5min.
+  AWAITING_REGION_RESPONSE // Strict region selected, no bids in initial 30s window. UI/CLI surface alternatives; sweeper auto-cancels after 5min.
 }
 
 // ============================================
@@ -1304,7 +1304,7 @@ model PolicySettlementLedger {
 enum SettlementProvider {
   AKASH
   PHALA
-  // Spheron Phase A — hourly-billed VM marketplace. Same settlement shape as
+  // Spheron — hourly-billed VM marketplace. Same settlement shape as
   // PHALA (final + hourly accruals via settleViaLedger). The auth-side
   // computeDebit `provider` string is `'spheron'` (lowercase) to match
   // existing Akash/Phala convention.
@@ -1421,7 +1421,7 @@ model PhalaDeployment {
   // grows a "destroy + recreate" resume path.
   resumedFromId String? @map("resumed_from_id")
 
-  // Phase 46 — region selection.
+  // Region selection.
   // Accepted in API for forward compatibility; ALWAYS null in production
   // until Phala Cloud exposes region/cluster selection in its CLI. The
   // entire UI/CLI region picker is replaced with an explicit
@@ -1461,7 +1461,7 @@ model PhalaDeployment {
 }
 
 // ============================================
-// SPHERON DEPLOYMENTS (Phase A — added 2026-05-06)
+// SPHERON DEPLOYMENTS
 // ============================================
 // Spheron is a GPU VM marketplace aggregating multiple upstream providers
 // (sesterce, voltage-park, data-crunch/Verda, massed-compute, spheron-ai).
@@ -1606,7 +1606,7 @@ enum PolicyStopReason {
   // provider (status=`terminated-provider`). v1 ships DEDICATED-only, so this
   // value is reserved but not yet emitted; lands the schema bit so we don't
   // need a follow-up migration the day SPOT is enabled. Triggers the
-  // Phase 43 auto-failover path when Service.failoverPolicy is set.
+  // health-failover path when Service.failoverPolicy is set.
   PROVIDER_INTERRUPTED
 }
 
@@ -1626,13 +1626,13 @@ model DeploymentPolicy {
   runtimeMinutes Int?      @map("runtime_minutes")
   expiresAt      DateTime? @map("expires_at")
 
-  // Fund reservation for time-limited deployments (Phase 2).
+  // Fund reservation for time-limited deployments.
   // When runtimeMinutes is set, reservedCents holds the full upfront cost
   // deducted from the org's available balance. Consumed as billing runs;
   // remainder refunded on stop/expiry.
   reservedCents Int @default(0) @map("reserved_cents")
 
-  // Phase 46 — region constraints (curated buckets only).
+  // Region constraints (curated buckets only).
   // `allowedRegions` is hard: the deploy is rejected if the user picks a
   // region not in this list (empty = any region permitted).
   // `preferredRegions` is soft: scoring/preference at bid time, used by the
@@ -1703,7 +1703,7 @@ model ComputeProvider {
   // Raw provider attributes from chain/API
   attributes Json?
 
-  // Phase 46 — region selection.
+  // Region selection.
   // `region` is the resolved curated bucket ("us-east" | "us-west" | "eu" |
   // "asia"). Populated by `resolveProviderRegion()` during the 5-min cache
   // refresh — see `services/regions/resolve.ts`. Null = unknown / unresolved
@@ -1729,8 +1729,8 @@ model ComputeProvider {
   @@map("compute_provider")
 }
 
-// Phase 46 — manual override for `ComputeProvider.region`. The resolution
-// pipeline (Akashlytics lat/lon → chain alias → country fallback) is correct
+// Manual override for `ComputeProvider.region`. The resolution pipeline
+// (Akashlytics lat/lon → chain alias → country fallback) is correct
 // for the bulk of providers but mistags edge cases (operators who advertise
 // "us" without a region tag, multi-DC providers, etc.). This table is the
 // admin escape hatch: an operator drops in a row and the next refresh
@@ -1801,7 +1801,7 @@ model GpuBidObservation {
   dseq       BigInt
   observedAt DateTime @default(now()) @map("observed_at")
 
-  /// Phase 46 — provider's resolved region at observation time. Null if the
+  /// Provider's resolved region at observation time. Null if the
   /// provider couldn't be resolved (Akashlytics gap, missing chain attrs,
   /// etc.). Captured here rather than joined at query time because providers
   /// change region tags occasionally and we want price history fixed to the

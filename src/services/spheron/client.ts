@@ -251,8 +251,8 @@ export class SpheronApiError extends Error {
    *         message: 'Instance must run for at least 20 minutes. Time remaining: N minutes.',
    *         canTerminate: false, timeRemaining: N, minimumRuntime: 20 }
    * Surfaced verbatim so the provider adapter and the sweeper can defer
-   * upstream cleanup until the floor is satisfied (see Phase A patch
-   * 2026-05-06: spheronDeployment.upstreamDeletedAt + sweeper retry pass).
+   * upstream cleanup until the floor is satisfied (see
+   * spheronDeployment.upstreamDeletedAt + sweeper retry pass).
    *
    * Returns the parsed timeRemaining in minutes when the response matches,
    * else null. Resilient to message-string drift — checks the structured
@@ -286,9 +286,21 @@ interface SpheronClientOptions {
   apiKey: string
   apiBase: string
   teamId?: string
-  /** Per-request timeout in ms. Default 30s. */
+  /**
+   * Per-request timeout in ms for idempotent verbs (GET/DELETE). Default 30s.
+   * Non-idempotent verbs (POST/PATCH) use {@link SpheronClientOptions.writeTimeoutMs}.
+   */
   timeoutMs?: number
-  /** Max 429/5xx retries. Default 3. */
+  /**
+   * Per-request timeout in ms for non-idempotent verbs (POST/PATCH). Default
+   * 90s — Spheron's POST `/api/deployments` allocates a VM synchronously and
+   * regularly takes 20–40s to return. The previous 30s timeout fired during
+   * normal busy-side allocation, the AbortController triggered a client-side
+   * retry, and Spheron created another VM each time. See the 2026-05-15
+   * triple-deploy incident: one user click → 3 orphan RTX PRO 6000 VMs.
+   */
+  writeTimeoutMs?: number
+  /** Max retries for idempotent verbs (GET/DELETE). Default 3. */
   maxRetries?: number
 }
 
@@ -297,6 +309,7 @@ export class SpheronClient {
   private readonly apiBase: string
   readonly teamId: string | undefined
   private readonly timeoutMs: number
+  private readonly writeTimeoutMs: number
   private readonly maxRetries: number
 
   constructor(opts: SpheronClientOptions) {
@@ -310,6 +323,7 @@ export class SpheronClient {
     this.apiBase = opts.apiBase.replace(/\/+$/, '')
     this.teamId = opts.teamId
     this.timeoutMs = opts.timeoutMs ?? 30_000
+    this.writeTimeoutMs = opts.writeTimeoutMs ?? 90_000
     this.maxRetries = opts.maxRetries ?? 3
   }
 
@@ -450,17 +464,48 @@ export class SpheronClient {
 
   // ── Internal: HTTP layer ──────────────────────────────────────
 
+  /**
+   * Single-flight HTTP wrapper.
+   *
+   * Retry policy (CRITICAL — past incident pins this exactly):
+   *
+   *   - GET / DELETE  → idempotent on Spheron's side. Retry on AbortError /
+   *     network failure / 5xx / 429, up to {@link maxRetries}, with jittered
+   *     exponential back-off.
+   *   - POST / PATCH  → NOT idempotent on Spheron's side. POST `/api/deployments`
+   *     starts allocating a VM as soon as the request is accepted; a client-
+   *     side abort (timeout) or a 5xx response can occur AFTER the upstream
+   *     has already committed to creating the resource. Retrying creates a
+   *     duplicate. We retry POST/PATCH **only on 429** (rate-limit response,
+   *     where Spheron guarantees the request was not processed). On 5xx and
+   *     on network / abort errors, the caller sees the failure and is
+   *     responsible for any higher-level recovery.
+   *
+   * This rule was learned the hard way on 2026-05-15 when one user click
+   * spawned 3 orphan RTX PRO 6000 VMs on Spheron — the 30s client-side
+   * timeout fired while Spheron's allocator was still busy, the catch block
+   * retried, and each retry created another VM. DB row had
+   * `provider_deployment_id = NULL` and `errorMessage = "This operation was
+   * aborted"`. Total cost: ~$7.50/hr in unbilled VMs until the user noticed.
+   *
+   * @internal exposed via per-verb methods above. Not part of the public API.
+   */
   private async request<T>(
     method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
     path: string,
     body?: unknown,
   ): Promise<T> {
     const url = `${this.apiBase}${path}`
+    const isIdempotent = method === 'GET' || method === 'DELETE'
+    const perRequestTimeout = isIdempotent ? this.timeoutMs : this.writeTimeoutMs
+    // Cap retries at 0 for non-idempotent verbs EXCEPT on 429 (handled inline).
+    // The loop bound stays the same; the per-branch guards below decide.
+    const loopBound = isIdempotent ? this.maxRetries : this.maxRetries // 429 path still uses budget
     let lastErr: unknown
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= loopBound; attempt++) {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), this.timeoutMs)
+      const timeout = setTimeout(() => controller.abort(), perRequestTimeout)
 
       try {
         const res = await fetch(url, {
@@ -488,22 +533,37 @@ export class SpheronClient {
           return (payload as T) ?? (undefined as T)
         }
 
-        // 429 / 5xx → transient, retry with back-off
-        if ((res.status === 429 || res.status >= 500) && attempt < this.maxRetries) {
+        // 429 — request was rate-limited, NOT processed. Safe to retry for
+        // any verb (including POST/PATCH).
+        if (res.status === 429 && attempt < loopBound) {
           const retryAfter = Number(res.headers.get('retry-after'))
           const baseDelay = Number.isFinite(retryAfter) && retryAfter > 0
             ? retryAfter * 1000
             : Math.min(1000 * 2 ** attempt, 60_000)
-          // Jitter ±25% to avoid thundering-herd retry storms across replicas.
           const jitter = baseDelay * (0.75 + Math.random() * 0.5)
           log.warn(
             { method, path, status: res.status, attempt, delayMs: Math.round(jitter) },
-            'spheron-client: transient error, retrying',
+            'spheron-client: 429, retrying',
           )
           await sleep(jitter)
           continue
         }
 
+        // 5xx — Spheron may have already committed to creating the resource
+        // before crashing. Only safe to retry for idempotent verbs.
+        if (res.status >= 500 && isIdempotent && attempt < loopBound) {
+          const baseDelay = Math.min(1000 * 2 ** attempt, 60_000)
+          const jitter = baseDelay * (0.75 + Math.random() * 0.5)
+          log.warn(
+            { method, path, status: res.status, attempt, delayMs: Math.round(jitter) },
+            'spheron-client: 5xx on idempotent verb, retrying',
+          )
+          await sleep(jitter)
+          continue
+        }
+
+        // Either non-idempotent + 5xx, or retries exhausted. Surface the
+        // upstream payload verbatim.
         const message = extractErrorMessage(payload, res.statusText)
         const code = extractErrorCode(payload)
         throw new SpheronApiError(
@@ -514,14 +574,25 @@ export class SpheronClient {
         )
       } catch (err) {
         clearTimeout(timeout)
-        // Surface SpheronApiError unchanged. Retry on AbortError / fetch failure
-        // up to maxRetries.
         if (err instanceof SpheronApiError) throw err
-        if (attempt < this.maxRetries) {
+
+        // Network failure / AbortError. For non-idempotent verbs we MUST
+        // throw immediately — the upstream may have processed the request
+        // before the connection dropped. Retrying is the bug that created
+        // the 2026-05-15 triple-deploy incident.
+        if (!isIdempotent) {
+          log.warn(
+            { method, path, attempt, err: (err as Error).message },
+            'spheron-client: non-idempotent verb failed at network layer — NOT retrying (would risk duplicate side effect upstream)',
+          )
+          throw err
+        }
+
+        if (attempt < loopBound) {
           const delay = Math.min(500 * 2 ** attempt, 30_000)
           log.warn(
             { method, path, attempt, err: (err as Error).message },
-            'spheron-client: network error, retrying',
+            'spheron-client: network error on idempotent verb, retrying',
           )
           lastErr = err
           await sleep(delay)

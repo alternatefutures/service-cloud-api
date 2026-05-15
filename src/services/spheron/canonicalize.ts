@@ -42,8 +42,8 @@
  *   (Spheron `A4000` ↔ Akash `rtxa4000`) and the RTX PRO 6000 / RTX 6000 Ada
  *   tokens that don't follow either convention.
  * - `RTXPRO6000` resolves to `pro6000se` (server-edition) — the SE/WE
- *   distinction was made on price + provider distribution at Phase H
- *   discovery (2026-04-21). If a future probe surfaces `RTXPRO6000_WE`
+ *   distinction was made on price + provider distribution. If a future
+ *   probe surfaces `RTXPRO6000_WE`
  *   we'll add a row to the map.
  *
  * Pinned 24 Spheron `gpuType` strings observed live 2026-05-10 13:30

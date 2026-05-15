@@ -31,8 +31,8 @@
  * the fact that some upstream providers' transformers re-wrap heredoc bodies.
  * ──────────────────────────────────────────────────────────────────────────
  *
- * Locked decision (per AF_HANDOFF — Spheron Phase A, 2026-04-21 → 2026-05-06):
- *   "Smart-pick: prefer pre-installed Docker, fall back to apt"
+ * Locked decision: smart-pick — prefer pre-installed Docker, fall back to
+ * apt-installed Docker.
  *
  *   - If the chosen `operatingSystem` string clearly indicates Docker is
  *     pre-installed (e.g. data-crunch's `Ubuntu 22.04 + CUDA 13.0 Open + Docker`),
@@ -47,8 +47,7 @@
  *   - The compose YAML lands at /opt/af/docker-compose.yml with mode 0644.
  *   - The .env file lands at /opt/af/.env with mode 0600 (env values may carry
  *     secrets — match the project-wide rule of never logging or world-reading
- *     secrets, see Phase 31 plaintext-env audit and AF_DEVELOPMENT_PROCESS.md
- *     line ~2191).
+ *     secrets (see plaintext-env audit notes in AF_DEVELOPMENT_PROCESS.md).
  *   - Env values containing literal `\n` are rejected — Docker `.env` files are
  *     line-oriented and a newline-bearing value silently corrupts every later
  *     key. Better to fail loudly at deploy time than ship a half-decoded env.
@@ -92,10 +91,10 @@ export interface BuildCloudInitInput {
    * default; `subdomainProxy` targets `http://<ipAddress>:<containerPort>`
    * so the container port MUST be reachable from outside the VM.
    *
-   * Architecture decision (Spheron Phase C, 2026-05-06): Option A —
-   * cloudInit runs `ufw allow <port>/tcp || true` for each entry; HTTPS
-   * termination is the user's problem (Caddy sidecar deferred to Phase 2).
-   * The `|| true` is intentional: not every base image installs UFW
+   * Architecture: cloudInit runs `ufw allow <port>/tcp || true` for each
+   * entry; HTTPS termination is the user's problem (Caddy sidecar
+   * deferred). The `|| true` is intentional: not every base image installs
+   * UFW
    * (sesterce's `ubuntu22.04_cuda12.8_shade_os` doesn't); we want a noisy
    * cloud-init log line, not a boot failure, when ufw isn't present.
    */

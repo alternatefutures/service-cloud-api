@@ -1,35 +1,18 @@
 /**
- * Server-Sent Events (SSE) Log Streaming Endpoint
+ * Server-Sent Events (SSE) live log streaming endpoint.
  *
- * Phase 41 — Live log streaming. Replaces the 3s-poll fallback with a
- * push-based stream so the Logs tab updates within ~1s of new output.
+ * GET /sse/services/:id/logs?token=<jwt-or-pat>[&service=<name>][&tail=<n>]
  *
- * Path: GET /sse/services/:id/logs?token=<jwt-or-pat>[&service=<name>][&tail=<n>]
+ * Auth token comes via query string because EventSource cannot set custom
+ * headers; callers must treat their access token as URL-bound. Limits:
+ * MAX_STREAMS_PER_USER concurrent streams, 30-minute idle, 4-hour hard cap.
  *
- * Auth: token is taken from the query string because EventSource
- * cannot set custom headers. The caller is responsible for treating
- * its access token as URL-bound (do not log query strings on the
- * gateway). The same validateToken pipeline that backs WebSocket
- * shell access is used here.
- *
- * Wire protocol (text/event-stream):
- *   event: ready                             — connection established, stream starting
- *   data: {"deploymentId":"<id>","provider":"akash"}
- *
- *   data: <log-line>                         — one event per line of provider output
- *
- *   event: error                             — transient or fatal stream error
- *   data: {"message":"..."}
- *
- *   event: close                             — provider stream ended (container exited)
- *   data: {"code":<exit-code>}
- *
- *   : keepalive                              — comment frame every 15s to defeat proxy idle timeouts
- *
- * Resource limits:
- *   - MAX_STREAMS_PER_USER = 5 concurrent CLI subprocesses
- *   - IDLE_TIMEOUT_MS = 30 minutes from last delivered byte (counted client→client)
- *   - HARD_TIMEOUT_MS = 4 hours absolute (defence against zombie sessions)
+ * Wire protocol:
+ *   event: ready  data: {"deploymentId","provider"}
+ *   data: <line>  for each provider line
+ *   event: error  data: {"message"}
+ *   event: close  data: {"code"}
+ *   : keepalive   every 15s to defeat proxy idle timeouts
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -103,21 +86,26 @@ const HEARTBEAT_INTERVAL_MS = 15_000
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const HARD_TIMEOUT_MS = 4 * 60 * 60 * 1000
 
-const activeStreams = new Map<string, Set<ServerResponse>>()
+interface ActiveStream {
+  res: ServerResponse
+  cleanup: (reason: string) => void
+}
 
-function trackStream(userId: string, res: ServerResponse): void {
+const activeStreams = new Map<string, Set<ActiveStream>>()
+
+function trackStream(userId: string, entry: ActiveStream): void {
   let set = activeStreams.get(userId)
   if (!set) {
     set = new Set()
     activeStreams.set(userId, set)
   }
-  set.add(res)
+  set.add(entry)
 }
 
-function untrackStream(userId: string, res: ServerResponse): void {
+function untrackStream(userId: string, entry: ActiveStream): void {
   const set = activeStreams.get(userId)
   if (!set) return
-  set.delete(res)
+  set.delete(entry)
   if (set.size === 0) activeStreams.delete(userId)
 }
 
@@ -197,60 +185,92 @@ async function pickLogEligibleDeployment(
   deploymentId: string
   provider: 'akash' | 'phala' | 'spheron'
 } | null> {
-  // Pass 1: prefer ACTIVE deployments (tiebreaker — healthy beats stale/failed)
-  const akashActive = await prisma.akashDeployment.findFirst({
-    where: { serviceId, status: 'ACTIVE' },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (akashActive) return { deploymentId: akashActive.id, provider: 'akash' }
+  // Pass 1: prefer the most-recently-created ACTIVE deployment across all
+  // providers. Provider-priority tie-breakers (Akash → Phala → Spheron)
+  // would mishandle services that started on Akash and were re-deployed
+  // to Phala — the user wants the lease they're paying for now, not the
+  // stale one. We gather candidates from all three tables and sort by
+  // createdAt desc, with provider order as the deterministic tiebreaker
+  // when timestamps collide.
+  type Candidate = {
+    id: string
+    createdAt: Date
+    provider: 'akash' | 'phala' | 'spheron'
+  }
 
-  const phalaActive = await prisma.phalaDeployment.findFirst({
-    where: { serviceId, status: 'ACTIVE' },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (phalaActive) return { deploymentId: phalaActive.id, provider: 'phala' }
+  const providerWeight: Record<Candidate['provider'], number> = {
+    akash: 0,
+    phala: 1,
+    spheron: 2,
+  }
+  const pickNewest = (candidates: Candidate[]): Candidate | null => {
+    if (candidates.length === 0) return null
+    candidates.sort((a, b) => {
+      const dt = b.createdAt.getTime() - a.createdAt.getTime()
+      if (dt !== 0) return dt
+      return providerWeight[a.provider] - providerWeight[b.provider]
+    })
+    return candidates[0]
+  }
 
-  const spheronActive = await prisma.spheronDeployment.findFirst({
-    where: { serviceId, status: 'ACTIVE' },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (spheronActive) {
-    return { deploymentId: spheronActive.id, provider: 'spheron' }
+  const [akashActive, phalaActive, spheronActive] = await Promise.all([
+    prisma.akashDeployment.findFirst({
+      where: { serviceId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+    prisma.phalaDeployment.findFirst({
+      where: { serviceId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+    prisma.spheronDeployment.findFirst({
+      where: { serviceId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+  ])
+
+  const activeWinner = pickNewest(
+    [
+      akashActive ? { ...akashActive, provider: 'akash' as const } : null,
+      phalaActive ? { ...phalaActive, provider: 'phala' as const } : null,
+      spheronActive ? { ...spheronActive, provider: 'spheron' as const } : null,
+    ].filter((c): c is Candidate => c !== null)
+  )
+  if (activeWinner) {
+    return { deploymentId: activeWinner.id, provider: activeWinner.provider }
   }
 
   // Pass 2: fall back to any log-eligible deployment (has a lease, can be tailed)
-  const akash = await prisma.akashDeployment.findFirst({
-    where: {
-      serviceId,
-      status: { in: AKASH_LOG_ELIGIBLE_STATUSES },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (akash) return { deploymentId: akash.id, provider: 'akash' }
+  const [akash, phala, spheron] = await Promise.all([
+    prisma.akashDeployment.findFirst({
+      where: { serviceId, status: { in: AKASH_LOG_ELIGIBLE_STATUSES } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+    prisma.phalaDeployment.findFirst({
+      where: { serviceId, status: { in: PHALA_LOG_ELIGIBLE_STATUSES } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+    prisma.spheronDeployment.findFirst({
+      where: { serviceId, status: { in: SPHERON_LOG_ELIGIBLE_STATUSES } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, createdAt: true },
+    }),
+  ])
 
-  const phala = await prisma.phalaDeployment.findFirst({
-    where: {
-      serviceId,
-      status: { in: PHALA_LOG_ELIGIBLE_STATUSES },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (phala) return { deploymentId: phala.id, provider: 'phala' }
-
-  const spheron = await prisma.spheronDeployment.findFirst({
-    where: {
-      serviceId,
-      status: { in: SPHERON_LOG_ELIGIBLE_STATUSES },
-    },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
-  if (spheron) return { deploymentId: spheron.id, provider: 'spheron' }
+  const fallbackWinner = pickNewest(
+    [
+      akash ? { ...akash, provider: 'akash' as const } : null,
+      phala ? { ...phala, provider: 'phala' as const } : null,
+      spheron ? { ...spheron, provider: 'spheron' as const } : null,
+    ].filter((c): c is Candidate => c !== null)
+  )
+  if (fallbackWinner) {
+    return { deploymentId: fallbackWinner.id, provider: fallbackWinner.provider }
+  }
 
   return null
 }
@@ -386,24 +406,6 @@ export class LogStreamEndpoint {
     let lastDeliveredAt = Date.now()
     let cleanedUp = false
     let stream: LogStream | null = null
-    trackStream(access.userId, res)
-
-    const heartbeat = setInterval(() => {
-      if (cleanedUp) return
-      writeComment(res, 'keepalive')
-    }, HEARTBEAT_INTERVAL_MS)
-
-    const idleTimer = setInterval(() => {
-      if (cleanedUp) return
-      const idleFor = Date.now() - lastDeliveredAt
-      if (idleFor >= IDLE_TIMEOUT_MS) {
-        cleanup('idle_timeout')
-      }
-    }, 60_000)
-
-    const hardTimer = setTimeout(() => {
-      cleanup('hard_timeout')
-    }, HARD_TIMEOUT_MS)
 
     const cleanup = (reason: string): void => {
       if (cleanedUp) return
@@ -419,7 +421,7 @@ export class LogStreamEndpoint {
           'stream.close() threw'
         )
       }
-      untrackStream(access.userId, res)
+      untrackStream(access.userId, entry)
       const durationSec = Math.round((Date.now() - startTime) / 1000)
       log.info(
         {
@@ -448,6 +450,26 @@ export class LogStreamEndpoint {
         /* swallow */
       }
     }
+
+    const entry: ActiveStream = { res, cleanup }
+    trackStream(access.userId, entry)
+
+    const heartbeat = setInterval(() => {
+      if (cleanedUp) return
+      writeComment(res, 'keepalive')
+    }, HEARTBEAT_INTERVAL_MS)
+
+    const idleTimer = setInterval(() => {
+      if (cleanedUp) return
+      const idleFor = Date.now() - lastDeliveredAt
+      if (idleFor >= IDLE_TIMEOUT_MS) {
+        cleanup('idle_timeout')
+      }
+    }, 60_000)
+
+    const hardTimer = setTimeout(() => {
+      cleanup('hard_timeout')
+    }, HARD_TIMEOUT_MS)
 
     req.once('close', () => cleanup('client_disconnect'))
     req.once('error', () => cleanup('request_error'))
@@ -540,24 +562,29 @@ export class LogStreamEndpoint {
   }
 
   /**
-   * Server shutdown: politely terminate every open stream so we don't leave
-   * orphaned `provider-services lease-logs` children around.
+   * Server shutdown: run each stream's per-request cleanup so timers,
+   * provider subprocesses, and tracking entries are released.
    */
   shutdown(): void {
-    for (const [userId, set] of activeStreams) {
-      for (const res of set) {
-        try {
-          writeSse(
-            res,
-            'error',
-            JSON.stringify({ message: 'Server shutting down' })
-          )
-          res.end()
-        } catch (err) {
-          log.warn({ err, userId }, 'Failed to close stream during shutdown')
-        }
+    const all: ActiveStream[] = []
+    for (const set of activeStreams.values()) {
+      for (const entry of set) all.push(entry)
+    }
+    for (const entry of all) {
+      try {
+        writeSse(
+          entry.res,
+          'error',
+          JSON.stringify({ message: 'Server shutting down' })
+        )
+      } catch {
+        /* swallow */
       }
-      set.clear()
+      try {
+        entry.cleanup('server_shutdown')
+      } catch (err) {
+        log.warn({ err }, 'Failed to clean up stream during shutdown')
+      }
     }
     activeStreams.clear()
   }

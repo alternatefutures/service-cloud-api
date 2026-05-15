@@ -1,5 +1,5 @@
 /**
- * Phase 46 — Provider → curated region resolution.
+ * Provider → curated region resolution.
  *
  * Pure function from a provider's published metadata to one of the four
  * curated buckets, or null when nothing maps. The caller (registry refresh)

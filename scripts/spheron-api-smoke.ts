@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * Spheron API smoke test (Phase A — pre-Phase-C validation).
+ * Spheron API smoke test.
  *
  * Exercises the SpheronClient + cloudInit builder + SSH bootstrap end-to-end
  * against the live Spheron API. Bypasses the orchestrator's DB row creation
@@ -112,7 +112,7 @@ async function pickCheapestDedicatedOffer(): Promise<{ offer: SpheronGpuOffer; g
   if (allOffers.length === 0) {
     throw new Error('No available DEDICATED offers across the entire Spheron catalogue')
   }
-  // Filter for cloudInit-supporting offers ONLY — Phase A's compose model
+  // Filter for cloudInit-supporting offers ONLY — the compose model
   // depends on cloudInit, no point booting an offer that can't run it.
   const usable = allOffers.filter(p => p.offer.supportsCloudInit && p.offer.os_options.length > 0)
   if (usable.length === 0) {
@@ -340,7 +340,7 @@ async function main(): Promise<void> {
     }
     console.log('    ✓ containers running:\n' + probe.output.split('\n').map(l => '      ' + l).join('\n'))
 
-    console.log('\n[✓] All probes passed — Spheron Phase A wiring works end-to-end')
+    console.log('\n[✓] All probes passed — Spheron wiring works end-to-end')
   } catch (err) {
     console.error('\n[✗] Smoke test failed:', err instanceof Error ? err.message : err)
     await cleanup('test failure')

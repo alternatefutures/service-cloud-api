@@ -1,5 +1,5 @@
 /**
- * Phase 44 / D1 smoke test — verifies the audit() helper actually persists.
+ * Smoke test — verifies the audit() helper actually persists.
  * Writes one event of each status, redacts a fake secret payload, reads the
  * rows back, and prints a summary.
  *

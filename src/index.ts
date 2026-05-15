@@ -32,7 +32,7 @@ import { createComplexityLimitRule } from 'graphql-validation-complexity'
 import { NoSchemaIntrospectionCustomRule } from 'graphql/validation/index.js'
 import helmet from 'helmet'
 import { initInfisical } from './config/infisical.js'
-import { SubdomainProxy } from './services/proxy/subdomainProxy.js'
+import { SubdomainProxy, setSubdomainProxy } from './services/proxy/subdomainProxy.js'
 import { AkashOrchestrator } from './services/akash/orchestrator.js'
 import { startHealthPrewarmer } from './services/providers/akashProvider.js'
 import { startApplicationHealthRunner, stopApplicationHealthRunner } from './services/health/applicationHealthRunner.js'
@@ -247,6 +247,7 @@ const helmetMiddleware = helmet({
 
 // Subdomain reverse proxy for *.apps.alternatefutures.ai / *.agents.alternatefutures.ai
 const subdomainProxy = new SubdomainProxy(prisma)
+setSubdomainProxy(subdomainProxy)
 
 async function requestHandler(req: IncomingMessage, res: ServerResponse) {
   const requestId = getRequestId(req)
@@ -429,7 +430,6 @@ const chatServer = new ChatServer(prisma, effectiveJwtSecret)
 // Initialize Shell WebSocket Server
 const shellEndpoint = new ShellEndpoint(prisma, effectiveJwtSecret)
 
-// Initialize SSE log streaming endpoint (Phase 41)
 const logStreamEndpoint = new LogStreamEndpoint(prisma, effectiveJwtSecret)
 
 // Handle WebSocket upgrade for /ws path and proxied subdomains
