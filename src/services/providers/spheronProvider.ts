@@ -27,7 +27,7 @@
  *   DELETED → deleted
  */
 
-import type { PrismaClient } from '@prisma/client'
+import type { PrismaClient, SpheronDeploymentStatus } from '@prisma/client'
 import type {
   DeploymentProvider,
   DeploymentProviderDescriptor,
@@ -120,8 +120,13 @@ export class SpheronProvider implements DeploymentProvider {
   }
 
   async getActiveDeploymentIds(): Promise<string[]> {
+    // Cast: descriptor.liveStatuses is typed `readonly string[]` for cross-
+    // provider symmetry; Prisma's enum filter requires the generated
+    // SpheronDeploymentStatus enum. The literal members in
+    // SPHERON_DESCRIPTOR.liveStatuses are all valid SpheronDeploymentStatus
+    // values (CREATING/STARTING/ACTIVE), so the cast is safe.
     const active = await this.prisma.spheronDeployment.findMany({
-      where: { status: { in: [...SPHERON_DESCRIPTOR.liveStatuses] } },
+      where: { status: { in: SPHERON_DESCRIPTOR.liveStatuses as readonly SpheronDeploymentStatus[] as SpheronDeploymentStatus[] } },
       select: { id: true },
     })
     return active.map(d => d.id)

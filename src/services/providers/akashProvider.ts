@@ -433,7 +433,13 @@ export class AkashProvider implements DeploymentProvider {
     const sdlServiceName = opts?.service
       || deployment.service?.sdlServiceName
       || deployment.service?.slug
-      || undefined
+    if (!sdlServiceName) {
+      throw new Error(
+        `Cannot open shell for Akash deployment ${deploymentId}: ` +
+        `no sdlServiceName or slug on the related Service. ` +
+        `provider-services lease-shell requires a service positional argument.`
+      )
+    }
 
     const orchestrator = getAkashOrchestrator(this.prisma)
     return orchestrator.getShell(
