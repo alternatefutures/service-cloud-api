@@ -11,10 +11,12 @@ const MAX_TIMEOUT_MS = 2_147_483_647
 function isDeploymentActive(policy: {
   akashDeployment: { status: string } | null
   phalaDeployment: { status: string } | null
+  spheronDeployment: { status: string } | null
 }): boolean {
   return (
     policy.akashDeployment?.status === 'ACTIVE' ||
-    policy.phalaDeployment?.status === 'ACTIVE'
+    policy.phalaDeployment?.status === 'ACTIVE' ||
+    policy.spheronDeployment?.status === 'ACTIVE'
   )
 }
 
@@ -81,6 +83,9 @@ export async function scheduleOrEnforcePolicyExpiry(
       phalaDeployment: {
         select: { id: true, appId: true, status: true, name: true },
       },
+      spheronDeployment: {
+        select: { id: true, providerDeploymentId: true, status: true },
+      },
     },
   })
 
@@ -109,6 +114,9 @@ export async function handlePolicyExpiry(
       },
       phalaDeployment: {
         select: { id: true, appId: true, status: true, name: true },
+      },
+      spheronDeployment: {
+        select: { id: true, providerDeploymentId: true, status: true },
       },
     },
   })
@@ -151,6 +159,7 @@ export async function reconcileActivePolicyExpirySchedules(
       OR: [
         { akashDeployment: { is: { status: 'ACTIVE' } } },
         { phalaDeployment: { is: { status: 'ACTIVE' } } },
+        { spheronDeployment: { is: { status: 'ACTIVE' } } },
       ],
     },
     select: {
@@ -161,6 +170,9 @@ export async function reconcileActivePolicyExpirySchedules(
       },
       phalaDeployment: {
         select: { id: true, appId: true, status: true, name: true },
+      },
+      spheronDeployment: {
+        select: { id: true, providerDeploymentId: true, status: true },
       },
     },
   })
